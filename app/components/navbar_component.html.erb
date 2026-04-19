@@ -1,0 +1,51 @@
+<div class="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
+  <div class="flex h-14 items-center justify-between">
+    <div class="flex items-center gap-8">
+      <%= link_to helpers.ui_dashboard_path, class: "flex items-center gap-2 text-slate-900" do %>
+        <svg class="h-6 w-6 text-indigo-600" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+          <rect x="3" y="3" width="7" height="7" rx="1.5" />
+          <rect x="14" y="3" width="7" height="7" rx="1.5" />
+          <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          <rect x="14" y="14" width="7" height="7" rx="1.5" />
+        </svg>
+        <span class="font-semibold tracking-tight"><%= t('opensop.app.name') %></span>
+      <% end %>
+
+      <nav class="flex items-center gap-1" aria-label="Primary">
+        <% nav_items.each do |item| %>
+          <% if item[:disabled] %>
+            <span class="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm text-slate-400 cursor-not-allowed"
+                  aria-disabled="true"
+                  title="<%= t('opensop.common.coming_soon') %>">
+              <%= item[:label] %>
+              <span class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 uppercase tracking-wide">Soon</span>
+            </span>
+          <% else %>
+            <% is_active = active?(item) %>
+            <%= link_to item[:label],
+                        item[:path],
+                        class: [
+                          "inline-flex items-center rounded-md px-3 py-1.5 text-sm transition",
+                          is_active ? "bg-slate-900 text-white" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                        ].join(" "),
+                        "aria-current": (is_active ? "page" : nil) %>
+          <% end %>
+        <% end %>
+      </nav>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <% if api_token_active? %>
+        <span class="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
+          <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+          API: authenticated
+        </span>
+      <% else %>
+        <span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+          <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
+          API: open
+        </span>
+      <% end %>
+    </div>
+  </div>
+</div>

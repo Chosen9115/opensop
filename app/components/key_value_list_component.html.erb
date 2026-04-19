@@ -1,0 +1,12 @@
+<% if empty? %>
+  <p class="text-sm text-slate-500 italic"><%= empty_label %></p>
+<% else %>
+  <dl class="divide-y divide-slate-100 rounded-md border border-slate-200 overflow-hidden text-sm">
+    <% entries.each_with_index do |(key, value), i| %>
+      <div class="grid grid-cols-3 gap-2 px-4 py-2 <%= i.odd? ? 'bg-slate-50' : 'bg-white' %>">
+        <dt class="col-span-1 font-medium text-slate-600 break-words"><%= key %></dt>
+        <dd class="col-span-2 text-slate-900 font-mono text-xs break-words whitespace-pre-wrap"><%= format_value(value) %></dd>
+      </div>
+    <% end %>
+  </dl>
+<% end %>

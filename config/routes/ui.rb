@@ -1,0 +1,17 @@
+# Admin UI routes. All actions render HTML (or Turbo Stream later).
+scope module: :ui, as: :ui do
+  root to: "dashboard#index"
+  get "dashboard", to: "dashboard#index", as: :dashboard
+
+  resources :processes,
+            only: [:index, :show],
+            param: :name,
+            constraints: { name: /[a-z0-9][a-z0-9_-]*/ }
+
+  resources :instances, only: [:index, :show] do
+    member do
+      post :cancel
+    end
+    post "steps/:step_id/submit", to: "steps#submit", as: :submit_step
+  end
+end

@@ -1,0 +1,29 @@
+<% # locals: event %>
+<li class="flex items-start gap-3 px-4 py-2.5 text-sm">
+  <div class="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 mt-0.5 text-slate-500">
+    <svg class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      <circle cx="10" cy="10" r="4" />
+    </svg>
+  </div>
+
+  <div class="min-w-0 flex-1">
+    <div class="flex items-center gap-2 flex-wrap">
+      <% label_key = "opensop.events.types.#{event.event_type.to_s.tr('.', '.')}" %>
+      <span class="font-medium text-slate-800">
+        <%= I18n.t(label_key, default: event.event_type.to_s.humanize) %>
+      </span>
+      <% if event.actor.present? %>
+        <span class="text-xs text-slate-500">by <code class="font-mono"><%= event.actor %></code></span>
+      <% end %>
+      <% if event.step_id.present? %>
+        <span class="text-xs text-slate-500">· step <code class="font-mono"><%= event.step_id %></code></span>
+      <% end %>
+      <span class="ml-auto text-xs text-slate-500">
+        <%= render TimestampComponent.new(time: event.created_at) %>
+      </span>
+    </div>
+    <% if event.data.present? %>
+      <pre class="mt-1 text-[11px] text-slate-600 font-mono whitespace-pre-wrap break-words"><%= event.data.to_json %></pre>
+    <% end %>
+  </div>
+</li>

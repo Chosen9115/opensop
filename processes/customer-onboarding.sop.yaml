@@ -31,11 +31,18 @@ process:
   outputs:
     - name: account_id
       type: string
+      from: steps.create-account.outputs.account_id
     - name: member_id
       type: string
+      from: steps.create-account.outputs.member_id
     - name: status
       type: enum
       values: [approved, rejected]
+      from: steps.submit-to-compliance.outputs.compliance_status
+    - name: rejection_reason
+      type: string
+      from: steps.review-application.outputs.rejection_reason
+      required_if: "status == 'rejected'"
 
   steps:
     - id: collect-business-info
@@ -72,7 +79,7 @@ process:
           values: [complete, incomplete, invalid]
         - name: missing_documents
           type: string[]
-      run: ./steps/verify-documents.py
+      run: ./steps/verify-documents.rb
       retry:
         max: 3
         backoff: exponential
@@ -92,6 +99,9 @@ process:
           values: [approve, reject, request-more-info]
         - name: risk_notes
           type: string
+        - name: rejection_reason
+          type: string
+          required_if: "decision == 'reject'"
       judgment:
         allow_agent: true
         require_human_review: false
@@ -134,7 +144,7 @@ process:
           type: string
         - name: member_id
           type: string
-      run: ./steps/create-account.py
+      run: ./steps/create-account.rb
 
     - id: send-welcome
       name: "Send welcome email"

@@ -1,0 +1,5 @@
+<% if present? %>
+  <time datetime="<%= iso %>" title="<%= absolute %>" class="tabular-nums"><%= relative %></time>
+<% else %>
+  <span class="text-slate-400"><%= placeholder %></span>
+<% end %>
