@@ -1,0 +1,58 @@
+<% show_actions = local_assigns.fetch(:show_actions, true) %>
+<div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+  <table class="min-w-full divide-y divide-slate-200 text-sm">
+    <thead class="bg-slate-50">
+      <tr class="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+        <th scope="col" class="px-4 py-2.5"><%= t('opensop.instances.table.instance') %></th>
+        <th scope="col" class="px-4 py-2.5"><%= t('opensop.instances.table.process') %></th>
+        <th scope="col" class="px-4 py-2.5"><%= t('opensop.instances.table.state') %></th>
+        <th scope="col" class="px-4 py-2.5"><%= t('opensop.instances.table.age') %></th>
+        <th scope="col" class="px-4 py-2.5"><%= t('opensop.instances.table.started') %></th>
+        <% if show_actions %>
+          <th scope="col" class="px-4 py-2.5 text-right"><%= t('opensop.instances.table.actions') %></th>
+        <% end %>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+      <% instances.each do |instance| %>
+        <% identifier = instance.metadata.is_a?(Hash) ? instance.metadata["company_name"].presence : nil %>
+        <% identifier ||= instance.id.to_s.first(8) %>
+        <tr class="hover:bg-slate-50">
+          <td class="px-4 py-2.5">
+            <%= link_to identifier, ui_instance_path(instance), class: "font-medium text-slate-900 hover:text-indigo-600" %>
+            <div class="text-xs text-slate-500 font-mono"><%= instance.id.to_s.first(8) %></div>
+          </td>
+          <td class="px-4 py-2.5">
+            <span class="text-slate-900"><%= instance.process_name %></span>
+            <span class="ml-1 text-xs text-slate-500">v<%= instance.process_version %></span>
+          </td>
+          <td class="px-4 py-2.5">
+            <%= render StateBadgeComponent.new(state: instance.state, kind: :instance_state) %>
+          </td>
+          <td class="px-4 py-2.5 text-slate-600">
+            <%= render TimestampComponent.new(time: instance.created_at) %>
+          </td>
+          <td class="px-4 py-2.5 text-slate-600">
+            <%= render TimestampComponent.new(time: instance.started_at) %>
+          </td>
+          <% if show_actions %>
+            <td class="px-4 py-2.5 text-right">
+              <div class="inline-flex items-center gap-2">
+                <%= link_to t('opensop.common.view'),
+                            ui_instance_path(instance),
+                            class: "text-sm font-medium text-indigo-600 hover:text-indigo-700" %>
+                <% if %w[pending running].include?(instance.state) %>
+                  <%= button_to t('opensop.instances.show.cancel_button'),
+                                cancel_ui_instance_path(instance),
+                                method: :post,
+                                form: { data: { turbo_confirm: t('opensop.instances.show.cancel_confirm') } },
+                                class: "text-sm font-medium text-rose-600 hover:text-rose-700 bg-transparent border-0 p-0 cursor-pointer" %>
+                <% end %>
+              </div>
+            </td>
+          <% end %>
+        </tr>
+      <% end %>
+    </tbody>
+  </table>
+</div>

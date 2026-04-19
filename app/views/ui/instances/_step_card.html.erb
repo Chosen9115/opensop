@@ -1,0 +1,125 @@
+<% # locals: instance, step, step_definition, index %>
+<% container_tone =
+     case step.state
+     when "pending" then "bg-slate-50 border-slate-200 opacity-80"
+     when "skipped" then "bg-slate-50 border-slate-200 opacity-60"
+     when "failed"  then "bg-white border-rose-200"
+     else "bg-white border-slate-200"
+     end
+%>
+<li id="step-<%= step.step_id %>" class="rounded-lg border <%= container_tone %> p-4 shadow-sm">
+  <div class="flex items-start gap-3">
+    <div class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-medium text-slate-600 tabular-nums">
+      <%= step.position %>
+    </div>
+
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-center gap-2">
+        <%= render StepStateIconComponent.new(state: step.state, sub_state: step.sub_state) %>
+        <h3 class="text-sm font-semibold text-slate-900"><%= step.step_name %></h3>
+        <code class="text-xs text-slate-500 font-mono"><%= step.step_id %></code>
+        <%= render StateBadgeComponent.new(state: step.step_type, kind: :step_type) %>
+        <%= render StateBadgeComponent.new(state: step.state, sub_state: step.sub_state, kind: :step_state) %>
+        <% if step.attempt.to_i > 1 %>
+          <span class="text-xs text-slate-500"><%= t('opensop.steps.summary.attempt', attempt: step.attempt) %></span>
+        <% end %>
+      </div>
+
+      <% if step_definition && step_definition["description"].present? %>
+        <p class="mt-1 text-sm text-slate-600"><%= step_definition["description"] %></p>
+      <% end %>
+
+      <% # Timing / decided_by line %>
+      <% if step.completed? || step.failed? || step.skipped? %>
+        <div class="mt-2 text-xs text-slate-600 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <% if step.completed_at.present? %>
+            <span>
+              <span class="text-slate-500"><%= t('opensop.steps.state.completed') %>:</span>
+              <%= render TimestampComponent.new(time: step.completed_at) %>
+            </span>
+          <% end %>
+          <% if step.decided_by.present? %>
+            <% who = step.decided_by %>
+            <% who_type = who.start_with?("human") ? :human : (who == "agent" ? :agent : :system) %>
+            <span>
+              <span class="text-slate-500">by:</span>
+              <span class="font-mono text-slate-800"><%= who %></span>
+              <% if who_type == :agent && step.confidence.present? %>
+                <span class="ml-1 text-slate-500">(<%= t('opensop.steps.summary.decided_by_agent', confidence: step.confidence) %>)</span>
+              <% end %>
+            </span>
+          <% end %>
+        </div>
+      <% end %>
+
+      <% # Active sub-state interaction %>
+      <% if step.active? %>
+        <% case step.sub_state %>
+        <% when "waiting_for_input", "running" %>
+          <%= render partial: "ui/instances/step_form",
+                     locals: { instance: instance, step: step, step_definition: step_definition, outputs_schema: (step_definition && step_definition["outputs"]) || [], mode: :inputs } %>
+        <% when "waiting_for_approval" %>
+          <%= render partial: "ui/instances/step_form",
+                     locals: { instance: instance, step: step, step_definition: step_definition, outputs_schema: [], mode: :approval } %>
+        <% when "escalated" %>
+          <div class="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3">
+            <p class="text-sm font-semibold text-amber-900"><%= t('opensop.steps.form.escalated_heading') %></p>
+            <% if step.confidence.present? %>
+              <p class="mt-0.5 text-xs text-amber-800"><%= t('opensop.steps.form.escalated_agent_confidence', confidence: step.confidence) %></p>
+            <% end %>
+          </div>
+          <%= render partial: "ui/instances/step_form",
+                     locals: { instance: instance, step: step, step_definition: step_definition, outputs_schema: (step_definition && step_definition["outputs"]) || [], mode: :escalated } %>
+        <% when "waiting_for_callback" %>
+          <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <%= t('opensop.steps.sub_state.waiting_for_callback') %>
+            <% if step.started_at %>
+              — <span class="text-amber-700">started <%= render TimestampComponent.new(time: step.started_at) %></span>
+            <% end %>
+          </div>
+        <% when "waiting_for_condition", "waiting_for_subprocess" %>
+          <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <%= t("opensop.steps.sub_state.#{step.sub_state}") %>
+          </div>
+        <% end %>
+      <% end %>
+
+      <% if step.failed? %>
+        <div class="mt-3 rounded-md border border-rose-200 bg-rose-50 p-3">
+          <p class="text-sm font-semibold text-rose-900"><%= t('opensop.steps.state.failed') %></p>
+          <% if step.error.present? %>
+            <pre class="mt-1 text-xs text-rose-800 whitespace-pre-wrap font-mono"><%= step.error %></pre>
+          <% end %>
+          <div class="mt-2">
+            <span role="button"
+                  aria-disabled="true"
+                  title="<%= t('opensop.common.coming_soon') %>"
+                  class="inline-flex items-center rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-400 cursor-not-allowed">
+              <%= t('opensop.common.retry') %>
+            </span>
+          </div>
+        </div>
+      <% end %>
+
+      <% if step.skipped? %>
+        <p class="mt-2 text-xs text-slate-500 italic"><%= t('opensop.steps.state.skipped') %></p>
+      <% end %>
+
+      <% # Inputs resolved for this step %>
+      <% if step.inputs.present? %>
+        <div class="mt-3">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500 mb-1"><%= t('opensop.processes.show.inputs') %></p>
+          <%= render KeyValueListComponent.new(items: step.inputs) %>
+        </div>
+      <% end %>
+
+      <% # Outputs %>
+      <% if step.outputs.present? %>
+        <div class="mt-3">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500 mb-1"><%= t('opensop.processes.show.outputs') %></p>
+          <%= render KeyValueListComponent.new(items: step.outputs) %>
+        </div>
+      <% end %>
+    </div>
+  </div>
+</li>

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="<%= I18n.locale %>" class="h-full bg-slate-50">
+  <head>
+    <title><%= t('opensop.app.name') %></title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="<%= t('opensop.app.tagline') %>">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+
+    <%= stylesheet_link_tag "tailwind", "data-turbo-track": "reload" %>
+    <%= javascript_importmap_tags %>
+  </head>
+
+  <body class="h-full min-h-screen flex flex-col bg-slate-50 text-slate-900 antialiased font-sans">
+    <header class="sticky top-0 z-30 border-b border-slate-200 bg-white">
+      <%= render NavbarComponent.new(current_path: request.path) %>
+    </header>
+
+    <main class="flex-1 w-full">
+      <% if flash[:notice].present? || flash[:alert].present? %>
+        <div class="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 pt-4">
+          <%= render "shared/flash" %>
+        </div>
+      <% end %>
+
+      <div class="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+        <%= yield %>
+      </div>
+    </main>
+
+    <footer class="border-t border-slate-200 bg-white">
+      <div class="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between text-xs text-slate-500">
+        <span><%= t('opensop.app.name') %> &middot; <%= t('opensop.app.tagline') %></span>
+        <span class="font-mono">v0.1</span>
+      </div>
+    </footer>
+  </body>
+</html>

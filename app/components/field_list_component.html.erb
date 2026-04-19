@@ -1,0 +1,31 @@
+<% if empty? %>
+  <p class="text-sm text-slate-500 italic"><%= t('opensop.common.none') %></p>
+<% else %>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <% fields.each do |field| %>
+      <div class="rounded-md border border-slate-200 bg-white px-3 py-2">
+        <div class="flex items-center justify-between gap-2">
+          <code class="text-sm font-medium text-slate-900"><%= field_name(field) %></code>
+          <div class="flex items-center gap-1.5">
+            <span class="inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono text-slate-600"><%= field_type(field) %></span>
+            <% if required?(field) %>
+              <span class="inline-flex items-center rounded bg-rose-50 border border-rose-200 px-1.5 py-0.5 text-[10px] font-medium text-rose-700"><%= t('opensop.processes.field.required_tag') %></span>
+            <% else %>
+              <span class="inline-flex items-center rounded bg-slate-50 border border-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500"><%= t('opensop.processes.field.optional_tag') %></span>
+            <% end %>
+          </div>
+        </div>
+        <% if field_description(field).present? %>
+          <p class="mt-1 text-xs text-slate-500"><%= field_description(field) %></p>
+        <% end %>
+        <% if field_values(field).present? %>
+          <div class="mt-1.5 flex flex-wrap gap-1">
+            <% Array(field_values(field)).each do |v| %>
+              <span class="inline-flex items-center rounded bg-slate-50 border border-slate-200 px-1.5 py-0.5 text-[10px] font-mono text-slate-600"><%= v %></span>
+            <% end %>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
+  </div>
+<% end %>

@@ -36,9 +36,15 @@ module Opensop
     # config.time_zone = "Central Time (US & Canada)"
     # config.eager_load_paths << Rails.root.join("extras")
 
-    # Only loads a smaller set of middleware suitable for API only apps.
-    # Middleware like session, flash, cookies can be added back manually.
-    # Skip views, helpers and assets when generating a new resource.
-    config.api_only = true
+    # OpenSOP serves both a JSON API (Sop::*) and an HTML admin UI (Ui::*).
+    # We disable api_only so the UI has access to sessions, cookies, and
+    # flash; Sop::ApplicationController inherits from ActionController::API
+    # so its behavior is unaffected.
+    config.api_only = false
+
+    # I18n configuration. OpenSOP keys live in config/locales/opensop.<locale>.yml.
+    config.i18n.default_locale = :en
+    config.i18n.available_locales = [:en]
+    config.i18n.fallbacks = true
   end
 end

@@ -1,0 +1,27 @@
+<section class="mb-8">
+  <h1 class="text-2xl font-semibold tracking-tight text-slate-900"><%= t('opensop.dashboard.title') %></h1>
+  <p class="mt-1 text-sm text-slate-600"><%= t('opensop.dashboard.subtitle') %></p>
+</section>
+
+<section class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-10">
+  <%= render StatTileComponent.new(label: t('opensop.dashboard.stats.running'),   value: @stats[:running],   tone: :running) %>
+  <%= render StatTileComponent.new(label: t('opensop.dashboard.stats.waiting'),   value: @stats[:waiting],   tone: :waiting, hint: t('opensop.dashboard.stats.waiting_hint')) %>
+  <%= render StatTileComponent.new(label: t('opensop.dashboard.stats.completed'), value: @stats[:completed], tone: :completed) %>
+  <%= render StatTileComponent.new(label: t('opensop.dashboard.stats.failed'),    value: @stats[:failed],    tone: :failed) %>
+</section>
+
+<section>
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-lg font-semibold text-slate-900"><%= t('opensop.dashboard.recent_instances') %></h2>
+    <%= link_to t('opensop.dashboard.view_all'), ui_instances_path, class: "text-sm font-medium text-indigo-600 hover:text-indigo-700" %>
+  </div>
+
+  <% if @recent_instances.any? %>
+    <%= render partial: "ui/instances/table", locals: { instances: @recent_instances, show_actions: false } %>
+  <% else %>
+    <%= render EmptyStateComponent.new(
+          title: t('opensop.dashboard.stats.running'),
+          description: t('opensop.dashboard.no_instances')
+        ) %>
+  <% end %>
+</section>

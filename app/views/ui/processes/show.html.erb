@@ -1,0 +1,183 @@
+<% defn        = @definition %>
+<% pblock      = @process_block %>
+<% inputs      = pblock["inputs"] || [] %>
+<% outputs     = pblock["outputs"] || [] %>
+<% steps_list  = pblock["steps"]   || [] %>
+<% trigger     = pblock.dig("trigger", "type") %>
+<% sla         = pblock.dig("sla", "target") %>
+<% description = pblock["description"] %>
+
+<section class="mb-6">
+  <nav class="mb-2 text-xs" aria-label="Breadcrumb">
+    <%= link_to t('opensop.nav.processes'), ui_processes_path, class: "text-slate-500 hover:text-slate-900" %>
+    <span class="text-slate-300 mx-1">/</span>
+    <span class="text-slate-700 font-medium"><%= @process.name %></span>
+  </nav>
+
+  <div class="flex items-start justify-between gap-4 flex-wrap">
+    <div>
+      <h1 class="text-2xl font-semibold tracking-tight text-slate-900">
+        <%= t('opensop.processes.show.heading', name: @process.name, version: @process.version) %>
+      </h1>
+      <% if description.present? %>
+        <p class="mt-1 text-sm text-slate-600 max-w-3xl"><%= description %></p>
+      <% end %>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <%= render StateBadgeComponent.new(state: @process.status, kind: :instance_state, size: :md) %>
+      <%= link_to t('opensop.processes.show.view_instances'),
+                  ui_instances_path(process: @process.name),
+                  class: "inline-flex items-center rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50" %>
+    </div>
+  </div>
+</section>
+
+<section class="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-8">
+  <div class="rounded-md border border-slate-200 bg-white p-3">
+    <p class="text-[11px] uppercase tracking-wide text-slate-500"><%= t('opensop.processes.show.owner') %></p>
+    <p class="mt-1 text-sm font-medium text-slate-900"><%= (pblock['owner'] || @process.owner).presence || t('opensop.common.none') %></p>
+  </div>
+  <div class="rounded-md border border-slate-200 bg-white p-3">
+    <p class="text-[11px] uppercase tracking-wide text-slate-500"><%= t('opensop.processes.show.sla') %></p>
+    <p class="mt-1 text-sm font-medium text-slate-900 tabular-nums"><%= sla.presence || "—" %></p>
+  </div>
+  <div class="rounded-md border border-slate-200 bg-white p-3">
+    <p class="text-[11px] uppercase tracking-wide text-slate-500"><%= t('opensop.processes.show.trigger') %></p>
+    <p class="mt-1 text-sm font-medium text-slate-900"><%= trigger.presence || t('opensop.common.none') %></p>
+  </div>
+  <div class="rounded-md border border-slate-200 bg-white p-3">
+    <p class="text-[11px] uppercase tracking-wide text-slate-500"><%= t('opensop.processes.show.tags') %></p>
+    <div class="mt-1 flex flex-wrap gap-1">
+      <% tags = (pblock["tags"] || @process.tags || []) %>
+      <% if tags.any? %>
+        <% tags.each do |tag| %>
+          <span class="inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-700"><%= tag %></span>
+        <% end %>
+      <% else %>
+        <span class="text-sm text-slate-400"><%= t('opensop.common.none') %></span>
+      <% end %>
+    </div>
+  </div>
+</section>
+
+<section class="mb-8">
+  <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 mb-3"><%= t('opensop.processes.show.inputs') %></h2>
+  <%= render FieldListComponent.new(fields: inputs) %>
+</section>
+
+<section class="mb-8">
+  <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 mb-3"><%= t('opensop.processes.show.outputs') %></h2>
+  <%= render FieldListComponent.new(fields: outputs) %>
+</section>
+
+<section class="mb-8">
+  <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500 mb-3"><%= t('opensop.processes.show.steps') %></h2>
+
+  <% if steps_list.any? %>
+    <ol class="space-y-3">
+      <% steps_list.each_with_index do |step, idx| %>
+        <li class="rounded-lg border border-slate-200 bg-white p-4">
+          <div class="flex items-start gap-3">
+            <div class="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-xs font-medium text-slate-600 tabular-nums">
+              <%= idx + 1 %>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <h3 class="text-sm font-semibold text-slate-900"><%= step["name"] || step["id"] %></h3>
+                <code class="text-xs text-slate-500 font-mono"><%= step["id"] %></code>
+                <%= render StateBadgeComponent.new(state: step["type"], kind: :step_type) %>
+                <% if step["condition"].present? %>
+                  <span class="inline-flex items-center rounded bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[11px] font-mono text-amber-800">
+                    if <%= step["condition"] %>
+                  </span>
+                <% end %>
+              </div>
+
+              <% if step["description"].present? %>
+                <p class="mt-1 text-sm text-slate-600"><%= step["description"] %></p>
+              <% end %>
+
+              <% if (step["inputs"] || []).any? %>
+                <div class="mt-2">
+                  <p class="text-[11px] uppercase tracking-wide text-slate-500"><%= t('opensop.processes.show.inputs') %></p>
+                  <div class="mt-1 flex flex-wrap gap-1.5">
+                    <% step["inputs"].each do |input| %>
+                      <span class="inline-flex items-center gap-1 rounded bg-slate-50 border border-slate-200 px-2 py-0.5 text-[11px] font-mono text-slate-700">
+                        <span class="font-semibold"><%= input["name"] %></span>
+                        <% if input["from"].present? %>
+                          <span class="text-slate-400">←</span>
+                          <span class="text-slate-500"><%= input["from"] %></span>
+                        <% end %>
+                      </span>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <% if (step["outputs"] || []).any? %>
+                <div class="mt-2">
+                  <p class="text-[11px] uppercase tracking-wide text-slate-500"><%= t('opensop.processes.show.outputs') %></p>
+                  <div class="mt-1 flex flex-wrap gap-1.5">
+                    <% step["outputs"].each do |out| %>
+                      <span class="inline-flex items-center rounded bg-slate-50 border border-slate-200 px-2 py-0.5 text-[11px] font-mono text-slate-700">
+                        <%= out["name"] %> (<%= out["type"] || "string" %>)
+                      </span>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <% case step["type"] %>
+              <% when "judgment" %>
+                <% if step["judgment"].present? %>
+                  <div class="mt-2 text-xs text-slate-600">
+                    <span class="text-slate-500">threshold:</span>
+                    <span class="font-mono text-slate-900 tabular-nums"><%= step["judgment"]["confidence_threshold"] || "—" %></span>
+                    <span class="ml-3 text-slate-500">escalation:</span>
+                    <span class="font-mono text-slate-900"><%= step["judgment"]["escalation"] || "—" %></span>
+                  </div>
+                <% end %>
+              <% when "webhook" %>
+                <% if step["webhook"].present? %>
+                  <div class="mt-2 text-xs text-slate-600 space-y-0.5">
+                    <div><span class="text-slate-500">url:</span> <code class="text-slate-900 font-mono"><%= step["webhook"]["url"] %></code></div>
+                    <div>
+                      <span class="text-slate-500">method:</span> <code class="text-slate-900 font-mono"><%= step["webhook"]["method"] || "POST" %></code>
+                      <span class="ml-3 text-slate-500">mode:</span> <code class="text-slate-900 font-mono"><%= step["webhook"]["response_mode"] || "sync" %></code>
+                    </div>
+                  </div>
+                <% end %>
+              <% when "automated" %>
+                <% if step["run"].present? %>
+                  <div class="mt-2 text-xs text-slate-600">
+                    <span class="text-slate-500">script:</span>
+                    <code class="text-slate-900 font-mono"><%= step["run"] %></code>
+                  </div>
+                <% end %>
+              <% when "subprocess" %>
+                <% if step["subprocess"].present? %>
+                  <div class="mt-2 text-xs text-slate-600">
+                    <span class="text-slate-500">process:</span>
+                    <code class="text-slate-900 font-mono"><%= step["subprocess"]["name"] || step["subprocess"] %></code>
+                  </div>
+                <% end %>
+              <% end %>
+            </div>
+          </div>
+        </li>
+      <% end %>
+    </ol>
+  <% else %>
+    <%= render EmptyStateComponent.new(title: t('opensop.processes.show.steps'), description: t('opensop.common.empty_state')) %>
+  <% end %>
+</section>
+
+<section class="mb-8">
+  <details class="rounded-lg border border-slate-200 bg-white">
+    <summary class="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+      <%= t('opensop.processes.show.raw_definition') %>
+    </summary>
+    <pre class="px-4 py-3 bg-slate-50 border-t border-slate-200 overflow-x-auto text-xs font-mono text-slate-800"><code><%= YAML.dump(defn) %></code></pre>
+  </details>
+</section>

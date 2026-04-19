@@ -1,0 +1,198 @@
+en:
+  opensop:
+    app:
+      name: "OpenSOP"
+      tagline: "Define your processes. Get your API."
+
+    nav:
+      dashboard: "Dashboard"
+      processes: "Processes"
+      instances: "Instances"
+      metrics: "Metrics"
+      new_process: "+ New Process"
+
+    common:
+      "yes": "Yes"
+      "no": "No"
+      back: "Back"
+      cancel: "Cancel"
+      submit: "Submit"
+      save: "Save"
+      edit: "Edit"
+      delete: "Delete"
+      retry: "Retry"
+      skip: "Skip"
+      view: "View"
+      never: "Never"
+      none: "None"
+      unknown: "Unknown"
+      loading: "Loading…"
+      coming_soon: "Coming soon"
+      empty_state: "Nothing to show yet."
+      required: "Required"
+      optional: "Optional"
+      confirm: "Are you sure?"
+
+    dashboard:
+      title: "Dashboard"
+      subtitle: "All running and completed process instances at a glance."
+      stats:
+        running: "Running"
+        waiting: "Waiting"
+        completed: "Completed"
+        failed: "Failed"
+        waiting_hint: "Running, paused at a step awaiting input/callback/approval"
+      recent_instances: "Recent instances"
+      no_instances: "No instances yet. Start one from the Process Library."
+      view_all: "View all instances →"
+
+    processes:
+      title: "Processes"
+      subtitle: "The catalog of business processes defined for this company."
+      table:
+        name: "Name"
+        version: "Version"
+        steps: "Steps"
+        owner: "Owner"
+        sla: "SLA"
+        in_flight: "In flight"
+        actions: "Actions"
+      empty: "No processes defined. Drop a .sop.yaml file in /processes and reload."
+      show:
+        heading: "%{name} v%{version}"
+        description: "Description"
+        inputs: "Inputs"
+        outputs: "Outputs"
+        steps: "Steps"
+        tags: "Tags"
+        owner: "Owner"
+        sla: "SLA"
+        trigger: "Trigger"
+        view_instances: "View instances"
+        view_metrics: "View metrics"
+        raw_definition: "Raw definition"
+      field:
+        required_tag: "required"
+        optional_tag: "optional"
+      summary_line: "%{in_flight} in flight • %{completed} completed • %{failed} failed"
+
+    instances:
+      title: "Instances"
+      subtitle: "Running and recently completed process instances."
+      filters:
+        process: "Process"
+        state: "State"
+        all: "All"
+        apply: "Apply filters"
+        clear: "Clear"
+      table:
+        instance: "Instance"
+        process: "Process"
+        state: "State"
+        age: "Age"
+        started: "Started"
+        actions: "Actions"
+      empty: "No instances match the current filter."
+      show:
+        heading: "%{process_name} v%{process_version}"
+        id_label: "ID"
+        started_label: "Started"
+        completed_label: "Completed"
+        duration_label: "Duration"
+        error_label: "Error"
+        inputs_heading: "Inputs"
+        outputs_heading: "Outputs"
+        steps_heading: "Steps"
+        events_heading: "Audit log"
+        cancel_button: "Cancel instance"
+        cancel_confirm: "Cancel this instance? This will stop execution immediately."
+        cancel_reason_label: "Reason (optional)"
+
+    steps:
+      type:
+        form: "Form"
+        automated: "Automated"
+        judgment: "Judgment"
+        approval: "Approval"
+        webhook: "Webhook"
+        subprocess: "Subprocess"
+        notification: "Notification"
+        wait: "Wait"
+      state:
+        pending: "Pending"
+        active: "Active"
+        completed: "Completed"
+        failed: "Failed"
+        skipped: "Skipped"
+      sub_state:
+        running: "Running"
+        waiting_for_input: "Waiting for input"
+        waiting_for_callback: "Waiting for callback"
+        waiting_for_approval: "Waiting for approval"
+        waiting_for_condition: "Waiting for condition"
+        waiting_for_subprocess: "Waiting for subprocess"
+        escalated: "Escalated"
+      decided_by:
+        system: "System"
+        agent: "Agent"
+        human: "Human (%{id})"
+      form:
+        submit_heading: "Submit this step"
+        submit_button: "Submit"
+        fill_outputs: "Fill in the outputs below to advance the process."
+        approve_button: "Approve"
+        reject_button: "Reject"
+        escalated_heading: "Escalated — needs human decision"
+        approval_heading: "Needs approval"
+        waiting_heading: "Awaiting input"
+        escalated_agent_confidence: "Agent confidence: %{confidence}"
+      manual_override:
+        label: "Manual override"
+        hint: "Record the step's outputs manually. Used when the external system confirmed the result out-of-band."
+      summary:
+        attempt: "Attempt %{attempt}"
+        decided_by_agent: "Decided by agent (confidence: %{confidence})"
+        decided_by_human: "Decided by %{who}"
+        decided_by_system: "Decided by system"
+        duration: "Took %{duration}"
+        awaiting: "Awaiting %{sub_state} since %{when}"
+
+    events:
+      types:
+        instance:
+          started: "Instance started"
+          completed: "Instance completed"
+          failed: "Instance failed"
+          cancelled: "Instance cancelled"
+        step:
+          started: "Step started"
+          completed: "Step completed"
+          failed: "Step failed"
+          skipped: "Step skipped"
+          waiting_for_input: "Step waiting for input"
+          waiting_for_callback: "Step waiting for callback"
+          waiting_for_approval: "Step waiting for approval"
+          escalated: "Step escalated"
+          subprocess_pending: "Subprocess pending"
+
+    instance_state:
+      pending: "Pending"
+      running: "Running"
+      completed: "Completed"
+      failed: "Failed"
+      cancelled: "Cancelled"
+
+    flash:
+      step_submitted: "Step submitted."
+      step_submit_failed: "Could not submit step: %{error}"
+      instance_cancelled: "Instance cancelled."
+      instance_cancel_failed: "Could not cancel instance: %{error}"
+      process_not_found: "Process not found."
+      instance_not_found: "Instance not found."
+
+    errors:
+      generic: "Something went wrong."
+      invalid_inputs: "Invalid inputs: %{message}"
+      invalid_definition: "Invalid process definition: %{message}"
+      step_not_submittable: "This step cannot be submitted in its current state."
+      unauthorized: "Unauthorized."

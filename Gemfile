@@ -25,6 +25,7 @@ gem "rack-cors"
 # Hotwire for UI
 gem "turbo-rails"
 gem "stimulus-rails"
+gem "importmap-rails"
 
 # Asset pipeline
 gem "propshaft"
