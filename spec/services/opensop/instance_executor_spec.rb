@@ -1,0 +1,288 @@
+require 'rails_helper'
+
+RSpec.describe Opensop::InstanceExecutor do
+  describe ".start" do
+    context "with a notification-only process" do
+      let(:process) do
+        build_process(
+          name: "notif-proc",
+          inputs: [ { "name" => "email", "type" => "string", "required" => true } ],
+          outputs: [ { "name" => "notified", "from" => "steps.send-email.outputs.notified" } ],
+          steps: [
+            {
+              "id" => "send-email",
+              "name" => "Send",
+              "type" => "notification",
+              "inputs" => [ { "name" => "to", "from" => "process.inputs.email" } ],
+              "outputs" => [ { "name" => "notified", "type" => "boolean" } ]
+            }
+          ]
+        )
+      end
+
+      it "creates an instance, step rows, and a started event" do
+        instance = described_class.start(process: process, inputs: { "email" => "ada@example.com" })
+
+        expect(instance).to be_persisted
+        expect(instance.steps.count).to eq(1)
+        expect(instance.events.where(event_type: "instance.started")).to exist
+      end
+
+      it "advances through to completion for a synchronous step" do
+        instance = described_class.start(process: process, inputs: { "email" => "ada@example.com" })
+
+        aggregate_failures do
+          expect(instance.reload.state).to eq("completed")
+          expect(instance.steps.first.state).to eq("completed")
+          expect(instance.outputs).to include("notified" => true)
+          expect(instance.events.pluck(:event_type))
+            .to include("instance.started", "step.started", "step.completed", "instance.completed")
+        end
+      end
+
+      it "raises InvalidInputs when a required input is missing" do
+        expect { described_class.start(process: process, inputs: {}) }
+          .to raise_error(described_class::InvalidInputs, /missing required input/)
+      end
+    end
+
+    context "with a form step" do
+      let(:process) do
+        build_process(
+          name: "form-proc",
+          steps: [
+            { "id" => "collect", "name" => "Collect", "type" => "form" }
+          ]
+        )
+      end
+
+      it "pauses at the form step in sub_state=waiting_for_input" do
+        instance = described_class.start(process: process, inputs: { "alpha" => "ok" })
+
+        step = instance.steps.first
+        expect(step.state).to eq("active")
+        expect(step.sub_state).to eq("waiting_for_input")
+        expect(instance.reload.state).to eq("running")
+      end
+    end
+  end
+
+  describe ".submit_step" do
+    let(:process) do
+      build_process(
+        name: "form-submit-proc",
+        inputs: [ { "name" => "alpha", "type" => "string", "required" => true } ],
+        outputs: [ { "name" => "record", "from" => "steps.collect.outputs.record" } ],
+        steps: [
+          {
+            "id" => "collect",
+            "name" => "Collect",
+            "type" => "form",
+            "outputs" => [ { "name" => "record", "type" => "object" } ]
+          },
+          {
+            "id" => "notify",
+            "name" => "Notify",
+            "type" => "notification"
+          }
+        ]
+      )
+    end
+
+    it "completes a waiting form step and advances the instance" do
+      instance = described_class.start(process: process, inputs: { "alpha" => "ok" })
+
+      described_class.submit_step(
+        instance: instance,
+        step_id: "collect",
+        outputs: { "record" => { "legal_name" => "Acme" } },
+        decided_by: "user@example.com"
+      )
+
+      instance.reload
+      collect = instance.steps.find_by(step_id: "collect")
+      notify  = instance.steps.find_by(step_id: "notify")
+
+      aggregate_failures do
+        expect(collect.state).to eq("completed")
+        expect(collect.decided_by).to eq("user@example.com")
+        expect(notify.state).to eq("completed")
+        expect(instance.state).to eq("completed")
+        expect(instance.outputs).to include("record" => { "legal_name" => "Acme" })
+      end
+    end
+
+    it "raises when the step is not in a submittable state" do
+      process2 = build_process(
+        name: "already-done-proc",
+        steps: [ { "id" => "noop", "name" => "Noop", "type" => "notification" } ]
+      )
+      instance = described_class.start(process: process2, inputs: { "alpha" => "x" })
+
+      expect {
+        described_class.submit_step(
+          instance: instance, step_id: "noop",
+          outputs: {}, decided_by: "system"
+        )
+      }.to raise_error(described_class::InvalidTransition)
+    end
+  end
+
+  describe "condition handling" do
+    let(:process) do
+      build_process(
+        name: "cond-proc",
+        inputs: [ { "name" => "alpha", "type" => "string", "required" => true } ],
+        steps: [
+          {
+            "id" => "skipped",
+            "name" => "Skipped",
+            "type" => "notification",
+            "condition" => "process.inputs.alpha == 'unreachable'"
+          },
+          {
+            "id" => "always",
+            "name" => "Always",
+            "type" => "notification"
+          }
+        ]
+      )
+    end
+
+    it "marks a step with a false condition as skipped" do
+      instance = described_class.start(process: process, inputs: { "alpha" => "hello" })
+      expect(instance.steps.find_by(step_id: "skipped").state).to eq("skipped")
+      expect(instance.steps.find_by(step_id: "always").state).to eq("completed")
+      expect(instance.reload.state).to eq("completed")
+    end
+  end
+
+  describe ".cancel!" do
+    let(:process) do
+      build_process(
+        name: "cancel-proc",
+        steps: [ { "id" => "wait", "name" => "Wait", "type" => "form" } ]
+      )
+    end
+
+    it "cancels an active instance, skips active steps, and emits events" do
+      instance = described_class.start(process: process, inputs: { "alpha" => "x" })
+      described_class.cancel!(instance, reason: "user quit")
+      instance.reload
+
+      aggregate_failures do
+        expect(instance.state).to eq("cancelled")
+        expect(instance.steps.first.state).to eq("skipped")
+        expect(instance.events.pluck(:event_type)).to include("instance.cancelled", "step.skipped")
+      end
+    end
+  end
+
+  describe "process outputs with required_if" do
+    # Process: one form step with outputs {status, rejection_reason}.
+    # Process-level rejection_reason is gated by required_if "status == 'rejected'".
+    let(:process) do
+      build_process(
+        name: "required-if-proc",
+        inputs: [ { "name" => "alpha", "type" => "string", "required" => true } ],
+        outputs: [
+          { "name" => "status", "type" => "string",
+            "from" => "steps.decide.outputs.status" },
+          { "name" => "rejection_reason", "type" => "string",
+            "from" => "steps.decide.outputs.rejection_reason",
+            "required_if" => "status == 'rejected'" }
+        ],
+        steps: [
+          {
+            "id" => "decide",
+            "name" => "Decide",
+            "type" => "form",
+            "outputs" => [
+              { "name" => "status", "type" => "string" },
+              { "name" => "rejection_reason", "type" => "string",
+                "required_if" => "status == 'rejected'" }
+            ]
+          }
+        ]
+      )
+    end
+
+    it "omits rejection_reason from final outputs on the approved path" do
+      instance = described_class.start(process: process, inputs: { "alpha" => "ok" })
+
+      described_class.submit_step(
+        instance: instance,
+        step_id: "decide",
+        # No rejection_reason — validate_outputs! should accept because
+        # required_if ("status == 'rejected'") is false.
+        outputs: { "status" => "approved" }
+      )
+
+      instance.reload
+      aggregate_failures do
+        expect(instance.state).to eq("completed")
+        expect(instance.outputs).to include("status" => "approved")
+        expect(instance.outputs).not_to have_key("rejection_reason")
+      end
+    end
+
+    it "includes rejection_reason in final outputs on the rejected path" do
+      instance = described_class.start(process: process, inputs: { "alpha" => "ok" })
+
+      described_class.submit_step(
+        instance: instance,
+        step_id: "decide",
+        outputs: { "status" => "rejected", "rejection_reason" => "missing docs" }
+      )
+
+      instance.reload
+      aggregate_failures do
+        expect(instance.state).to eq("completed")
+        expect(instance.outputs).to include(
+          "status" => "rejected",
+          "rejection_reason" => "missing docs"
+        )
+      end
+    end
+
+    it "raises InvalidInputs when a required_if-gated output is required but missing" do
+      instance = described_class.start(process: process, inputs: { "alpha" => "ok" })
+
+      expect {
+        described_class.submit_step(
+          instance: instance,
+          step_id: "decide",
+          # status == rejected triggers required_if — rejection_reason required.
+          outputs: { "status" => "rejected" }
+        )
+      }.to raise_error(described_class::InvalidInputs, /rejection_reason/)
+    end
+  end
+
+  describe "automated step failure (missing script)" do
+    let(:process) do
+      build_process(
+        name: "bad-automated-proc",
+        steps: [
+          {
+            "id" => "run-it",
+            "name" => "Run",
+            "type" => "automated",
+            "run" => "/tmp/definitely/not/a/real/script-#{SecureRandom.hex(4)}.rb"
+          }
+        ]
+      )
+    end
+
+    it "fails the step and transitions the instance to failed" do
+      instance = described_class.start(process: process, inputs: { "alpha" => "ok" })
+      instance.reload
+
+      expect(instance.state).to eq("failed")
+      failed_step = instance.steps.find_by(step_id: "run-it")
+      expect(failed_step.state).to eq("failed")
+      expect(failed_step.error).to match(/script not found/)
+      expect(instance.events.where(event_type: "instance.failed")).to exist
+    end
+  end
+end
