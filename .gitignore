@@ -39,3 +39,10 @@
 
 # Swarm session state (local only)
 /.swarm/
+
+# Private process libraries in downstream forks.
+# These directories exist only in private forks (e.g., a company's fork
+# with their internal processes). Reserve the names here so public clones
+# never accidentally track them.
+/processes/coba/
+/processes/private/

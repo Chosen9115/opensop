@@ -3,7 +3,7 @@ module SopApi
   # Idempotent — safe to call in every example.
   def load_customer_onboarding!
     Opensop::Registry.load_file(
-      Rails.root.join("processes/customer-onboarding.sop.yaml")
+      Rails.root.join("processes/examples/customer-onboarding.sop.yaml")
     )
   end
 end

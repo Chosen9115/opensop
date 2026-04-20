@@ -5,7 +5,7 @@ namespace :opensop do
   task load_processes: :environment do
     results = Opensop::Registry.load_all
     if results.empty?
-      puts "No .sop.yaml files found under #{Rails.root.join("processes")}."
+      puts "No .sop.yaml files found under #{Rails.root.join("processes")} (the engine recursively loads all subdirectories, e.g. processes/examples/, processes/<your-org>/)."
     else
       puts "Loaded #{results.size} process definition(s):"
       results.each do |record|
