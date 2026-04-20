@@ -34,7 +34,7 @@ RSpec.describe Opensop::DefinitionParser do
     end
 
     it "accepts the real customer-onboarding.sop.yaml" do
-      path = Rails.root.join("processes/customer-onboarding.sop.yaml")
+      path = Rails.root.join("processes/examples/customer-onboarding.sop.yaml")
       raw = File.read(path)
       result = described_class.call(raw)
 

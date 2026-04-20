@@ -63,7 +63,7 @@ process:
           type: number
         - name: qualified
           type: boolean
-      run: ./steps/score-lead.rb
+      run: ./examples/steps/score-lead.rb
 
     - id: notify-team
       name: "Notify the growth team"

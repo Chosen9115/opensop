@@ -50,7 +50,7 @@ How an OpenSOP instance gets from `start` to `completed`. Read this after [`SPEC
 ## Loading a definition
 
 ```
-processes/customer-onboarding.sop.yaml
+processes/examples/customer-onboarding.sop.yaml
             │
             ▼
 Opensop::Registry.load_file(path)

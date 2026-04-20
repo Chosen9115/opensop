@@ -79,7 +79,7 @@ process:
           values: [complete, incomplete, invalid]
         - name: missing_documents
           type: string[]
-      run: ./steps/verify-documents.rb
+      run: ./examples/steps/verify-documents.rb
       retry:
         max: 3
         backoff: exponential
@@ -144,7 +144,7 @@ process:
           type: string
         - name: member_id
           type: string
-      run: ./steps/create-account.rb
+      run: ./examples/steps/create-account.rb
 
     - id: send-welcome
       name: "Send welcome email"

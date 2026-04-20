@@ -6,13 +6,13 @@ A practical guide to writing a `.sop.yaml` file and getting it running. The full
 
 ## The fastest path
 
-1. Create `processes/<my-process>.sop.yaml` with the structure below.
-2. Write any scripts your `automated` steps reference under `processes/steps/`.
+1. Create `processes/<subdir>/<my-process>.sop.yaml` with the structure below. Public examples live in `processes/examples/`; private processes in your fork typically go under `processes/coba/` or a name your fork reserves in its `.gitignore`.
+2. Write any scripts your `automated` steps reference under `processes/<subdir>/steps/`.
 3. `bin/rails opensop:load_processes` to register the process (or `bin/rails db:seed`).
 4. `bin/rails server` and visit `/processes` — your process appears in the library.
 5. Start an instance via the API or the admin UI.
 
-The repo on disk is the source of truth. The DB is a cache.
+The repo on disk is the source of truth. The DB is a cache. The registry recursively globs `processes/**/*.sop.yaml`, so any subdirectory works.
 
 ---
 
@@ -156,10 +156,12 @@ The expression grammar is small but real: `==`, `!=`, `>`, `>=`, `<`, `<=`, `&&`
       values: [complete, incomplete, invalid]
     - name: missing_documents
       type: string[]
-  run: ./steps/verify-documents.rb
+  run: ./examples/steps/verify-documents.rb
 ```
 
-The script lives at `processes/steps/verify-documents.rb`. The engine:
+> **Path resolution:** `run:` paths are resolved relative to `processes/` (the whole library root), not relative to the YAML file. A YAML in `processes/examples/` referencing `./examples/steps/X.rb` is correct; so is a YAML in `processes/coba/` referencing `./coba/steps/X.rb`. Implementation: `app/services/opensop/step_executors/automated.rb#resolve_script_path`.
+
+The script lives at `processes/examples/steps/verify-documents.rb`. The engine:
 
 1. Resolves the inputs hash
 2. Runs the script via `Open3.capture3`
@@ -184,7 +186,7 @@ puts JSON.dump({
 })
 ```
 
-Make it executable: `chmod 0755 processes/steps/verify-documents.rb`.
+Make it executable: `chmod 0755 processes/examples/steps/verify-documents.rb`.
 
 Scripts can be in any language with stdlib JSON support — Ruby, Python, Node, Go, Bash with `jq`. The engine doesn't care; it just runs the file.
 
@@ -261,7 +263,7 @@ POST /sop/<process>/<instance_id>/steps/collect-business-info/submit
     url: "${COMPLIANCE_PROVIDER_URL}/entities"
     headers:
       Authorization: "Bearer ${COMPLIANCE_API_KEY}"
-    body_template: ./steps/compliance-payload.json
+    body_template: ./examples/steps/compliance-payload.json
     response_mode: callback
     callback_path: /webhooks/compliance/receive
     poll_timeout: 7d
@@ -381,7 +383,7 @@ process:
           type: number
         - name: qualified
           type: boolean
-      run: ./steps/score-lead.rb
+      run: ./examples/steps/score-lead.rb
 
     - id: notify-team
       name: "Notify the sales team"
@@ -389,7 +391,7 @@ process:
       condition: "steps.score-lead.outputs.qualified == true"
 ```
 
-This process is shipped with the repo at `processes/lead-qualification.sop.yaml`. Run it with `bin/rails opensop:demo_leads`.
+This process is shipped with the repo at `processes/examples/lead-qualification.sop.yaml`. Run it with `bin/rails opensop:demo_leads`.
 
 ---
 
