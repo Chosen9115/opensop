@@ -30,7 +30,7 @@ You coordinate the following specialists:
 
 - **Application type**: Full-stack Rails (API + UI)
 - **Database**: PostgreSQL
-- **Deployment**: Docker → GCP Cloud Run (following Pouch pattern)
+- **Deployment**: Docker → any container host (e.g., GCP Cloud Run, Fly.io, Render)
 - **Test framework**: RSpec
 - **JavaScript**: importmap + Stimulus + Turbo
 - **CSS Framework**: Tailwind CSS
