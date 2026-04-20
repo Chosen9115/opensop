@@ -164,7 +164,7 @@ process:
     - id: submit-to-compliance
       name: "Submit to compliance provider"
       type: webhook
-      description: "Send entity to Monex for compliance review"
+      description: "Send entity to compliance provider for review"
       condition: "steps.review-application.outputs.decision == 'approve'"
       inputs:
         - name: business_record
@@ -516,7 +516,7 @@ OpenSOP Engine is self-hostable. Multiple deployment options:
 | **Local** | SQLite | Development, single-user, prototyping |
 | **Single server** | PostgreSQL | Small team, internal processes |
 | **Cloud** | PostgreSQL on managed DB | Production, multi-team |
-| **Embedded** | SQLite/DuckDB | Embedded in another app (like DenchClaw) |
+| **Embedded** | SQLite/DuckDB | Embedded in another app (e.g., an internal admin tool) |
 
 The engine itself is a single binary (or container) with no external dependencies beyond the database. Process scripts (the `run:` paths) execute in a sandboxed environment.
 
@@ -633,37 +633,41 @@ The `.well-known/opensop` convention (like `.well-known/openid-configuration`) m
 
 ---
 
-## 5. How This Applies to Coba
+## 5. Example: A Financial Services Company
 
-### 5.1 Coba's processes on OpenSOP
+Consider a financial services company operating three disparate systems — a core banking service, a CRM, and an internal admin tool — each with its own process logic implemented in Rails state machines, service objects, and controller flows. This is a common shape, and a useful lens for seeing what OpenSOP replaces.
 
-The Banking production line becomes a set of OpenSOP processes:
+> *Other example use cases will be added here as teams adopt the system. PRs welcome.*
 
-| Process | Steps | Current State |
-|---------|-------|---------------|
-| `customer-onboarding` | collect-info → verify-docs → review → submit-compliance → create-account → welcome | Exists in Banking app as Rails state machine. Port to OpenSOP definition. |
-| `compliance-submission` | prepare-entity → submit-to-monex → wait-for-response → handle-result | Exists as Monex service objects. Port as subprocess. |
-| `send-payment` | select-recipient → enter-amount → get-quote → review → confirm → execute | Exists as member controller flow. Port as process. |
-| `lead-qualification` | receive-lead → enrich → score → assign → contact | Partially exists in DenchClaw. Formalize as process. |
-| `content-publication` | draft → review → approve → publish → track | Doesn't exist yet. Define as process. |
-| `deal-pipeline` | inbound → talking → demo → onboarding → compliance → activation → recurring | Exists across DenchClaw + Banking app. Unify as single process. |
+### 5.1 Candidate processes
 
-### 5.2 The Pipeline Orchestrator ON OpenSOP
+Their production line maps naturally to a set of OpenSOP processes:
 
-The production line orchestrator from the previous spec becomes simpler:
+| Process | Steps | Typical current state |
+|---------|-------|-----------------------|
+| `customer-onboarding` | collect-info → verify-docs → review → submit-compliance → create-account → welcome | Lives as a Rails state machine in the banking service. Port to OpenSOP definition. |
+| `compliance-submission` | prepare-entity → submit-to-provider → wait-for-response → handle-result | Lives as service objects around a compliance-provider integration. Port as a subprocess. |
+| `send-payment` | select-recipient → enter-amount → get-quote → review → confirm → execute | Lives as a controller flow. Port as a process. |
+| `lead-qualification` | receive-lead → enrich → score → assign → contact | Partially lives in the CRM. Formalize as a process. |
+| `content-publication` | draft → review → approve → publish → track | Doesn't exist yet. Define as a process. |
+| `deal-pipeline` | inbound → talking → demo → onboarding → compliance → activation → recurring | Lives across multiple systems. Unify as a single process. |
 
-- **Pipeline API** → replaced by OpenSOP Engine (it IS the API layer)
-- **Constraint engine** → a scheduled process that reads instance metrics from the engine
-- **Sub-agents** → agents that start and advance process instances via the OpenSOP API
-- **pipeline_unified table** → replaced by sop_instances + sop_steps (the process state IS the unified view)
+### 5.2 Orchestrating across systems with OpenSOP
+
+Companies in this shape often build a bespoke orchestrator to bridge systems. OpenSOP replaces most of it:
+
+- **Custom pipeline API** → replaced by the OpenSOP Engine (it IS the API layer)
+- **Custom constraint engine** → a scheduled process that reads instance metrics from the engine
+- **Sub-agents with hand-wired context** → agents that start and advance process instances via the OpenSOP API
+- **Unified "pipeline" table** → replaced by `sop_instances` + `sop_steps` (the process state IS the unified view)
 
 The orchestrator doesn't need to bridge three systems anymore. Each system registers its processes with OpenSOP. The orchestrator reads process state from one place.
 
 ### 5.3 Migration path
 
-1. **Deploy OpenSOP Engine** alongside existing systems (don't replace anything)
-2. **Define Coba processes** as OpenSOP YAML (start with customer-onboarding)
-3. **Wire existing systems as step executors** — the Banking app's onboarding controller becomes the `run:` target for onboarding steps
+1. **Deploy OpenSOP** alongside existing systems (don't replace anything)
+2. **Define processes** as OpenSOP YAML (start with customer-onboarding)
+3. **Wire existing systems as step executors** — e.g., the banking service's onboarding controller becomes the `run:` target for onboarding steps
 4. **Move orchestration to OpenSOP** — the reporting agent reads from `/sop/instances` instead of querying three databases
 5. **Harden** — as processes prove out, move step execution from agent-mediated to automated
 
@@ -676,8 +680,8 @@ The orchestrator doesn't need to bridge three systems anymore. Each system regis
 **Recommendation: Ruby (Rails)** for the engine.
 
 Why:
-- Coba team (Kuri) already expert in Rails
-- Follows Pouch pattern (same deployment, same CI/CD, same GCP Cloud Run)
+- Rails is a widely used, approachable stack for process automation work
+- Standard container deployment (Docker → any host: Cloud Run, Fly.io, Render, Heroku, self-hosted)
 - Convention-over-configuration aligns with the "define process, get API" philosophy
 - ActiveRecord + PostgreSQL for the store
 - Good YAML parsing ecosystem
@@ -963,7 +967,7 @@ The metrics view shows process health — this is where the Theory of Constraint
 │                                                                   │
 │  ◄◄◄ CONSTRAINT: Step 4 (Submit to compliance)                   │
 │  14 instances stuck • 4.8 day avg wait • 40% pass-through        │
-│  Top blocker: "Waiting for Monex callback" (12 of 14)            │
+│  Top blocker: "Waiting for compliance callback" (12 of 14)       │
 │                                                                   │
 │  ┌─────────────────────────────────────────────────────────────┐ │
 │  │  FLOW DIAGRAM                                               │ │
@@ -1033,9 +1037,9 @@ A catalog view of all defined processes. This is the internal "app store" of wha
 
 | Choice | Rationale |
 |--------|-----------|
-| **Rails views (Hotwire/Turbo + Stimulus)** | Ships with the engine (no separate frontend deploy). Same stack as the engine. Kuri already expert. |
-| **Tailwind CSS** | Consistent with Coba's existing apps. Fast to build. |
-| **ViewComponent** | Encapsulated UI components, same as Banking app. |
+| **Rails views (Hotwire/Turbo + Stimulus)** | Ships with the engine (no separate frontend deploy). Same stack as the engine. |
+| **Tailwind CSS** | Fast to build. Utility-first CSS with strong Rails integration. |
+| **ViewComponent** | Encapsulated UI components with Ruby-first ergonomics. |
 | **Turbo Frames** | Step cards, instance lists, metrics panels update without full page reloads. |
 | **Stimulus controllers** | Drag-and-drop step reorder, form builder interactions, condition builder. |
 
@@ -1089,7 +1093,7 @@ The UI adds convenience (visual builder, drag-and-drop, dashboards) but introduc
 **Project name:** OpenSOP
 **Domain:** opensop.ai
 **Tagline:** "Define your processes. Get your API."
-**Repo:** `opensop/opensop` (or `coba-ai/opensop` initially, transfer when ready)
+**Repo:** `Chosen9115/opensop`
 **License:** Apache 2.0 (permissive, enterprise-friendly, patent grant)
 
 **Why "OpenSOP":**
@@ -1100,18 +1104,18 @@ The UI adds convenience (visual builder, drag-and-drop, dashboards) but introduc
 
 ---
 
-## 9. What This Changes About the Production Line Spec
+## 9. What This Changes for a Custom Orchestrator
 
-If Coba builds on OpenSOP, the production line orchestrator simplifies:
+If a company builds on OpenSOP instead of a bespoke production-line orchestrator, the stack simplifies:
 
 | Before (custom) | After (OpenSOP) |
 |-----------------|-----------------|
 | Pipeline API (new Rails service) | OpenSOP Engine (runs all process APIs) |
-| pipeline_unified table | sop_instances + sop_steps (process state IS the unified view) |
+| Unified "pipeline" table | `sop_instances` + `sop_steps` (process state IS the unified view) |
 | Custom webhook wiring | OpenSOP event bus + callback system |
 | Sub-agent spawning with context | Agents call `/sop/{name}/start` and `/sop/{name}/{id}/steps/{step}/submit` |
 | Constraint engine (custom script) | Scheduled process that reads `/sop/metrics` |
-| DenchClaw ↔ Banking app bridge | Both systems are step executors for OpenSOP processes |
+| Point-to-point system bridges | Each system is a step executor for shared OpenSOP processes |
 | deal_id ↔ member_id mapping | Instance metadata carries both IDs through the process |
 
 The orchestrator becomes an agent that:

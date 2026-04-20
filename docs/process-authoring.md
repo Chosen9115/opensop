@@ -245,7 +245,7 @@ POST /sop/<process>/<instance_id>/steps/collect-business-info/submit
 
 ```yaml
 - id: submit-to-compliance
-  name: "Submit entity to Monex for compliance review"
+  name: "Submit entity to compliance provider for review"
   type: webhook
   inputs:
     - name: business_record
