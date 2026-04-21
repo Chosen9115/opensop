@@ -128,5 +128,72 @@ RSpec.describe Opensop::DefinitionParser do
           .to raise_error(described_class::InvalidDefinition, /subprocess/)
       end
     end
+
+    describe "trigger validation" do
+      def with_trigger(trigger)
+        minimal_process("trigger" => trigger)
+      end
+
+      def valid_webhook_trigger(overrides = {})
+        {
+          "type" => "webhook",
+          "auth" => {
+            "scheme"     => "hmac-sha256",
+            "secret_env" => "WEBHOOK_SECRET",
+            "header"     => "X-Signature"
+          },
+          "input_mapping" => { "email" => "${payload.email}" }
+        }.deep_merge(overrides)
+      end
+
+      it "accepts a valid webhook trigger" do
+        result = described_class.call(with_trigger(valid_webhook_trigger))
+        expect(result.ok?).to be true
+      end
+
+      it "accepts trigger: type: api with no auth block" do
+        result = described_class.call(with_trigger({ "type" => "api" }))
+        expect(result.ok?).to be true
+      end
+
+      it "rejects an unknown trigger type" do
+        expect { described_class.call(with_trigger({ "type" => "carrier-pigeon" })) }
+          .to raise_error(described_class::InvalidDefinition, /unknown trigger type/)
+      end
+
+      it "rejects a webhook trigger without an auth block" do
+        trigger = valid_webhook_trigger
+        trigger.delete("auth")
+        expect { described_class.call(with_trigger(trigger)) }
+          .to raise_error(described_class::InvalidDefinition, /requires an `auth` block/)
+      end
+
+      it "rejects an unsupported auth scheme" do
+        expect { described_class.call(with_trigger(valid_webhook_trigger("auth" => { "scheme" => "rsa-pss" }))) }
+          .to raise_error(described_class::InvalidDefinition, /unsupported scheme/)
+      end
+
+      it "rejects a missing secret_env" do
+        t = valid_webhook_trigger
+        t["auth"].delete("secret_env")
+        expect { described_class.call(with_trigger(t)) }
+          .to raise_error(described_class::InvalidDefinition, /secret_env/)
+      end
+
+      it "rejects an unsupported encoding" do
+        expect { described_class.call(with_trigger(valid_webhook_trigger("auth" => { "encoding" => "rot13" }))) }
+          .to raise_error(described_class::InvalidDefinition, /unsupported encoding/)
+      end
+
+      it "rejects a non-string prefix" do
+        expect { described_class.call(with_trigger(valid_webhook_trigger("auth" => { "prefix" => 42 }))) }
+          .to raise_error(described_class::InvalidDefinition, /prefix/)
+      end
+
+      it "rejects an input_mapping value of the wrong type" do
+        expect { described_class.call(with_trigger(valid_webhook_trigger("input_mapping" => { "x" => [] }))) }
+          .to raise_error(described_class::InvalidDefinition, /input_mapping/)
+      end
+    end
   end
 end
