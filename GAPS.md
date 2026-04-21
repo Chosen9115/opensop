@@ -58,6 +58,16 @@ Format: `#GAP-N | severity | description | discovered while | fix scope`
 
 ---
 
+### GAP-7 | 🟡 medium | `trigger: type: webhook` is in spec but not implemented
+
+**Symptom:** processes can only be started via `POST /sop/:name/start` with the exact `{"inputs": {...}}` shape plus `X-SOP-Token`. When a third-party tool (Cal.com, Stripe, Twilio, a form platform) wants to kick off a process, its webhook shape doesn't match and it can't send our auth header, so you need a middleware adapter in your own backend to translate.
+
+**Discovered while:** setting up Cal.com to start `consult-request` instances. Cal.com webhooks are HMAC-signed but can't send `X-SOP-Token`, and their payload shape is fixed.
+
+**Fix scope:** implement `trigger: type: webhook` per SPEC §2. Each process declares a webhook trigger with an inbound path and an input-mapping template. Route `POST /sop/triggers/<process-name>` → transform payload via mapping → `InstanceExecutor.start`. Support HMAC-signature verification (per-process secret in ENV) as the auth mechanism instead of `X-SOP-Token`. Unblocks all third-party webhook starts (Cal.com, Typeform, Stripe, HubSpot, etc.). ~2 days.
+
+---
+
 ### GAP-6 | 🟢 low | `wait` step with `seconds:` doesn't actually wait
 
 **Symptom:** `wait` steps with a `seconds:` duration return immediately instead of pausing. `wait` with `until:` pauses forever (no polling).
