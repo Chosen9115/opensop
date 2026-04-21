@@ -6,6 +6,15 @@ All notable changes to OpenSOP. Format roughly follows [Keep a Changelog](https:
 
 ### Added — engine
 
+- **`trigger: type: webhook` — third-party webhooks can start instances directly.** Process YAML declares an HMAC-authenticated trigger endpoint; providers (Cal.com, Stripe, Typeform, HubSpot, DocuSign, GitHub) POST to `/sop/triggers/<process-name>` with the configured signature header and the engine verifies, maps the payload via `input_mapping`, and starts an instance. No host-side adapter required. Closes [GAP-7](./GAPS.md).
+  - Supports HMAC-SHA256 with hex or base64 encoding, optional prefix (`sha256=...` style).
+  - `input_mapping` uses the same `${...}` templating as webhook steps, plus `${payload.X.Y.Z}` with integer array-index support.
+  - Values that are entirely a single `${...}` expression preserve their raw type (numbers stay numbers, objects stay objects) — critical for schema validation downstream.
+  - Malformed payloads and failed input validation return 200-with-logged-reason so providers don't retry on a shape mismatch. Log tags: `MAPPING_REJECTED`, `INSTANCE_REJECTED`.
+  - Replay protection deferred (documented); dedupe downstream by provider-specific ID.
+
+### Added — previously
+
 - **Webhook step — real outbound HTTP.** Fires the declared `method` + `url` via HTTParty when the step executes. Supports two response modes:
   - `response_mode: sync` — uses the JSON response body as the step's outputs directly.
   - `response_mode: callback` — fires outbound, then pauses at `waiting_for_callback` until the provider POSTs back to the auto-generated callback URL. On outbound failure, the callback row is destroyed so no orphans are left behind.

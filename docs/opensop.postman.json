@@ -350,8 +350,35 @@
       ]
     },
     {
-      "name": "Webhooks",
-      "description": "Inbound webhook callback receiver. Third parties (compliance providers, KYC vendors) POST results here.\n\n**Note:** these endpoints do NOT require `X-SOP-Token` — third parties wouldn't know it. Auth is bypassed specifically for this path.",
+      "name": "Triggers (third-party webhooks)",
+      "description": "Inbound trigger endpoints. SaaS tools (Cal.com, Stripe, Typeform, HubSpot, etc.) post here to start OpenSOP process instances directly, no adapter needed.\n\n**Auth is HMAC signature verification** against the raw body, configured per-process in the YAML under `trigger.auth`. `X-SOP-Token` is NOT required.\n\n**To test:** set the process's declared secret env var on your server (e.g., `CAL_WEBHOOK_SECRET=whsec_...`), use the same value in the body/headers of the request below, and the signature will verify.",
+      "item": [
+        {
+          "name": "Start instance from Cal.com-style trigger",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "X-Cal-Signature-256", "value": "sha256=REPLACE_WITH_HMAC_SHA256_HEX_OF_BODY", "type": "text", "description": "HMAC-SHA256 hex of the raw body, using the secret declared in the process's trigger.auth.secret_env" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"BOOKING_CREATED\",\n  \"uid\": \"bkg_abc123\",\n  \"startTime\": \"2026-05-01T15:00:00Z\",\n  \"attendees\": [\n    { \"email\": \"ana@example.com\", \"name\": \"Ana García\" }\n  ],\n  \"eventType\": { \"title\": \"Intro call\" }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/sop/triggers/consult-request",
+              "host": ["{{base_url}}"],
+              "path": ["sop", "triggers", "consult-request"]
+            },
+            "description": "Replace the `X-Cal-Signature-256` header value with a real HMAC-SHA256 hex digest of the body. For manual testing, compute it via:\n\n```bash\nBODY='{...exact raw JSON you're sending...}'\nSECRET='your_webhook_secret'\necho -n \"$BODY\" | openssl dgst -sha256 -hmac \"$SECRET\" -r | awk '{print \"sha256=\"$1}'\n```\n\n**Responses:**\n- 200 `{status: started, instance_id}` — instance created\n- 200 `{status: accepted, action: logged, reason}` — payload didn't satisfy mapping or input validation; logged, not retried\n- 400 `invalid_payload` — body is not valid JSON\n- 401 `invalid_signature` — HMAC mismatch or signature header missing\n- 404 `not_found` / `trigger_not_configured`\n- 500 `trigger_misconfigured` — secret env var unset on server"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Webhooks (callback receiver)",
+      "description": "Inbound webhook callback receiver for EXISTING instances. Third parties (compliance providers, KYC vendors) POST results here after a webhook step's outbound call registered the callback URL.\n\n**Different from Triggers folder above:** Triggers START new instances from scratch. Webhooks complete a callback to an in-flight instance's webhook step.\n\n**Note:** neither of these endpoints requires `X-SOP-Token` — third parties wouldn't know it.",
       "item": [
         {
           "name": "Receive webhook callback (simulating a compliance provider)",

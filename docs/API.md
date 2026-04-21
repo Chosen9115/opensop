@@ -66,6 +66,7 @@ The `actor` field on events and step submissions derives from this: `"agent"` wh
 | `POST` | `/sop/:name/:id/cancel` | Cancel an instance |
 | `GET` | `/sop/instances` | List all instances (admin) |
 | `POST` | `/sop/webhooks/:callback_id` | Inbound webhook callback (unauthenticated) |
+| `POST` | `/sop/triggers/:process_name` | Third-party webhook triggers (HMAC-authenticated) |
 
 ---
 
@@ -497,6 +498,60 @@ The keys in the JSON body should match the declared `outputs:` of the webhook st
 
 ---
 
+## Third-party webhook triggers
+
+### `POST /sop/triggers/:process_name`
+
+Lets a SaaS provider (Cal.com, Stripe, Typeform, HubSpot, DocuSign, etc.) start an OpenSOP process instance directly from its own webhook delivery — no host-side adapter required. Auth is HMAC signature verification against the raw request body, configured per-process in the YAML.
+
+**This endpoint does not require `X-SOP-Token`.** The declared HMAC scheme is the authentication.
+
+**Setup:**
+
+1. Declare a webhook trigger in the process YAML (see [`SPEC.md`](../SPEC.md) §2.2).
+2. Set the secret env var named in `trigger.auth.secret_env`.
+3. Configure the provider to POST to `https://<your-opensop>/sop/triggers/<process-name>` and paste the same secret into the provider's signature-secret field.
+
+**Request** (from the provider's perspective)
+
+```
+POST /sop/triggers/consult-request
+Content-Type: application/json
+X-Cal-Signature-256: sha256=ab12ef...<hmac hex of body>
+
+{
+  "type": "BOOKING_CREATED",
+  "uid": "bkg_abc123",
+  "startTime": "2026-05-01T15:00:00Z",
+  "attendees": [
+    { "email": "ana@example.com", "name": "Ana García" }
+  ]
+}
+```
+
+**Responses**
+
+| Status | Body | Meaning |
+|---|---|---|
+| 200 | `{"status":"started","instance_id":"..."}` | Instance created. |
+| 200 | `{"status":"accepted","action":"logged","reason":"..."}` | Payload didn't satisfy the mapping or input validation failed. Logged; provider should NOT retry. |
+| 400 | `{"error":"invalid_payload","message":"..."}` | Body is not valid JSON. |
+| 401 | `{"error":"invalid_signature","message":"..."}` | HMAC mismatch or signature header missing. |
+| 404 | `{"error":"not_found","message":"..."}` | Process name doesn't exist. |
+| 404 | `{"error":"trigger_not_configured","message":"..."}` | Process has no webhook trigger declared. |
+| 500 | `{"error":"trigger_misconfigured","message":"..."}` | Server secret env var unset. Check deployment config. |
+
+**Log tags for ops:**
+
+- `[Sop::TriggersController] MAPPING_REJECTED process=X reason=Y payload=...` — payload shape didn't match mapping
+- `[Sop::TriggersController] INSTANCE_REJECTED process=X reason=Y inputs=...` — mapping produced inputs, but instance validation rejected them
+
+Grep these to debug provider integrations that aren't creating instances.
+
+**No replay protection in v0.2.** If the provider retries (after a transient 5xx), you'll get a second instance. Both carry the inbound payload in metadata — downstream `automated` steps can dedupe by provider-specific ID (`booking_id`, `event_id`, etc.). Proper dedupe (`sop_webhook_events` table) tracked in GAPS.md for a later version.
+
+---
+
 ## Error response shape
 
 All error responses share a common envelope:
@@ -569,6 +624,7 @@ For transparency, the following are partially implemented — the endpoints work
 - **`subprocess`** — pauses at `waiting_for_subprocess`. No child instance is created yet.
 - **`wait`** — returns immediately for `seconds:` durations (no actual sleep). Real timer support requires `solid_queue`.
 - **`poll` response mode on webhooks** — not yet implemented. Use `sync` or `callback`.
+- **Replay protection for trigger endpoint** — a duplicate provider delivery will create a second instance. Dedupe downstream in an `automated` step by provider-specific ID (e.g., Cal.com's `uid`, Stripe's `event.id`).
 - **`retry.max` / `retry.backoff`** — parsed on automated steps but auto-retry not implemented. Use step re-submission instead.
 
 Fully implemented: `form`, `automated`, `webhook` (sync + callback modes, with env/input/callback_url interpolation), `notification` (stub send — returns `notified: true`).

@@ -15,6 +15,7 @@ Your work falls into one of three shapes. Identify which one, then jump to the m
 | "Here's a process description — write it as OpenSOP YAML" | **Playbook A: Author from scratch** |
 | "Here's our existing Rails state machine / controller flow — port it to OpenSOP" | **Playbook B: Port an existing workflow** |
 | "Integrate this new provider (compliance, KYC, payments) as a step" | **Playbook C: Add a webhook integration** |
+| "Let this SaaS tool (Cal.com, Stripe, etc.) start a process directly" | **Playbook D: Wire a third-party trigger** |
 
 Always:
 
@@ -691,6 +692,142 @@ After (two providers, routed by country):
 `resolve-compliance.rb` is a trivial script that picks whichever input is non-null.
 
 **Key property:** the existing `create-account` step doesn't need to change. It still references `steps.submit-to-compliance.outputs.entity_id`... wait, no — now it needs to reference `steps.resolve-compliance.outputs.entity_id`. That's the one downstream change. Make it, and the rest of the process continues to work.
+
+---
+
+### Playbook D: Wire a third-party SaaS webhook as a process trigger
+
+**Input:** a SaaS provider (Cal.com, Stripe, Typeform, HubSpot, DocuSign, etc.) that should kick off a process instance via its webhook delivery.
+
+**Why this exists:** SaaS webhooks can't send `X-SOP-Token` (no way to inject custom headers from the provider side) and their payload shape is fixed to their API, not OpenSOP's `/start` envelope. The `trigger: type: webhook` block solves both problems: HMAC signature verification replaces token auth, and `input_mapping` reshapes the payload into the process's declared inputs.
+
+**Steps:**
+
+1. **Identify the provider's signature scheme.** Look up the webhook documentation for:
+   - Header name (e.g. `X-Cal-Signature-256`, `Stripe-Signature`, `X-Hub-Signature-256`)
+   - Algorithm (currently OpenSOP only supports `hmac-sha256`)
+   - Encoding (hex or base64)
+   - Prefix format, if any (e.g. `sha256=<hex>` vs bare `<hex>`)
+
+2. **Declare the trigger in YAML:**
+
+   ```yaml
+   process:
+     name: consult-request
+     version: "1.0"
+
+     trigger:
+       type: webhook
+       auth:
+         scheme: hmac-sha256
+         secret_env: PROVIDER_WEBHOOK_SECRET    # pick a descriptive env var name
+         header: X-Provider-Signature-256
+         encoding: hex                          # default; omit if hex
+         prefix: "sha256="                      # omit if provider sends bare hex
+       input_mapping:
+         # map provider's payload shape to the process's declared inputs
+         primary_email: "${payload.attendees.0.email}"
+         scheduled_at:  "${payload.startTime}"
+         external_id:   "${payload.uid}"
+         source:        "cal.com"               # literal
+   ```
+
+3. **Declare the process `inputs`** that the mapping produces — these are the fields your steps will reference downstream:
+
+   ```yaml
+     inputs:
+       - { name: primary_email, type: string, format: email, required: true }
+       - { name: scheduled_at,  type: string, required: true }
+       - { name: external_id,   type: string, required: true }
+       - { name: source,        type: string }
+   ```
+
+4. **Set the secret env var** in the deployment environment (both local `.env` and prod config). Use a long random string (`openssl rand -hex 32` is standard).
+
+5. **Configure the provider:**
+   - Subscriber URL: `https://<your-opensop>/sop/triggers/<process-name>`
+   - Signature secret: paste the same value as the env var
+   - Event filter: if the provider sends multiple event types to the same endpoint (Cal.com sends both `BOOKING_CREATED` and `BOOKING_CANCELLED`), subscribe only to the event(s) that match your mapping — the engine logs mismatched events but returns 200, which looks green to the provider and can mask misconfigurations.
+
+6. **Test with a real event.** Trigger the provider to fire (create a Cal.com booking, submit a Typeform, etc.). Watch for:
+   - `POST /sop/triggers/<name>` returning 200 with `status: started`
+   - A new instance appearing in `GET /sop/instances?process=<name>`
+   - `instance.inputs` matching what you expected from the mapping
+
+7. **Debug if something's off:**
+   - HTTP 401 `invalid_signature` → verify the secret matches on both sides, then check the signature format (did you set `prefix: "sha256="` when needed?)
+   - HTTP 200 `action: logged` with `reason: missing key "..."` → the provider's payload doesn't have the path your mapping expected. Log into the provider's webhook-delivery history, inspect the actual payload JSON, and adjust the mapping path.
+   - HTTP 200 `action: logged` with `reason: invalid_inputs` → mapping succeeded but the resulting inputs failed the process's declared schema (enum mismatch, missing required, etc.). Adjust either the mapping or the input declaration.
+   - HTTP 500 `trigger_misconfigured` → the secret env var isn't set on the running server. Check deployment config.
+   - `grep MAPPING_REJECTED /var/log/opensop/production.log` — all silent-logged failures have distinctive tags.
+
+**Worked example — Cal.com booking → `consult-request` process:**
+
+```yaml
+opensop: "0.1"
+
+process:
+  name: consult-request
+  version: "1.0"
+  description: "Handle a consultation call booked via Cal.com"
+  owner: growth-team
+
+  trigger:
+    type: webhook
+    auth:
+      scheme: hmac-sha256
+      secret_env: CAL_WEBHOOK_SECRET
+      header: X-Cal-Signature-256
+      encoding: hex
+      prefix: "sha256="
+    input_mapping:
+      attendee_email: "${payload.attendees.0.email}"
+      attendee_name:  "${payload.attendees.0.name}"
+      meeting_time:   "${payload.startTime}"
+      booking_id:     "${payload.uid}"
+      event_type:     "${payload.eventType.title}"
+      source:         "cal.com"
+
+  inputs:
+    - { name: attendee_email, type: string, format: email, required: true }
+    - { name: attendee_name,  type: string, required: true }
+    - { name: meeting_time,   type: string, required: true }
+    - { name: booking_id,     type: string, required: true }
+    - { name: event_type,     type: string }
+    - { name: source,         type: string }
+
+  steps:
+    - id: create-crm-record
+      type: webhook
+      webhook:
+        method: POST
+        url: "${env.CRM_BASE_URL}/leads"
+        headers:
+          Authorization: "Bearer ${env.CRM_API_KEY}"
+        response_mode: sync
+      outputs:
+        - { name: crm_record_id, type: string }
+
+    - id: send-confirmation
+      type: notification
+      inputs:
+        - { name: to, from: process.inputs.attendee_email }
+        - { name: meeting_time, from: process.inputs.meeting_time }
+      outputs:
+        - { name: email_sent, type: boolean }
+
+    - id: record-outcome
+      type: form
+      name: "Record meeting outcome"
+      outputs:
+        - { name: attended, type: boolean, required: true }
+        - { name: qualified, type: enum, values: [yes, no, maybe], required: true }
+        - { name: notes, type: string }
+
+  tags: [growth, consult, cal.com]
+```
+
+Point Cal.com at `https://<your-opensop>/sop/triggers/consult-request`. Every booking becomes a `consult-request` instance. DenchClaw gets the lead via step 2. Ops records the outcome via step 3 after the call happens.
 
 ---
 
