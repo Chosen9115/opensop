@@ -1,6 +1,11 @@
 require 'rails_helper'
 
 RSpec.describe "Sop webhooks", type: :request do
+  # Stub the outbound webhook call — the engine now fires a real HTTP
+  # request when a webhook step executes. This suite is focused on the
+  # inbound callback receiver, so we only need the outbound call to succeed.
+  before { stub_request(:post, "https://example.com/provider").to_return(status: 200, body: "{}") }
+
   let(:process_def) do
     {
       "opensop" => "0.1",

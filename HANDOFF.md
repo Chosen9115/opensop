@@ -63,7 +63,7 @@ Step executors:
 | `automated` | ✅ real | Spawns the script via `Open3.capture3`, JSON in/out per [SPEC §6.3](./SPEC.md#63-step-execution-model) |
 | `form` | ✅ real | Pauses at `waiting_for_input`; advance via `submit_step` |
 | `notification` | ✅ real (stub) | Returns `{notified: true}` immediately — no real send |
-| `webhook` | 🟡 partial | Creates a `Sop::Callback`, pauses at `waiting_for_callback`. **No outbound HTTP yet** — assumes the third party is given the callback URL out of band. The callback receiver `POST /sop/webhooks/:callback_id` is fully wired. |
+| `webhook` | ✅ real | Fires outbound HTTP (HTTParty), supports `sync` and `callback` response modes. Interpolates `${env.X}`, `${process.inputs.Y}`, `${callback_url}`, and bare step-input paths in URL/headers/body_template. `poll` mode not yet implemented. |
 | `judgment` | 🟡 stub | Pauses at `escalated`. **No LLM integration** — fill via `submit_step`. |
 | `approval` | 🟡 stub | Pauses at `waiting_for_approval`. |
 | `subprocess` | 🟡 stub | Pauses at `waiting_for_subprocess`. **No child instance is created.** |

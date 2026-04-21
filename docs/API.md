@@ -560,16 +560,17 @@ When a step is `active`, its `sub_state` tells you *why* it's still running:
 
 ---
 
-## What's stubbed (v0.1)
+## What's stubbed (v0.2)
 
 For transparency, the following are partially implemented — the endpoints work but the underlying step type is a stub:
 
 - **`judgment`** — pauses at `escalated`; no LLM integration yet. Submit via the step endpoint.
 - **`approval`** — pauses at `waiting_for_approval`. Submit via the step endpoint.
 - **`subprocess`** — pauses at `waiting_for_subprocess`. No child instance is created yet.
-- **`webhook`** — inbound callback receiver works. Outbound HTTP call is **not** made by the engine; the step creates a callback URL and waits. You're expected to pass that URL to the provider out-of-band (for now).
 - **`wait`** — returns immediately for `seconds:` durations (no actual sleep). Real timer support requires `solid_queue`.
+- **`poll` response mode on webhooks** — not yet implemented. Use `sync` or `callback`.
+- **`retry.max` / `retry.backoff`** — parsed on automated steps but auto-retry not implemented. Use step re-submission instead.
 
-Fully implemented: `form`, `automated`, `notification` (stub send — returns `notified: true`).
+Fully implemented: `form`, `automated`, `webhook` (sync + callback modes, with env/input/callback_url interpolation), `notification` (stub send — returns `notified: true`).
 
 See [`SPEC.md`](../SPEC.md) §8 and [`HANDOFF.md`](../HANDOFF.md) for the full v0.2 roadmap.
