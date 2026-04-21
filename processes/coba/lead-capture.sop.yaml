@@ -1,0 +1,182 @@
+opensop: "0.1"
+
+# PRIVATE — Coba fork only. Never pushed to Chosen9115/opensop.
+#
+# One instance per captured lead. Started either by:
+#
+#   (A) Direct website form submit → POST /sop/lead-capture/start with inputs
+#   (B) LinkedIn Lead Gen Form → Zapier → POST /sop/triggers/lead-capture
+#       with HMAC signature
+#
+# The trigger mapping covers path B (most common). Path A skips the
+# mapping — caller just posts inputs directly.
+
+process:
+  name: lead-capture
+  version: "1.0"
+  description: "Process a captured lead: enrich, attribute, CRM record, nurture, route"
+  owner: growth-team
+
+  trigger:
+    type: webhook
+    auth:
+      scheme: hmac-sha256
+      secret_env: ZAPIER_WEBHOOK_SECRET
+      header: X-Zapier-Signature-256
+      encoding: hex
+      prefix: "sha256="
+    input_mapping:
+      # LinkedIn Lead Gen Form payload (as delivered by Zapier) → our inputs.
+      # Zapier-delivered LinkedIn leads use keys like "first_name", "email",
+      # "company_name", "job_title", "campaign_id" (the LinkedIn campaign URN),
+      # "form_response_id", "form_id".
+      lead_name:          "${payload.full_name}"
+      lead_email:         "${payload.email}"
+      lead_company:       "${payload.company_name}"
+      lead_title:         "${payload.job_title}"
+      source:             "linkedin"
+      platform_campaign_id: "${payload.campaign_id}"
+      external_id:        "${payload.form_response_id}"
+
+  inputs:
+    - name: lead_name
+      type: string
+      required: true
+    - name: lead_email
+      type: string
+      format: email
+      required: true
+    - name: lead_company
+      type: string
+      description: "Company name. Not required — some sources don't provide it."
+    - name: lead_title
+      type: string
+      description: "Job title"
+    - name: source
+      type: enum
+      values: [linkedin, facebook, seo, direct, referral, other]
+      required: true
+    - name: intent
+      type: enum
+      values: [lead-magnet, schedule-consult, start-onboarding, unknown]
+      description: "What the lead asked for. Unknown if captured from a passive channel (ad click → form fill) with no CTA choice."
+    - name: platform_campaign_id
+      type: string
+      description: "LinkedIn/FB campaign ID if the lead came from paid. Used for campaign-lifecycle attribution."
+    - name: external_id
+      type: string
+      description: "Provider-side unique ID (LinkedIn form response ID, etc). Use to dedupe downstream."
+
+  outputs:
+    - name: crm_deal_id
+      from: steps.create-crm-record.outputs.deal_id
+    - name: crm_person_id
+      from: steps.create-crm-record.outputs.person_id
+    - name: qualified
+      from: steps.qualify.outputs.qualified
+    - name: routed_to
+      from: steps.qualify.outputs.routed_to
+
+  steps:
+    # ─── 1. Enrich (automated) ─────────────────────────────────────────
+    - id: enrich
+      name: "Enrich lead from public data"
+      type: automated
+      description: "Lookup company size, industry, location via Clearbit/Apollo-style enrichment. Currently stub: echoes inputs plus derived fields."
+      inputs:
+        - name: lead_email
+          from: process.inputs.lead_email
+        - name: lead_company
+          from: process.inputs.lead_company
+      outputs:
+        - name: enriched_company
+          type: string
+        - name: company_size_bucket
+          type: enum
+          values: [micro, small, medium, large, unknown]
+        - name: industry
+          type: string
+      run: ./coba/steps/enrich-lead.rb
+
+    # ─── 2. Create CRM record (automated → DenchClaw DuckDB) ───────────
+    - id: create-crm-record
+      name: "Insert lead into DenchClaw CRM"
+      type: automated
+      description: "Inserts a v_people row (contact) + v_deal row (pipeline) + links them via entry_fields. Idempotent on email."
+      inputs:
+        - name: lead_name
+          from: process.inputs.lead_name
+        - name: lead_email
+          from: process.inputs.lead_email
+        - name: lead_company
+          from: process.inputs.lead_company
+        - name: lead_title
+          from: process.inputs.lead_title
+        - name: source
+          from: process.inputs.source
+        - name: platform_campaign_id
+          from: process.inputs.platform_campaign_id
+        - name: enriched_company
+          from: steps.enrich.outputs.enriched_company
+      outputs:
+        - name: deal_id
+          type: string
+        - name: person_id
+          type: string
+        - name: was_duplicate
+          type: boolean
+          description: "True if a deal already existed for this email — we skipped creation and returned the existing IDs."
+      run: ./coba/steps/create-crm-record.rb
+
+    # ─── 3. Send lead magnet / welcome email (notification) ────────────
+    - id: send-welcome
+      name: "Send welcome + lead magnet"
+      type: notification
+      description: "Stubbed today (GAP-1). When wired up, sends the benchmark PDF + a CTA to book a consult."
+      inputs:
+        - name: to
+          from: process.inputs.lead_email
+        - name: lead_name
+          from: process.inputs.lead_name
+      outputs:
+        - name: email_sent
+          type: boolean
+
+    # ─── 4. Qualify — decide routing (judgment) ────────────────────────
+    - id: qualify
+      name: "Qualify and route"
+      type: judgment
+      description: "Given the lead's profile, decide: push to consult-request (high intent), nurture sequence (medium), or park (low). Agent proposes; human can override."
+      inputs:
+        - name: lead_email
+          from: process.inputs.lead_email
+        - name: lead_company
+          from: process.inputs.lead_company
+        - name: lead_title
+          from: process.inputs.lead_title
+        - name: source
+          from: process.inputs.source
+        - name: company_size_bucket
+          from: steps.enrich.outputs.company_size_bucket
+        - name: industry
+          from: steps.enrich.outputs.industry
+      outputs:
+        - name: qualified
+          type: boolean
+          required: true
+        - name: routed_to
+          type: enum
+          values: [consult-request, nurture, park]
+          required: true
+        - name: rationale
+          type: string
+      judgment:
+        allow_agent: true
+        confidence_threshold: 0.7
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#growth-alerts"
+
+  tags: [growth, lead, capture, linkedin]

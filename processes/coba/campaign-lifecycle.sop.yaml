@@ -1,0 +1,216 @@
+opensop: "0.1"
+
+# PRIVATE — Coba fork only. Never pushed to Chosen9115/opensop.
+#
+# One instance per decision cycle for a customer-acquisition campaign.
+# First-launch instances fill every step. Review-cycle instances pass
+# `existing_campaign_id` at start, which skips brief/approve/launch and
+# goes straight to measure → decide.
+
+process:
+  name: campaign-lifecycle
+  version: "1.0"
+  description: "One decision cycle for a customer-acquisition campaign (launch or weekly review)"
+  owner: growth-team
+
+  trigger:
+    type: api
+
+  inputs:
+    # ─── Campaign identity ──────────────────────────────────────────────
+    - name: campaign_name
+      type: string
+      required: true
+      description: "Human name: Q2-MX-founder-LGF-01"
+    - name: channel
+      type: enum
+      values: [linkedin, facebook, other]
+      required: true
+    - name: objective
+      type: enum
+      values: [lead-gen, brand-awareness, retargeting, reactivation]
+      required: true
+    - name: budget_usd
+      type: number
+      required: true
+    - name: start_date
+      type: string
+      required: true
+      description: "ISO date: YYYY-MM-DD"
+
+    # ─── Hypothesis + success criteria ──────────────────────────────────
+    - name: hypothesis
+      type: string
+      required: true
+      description: "Testable sentence: X audience will Y at Z cost"
+    - name: success_metric
+      type: enum
+      values: [cpl, cpc, cvr, roas]
+      required: true
+    - name: success_threshold
+      type: number
+      required: true
+
+    # ─── Review mode (set only on re-review of existing campaign) ───────
+    - name: existing_campaign_id
+      type: string
+      description: "LinkedIn/FB campaign ID. If set, skip brief/approve/launch and go straight to measure-decide."
+    - name: prior_instance_id
+      type: string
+      description: "Previous campaign-lifecycle instance for this same campaign. Agent reads for continuity."
+
+  outputs:
+    - name: outcome
+      from: steps.decide.outputs.outcome
+    - name: rationale
+      from: steps.decide.outputs.rationale
+    - name: next_action
+      from: steps.decide.outputs.next_action
+    - name: total_spent_usd
+      from: steps.measure.outputs.spent_usd
+    - name: leads_generated
+      from: steps.measure.outputs.leads_captured
+    - name: cpl_actual
+      from: steps.measure.outputs.cpl
+
+  steps:
+    # ─── 1. Produce creative ────────────────────────────────────────────
+    - id: produce-creative
+      name: "Produce creative assets"
+      type: form
+      description: "Headlines, body copy variants, images, CTA. Skipped on review cycles."
+      condition: "process.inputs.existing_campaign_id == null"
+      outputs:
+        - name: primary_headline
+          type: string
+          required: true
+        - name: body_variants
+          type: string[]
+          required: true
+          description: "Array of body copy variants, usually 3"
+        - name: image_urls
+          type: string[]
+          required: true
+          description: "URLs of uploaded creative images"
+        - name: cta_text
+          type: string
+          required: true
+        - name: lead_form_fields
+          type: string[]
+          description: "LinkedIn Lead Gen Form: additional fields beyond the auto-filled defaults"
+
+    # ─── 2. Approve launch ──────────────────────────────────────────────
+    - id: approve-launch
+      name: "Approve launch"
+      type: approval
+      condition: "process.inputs.existing_campaign_id == null"
+      approval:
+        approver_role: "founder"
+        reason_required_on_reject: true
+      outputs:
+        - name: approved
+          type: boolean
+          required: true
+        - name: approval_notes
+          type: string
+
+    # ─── 3. Launch in platform ──────────────────────────────────────────
+    - id: launch-in-platform
+      name: "Launch the campaign in the ad platform"
+      type: form
+      description: "Today: human clicks launch in LinkedIn/FB Campaign Manager and pastes the IDs back. Becomes webhook once platform APIs are wired."
+      condition: "process.inputs.existing_campaign_id == null && steps.approve-launch.outputs.approved == true"
+      outputs:
+        - name: platform_campaign_id
+          type: string
+          required: true
+          description: "LinkedIn Campaign ID or FB Campaign ID. Used for attribution on incoming leads."
+        - name: launched_at
+          type: string
+          required: true
+        - name: lead_gen_form_id
+          type: string
+          description: "LinkedIn Lead Gen Form ID, if applicable"
+
+    # ─── 4. Wait for a week of data ─────────────────────────────────────
+    - id: wait-for-data
+      name: "Wait for a week of data"
+      type: wait
+      wait:
+        seconds: 604800
+
+    # ─── 5. Measure performance ─────────────────────────────────────────
+    - id: measure
+      name: "Measure performance"
+      type: form
+      description: "Today: pasted in from Campaign Manager. Becomes webhook once LinkedIn/FB API is integrated."
+      outputs:
+        - name: impressions
+          type: number
+          required: true
+        - name: clicks
+          type: number
+          required: true
+        - name: ctr
+          type: number
+        - name: spent_usd
+          type: number
+          required: true
+        - name: leads_captured
+          type: number
+          required: true
+        - name: cpl
+          type: number
+        - name: cpc
+          type: number
+        - name: notes
+          type: string
+
+    # ─── 6. Decide: scale / iterate / kill / keep-running ───────────────
+    - id: decide
+      name: "Decide next action"
+      type: judgment
+      description: "Agent proposes against hypothesis + threshold; human confirms."
+      inputs:
+        - name: measured_cpl
+          from: steps.measure.outputs.cpl
+        - name: measured_leads
+          from: steps.measure.outputs.leads_captured
+        - name: success_metric
+          from: process.inputs.success_metric
+        - name: success_threshold
+          from: process.inputs.success_threshold
+        - name: hypothesis
+          from: process.inputs.hypothesis
+      outputs:
+        - name: outcome
+          type: enum
+          values: [scale, iterate, kill, keep-running]
+          required: true
+        - name: rationale
+          type: string
+          required: true
+        - name: next_action
+          type: string
+          required: true
+          description: "Concrete step for the operator: bump budget to $X, swap variant 2, pause and reallocate, etc."
+      judgment:
+        allow_agent: true
+        confidence_threshold: 0.7
+
+    # ─── 7. Record learnings ────────────────────────────────────────────
+    - id: conclude
+      name: "Record learnings"
+      type: form
+      outputs:
+        - name: learnings
+          type: string
+          required: true
+          description: "Paragraph an agent can read as prior for the next cycle"
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#growth"
+
+  tags: [growth, acquisition, campaign, linkedin, facebook]
