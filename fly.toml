@@ -34,9 +34,9 @@ primary_region = "dfw"  # Dallas, TX — closest to MX (no Fly region in Mexico)
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
-  # Starter setting: let machines sleep when idle. Bump to 1 once you have
-  # real traffic so the first request after idle doesn't pay cold-start cost.
-  min_machines_running = 0
+  # Keep at least one machine running at all times — no cold starts, and
+  # Solid Queue (running in-Puma) keeps processing background jobs while idle.
+  min_machines_running = 1
   processes = ["app"]
 
   [[http_service.checks]]
