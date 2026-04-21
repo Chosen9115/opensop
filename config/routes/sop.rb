@@ -6,6 +6,7 @@ scope :sop, as: :sop, module: :sop, defaults: { format: :json } do
   get "/", to: "discovery#index", as: :discovery
   get "/instances", to: "instances#index", as: :instances
   post "/webhooks/:callback_id", to: "webhooks#receive", as: :webhook
+  post "/triggers/:process_name", to: "triggers#receive", as: :trigger
 
   constraints(name: /[a-z0-9][a-z0-9_-]*/) do
     scope "/:name" do

@@ -82,5 +82,80 @@ RSpec.describe Opensop::Templating do
       )
       expect(rendered).to eq("http://localhost/cb?country=US&id=abc-123")
     end
+
+    context "with ${payload.X.Y.Z} references" do
+      let(:cal_payload) do
+        {
+          "type" => "BOOKING_CREATED",
+          "startTime" => "2026-05-01T15:00:00Z",
+          "attendees" => [
+            { "email" => "ana@example.com", "name" => "Ana García" },
+            { "email" => "second@example.com", "name" => "Second Guest" }
+          ],
+          "eventType" => { "title" => "Intro call" }
+        }
+      end
+
+      it "walks nested payload paths" do
+        expect(described_class.render("${payload.eventType.title}", payload: cal_payload))
+          .to eq("Intro call")
+      end
+
+      it "supports integer indices on arrays" do
+        rendered = described_class.render(
+          "${payload.attendees.0.email} and ${payload.attendees.1.name}",
+          payload: cal_payload
+        )
+        expect(rendered).to eq("ana@example.com and Second Guest")
+      end
+
+      it "raises when an array index is out of bounds" do
+        expect {
+          described_class.render("${payload.attendees.5.email}", payload: cal_payload)
+        }.to raise_error(Opensop::Templating::MissingVariable, /out of bounds/)
+      end
+
+      it "raises when an array index is non-integer" do
+        expect {
+          described_class.render("${payload.attendees.first.email}", payload: cal_payload)
+        }.to raise_error(Opensop::Templating::MissingVariable, /non-integer/)
+      end
+    end
+  end
+
+  describe ".resolve_value" do
+    let(:payload) { { "amount" => 5000, "flags" => { "vip" => true }, "tags" => %w[a b] } }
+
+    it "returns the raw numeric value for a whole-expression input" do
+      expect(described_class.resolve_value("${payload.amount}", payload: payload)).to eq(5000)
+    end
+
+    it "returns the raw boolean value" do
+      expect(described_class.resolve_value("${payload.flags.vip}", payload: payload)).to be(true)
+    end
+
+    it "returns the raw array value" do
+      expect(described_class.resolve_value("${payload.tags}", payload: payload)).to eq(%w[a b])
+    end
+
+    it "string-substitutes when the value has mixed content" do
+      expect(described_class.resolve_value("#{payload["amount"]} cents", payload: payload))
+        .to eq("5000 cents")
+    end
+
+    it "returns literal strings unchanged" do
+      expect(described_class.resolve_value("cal.com", payload: payload)).to eq("cal.com")
+    end
+
+    it "returns non-string values (Integer/Hash literals from YAML) unchanged" do
+      expect(described_class.resolve_value(42)).to eq(42)
+      expect(described_class.resolve_value({ "nested" => true })).to eq({ "nested" => true })
+    end
+
+    it "raises on missing payload path" do
+      expect {
+        described_class.resolve_value("${payload.missing.field}", payload: payload)
+      }.to raise_error(Opensop::Templating::MissingVariable, /missing/)
+    end
   end
 end

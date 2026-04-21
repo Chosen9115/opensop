@@ -10,6 +10,9 @@ module Opensop
   class DefinitionParser
     SPEC_VERSION = "0.1"
     STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait].freeze
+    TRIGGER_TYPES = %w[api webhook schedule manual].freeze
+    TRIGGER_AUTH_SCHEMES = %w[hmac-sha256].freeze
+    TRIGGER_AUTH_ENCODINGS = %w[hex base64].freeze
     FIELD_TYPES = %w[
       string number boolean enum date datetime
       file file[] string[] object reference currency
@@ -82,6 +85,8 @@ module Opensop
       fail_at!("process.name", "must be non-empty") if process["name"].to_s.strip.empty?
       require_string!(process, "version", "process.version")
 
+      validate_trigger!(process)
+
       validate_optional_array!(process, "inputs", "process.inputs") { |field, i| validate_field!(field, "process.inputs[#{i}]") }
       validate_optional_array!(process, "outputs", "process.outputs") { |field, i| validate_field!(field, "process.outputs[#{i}]", require_source_or_literal: true) }
 
@@ -140,6 +145,61 @@ module Opensop
         fail_at!("#{path}.process", "subprocess step requires a `process` name") unless step["process"].is_a?(String) && !step["process"].strip.empty?
       when "judgment"
         validate_judgment!(step, path)
+      end
+    end
+
+    def validate_trigger!(process)
+      trigger = process["trigger"]
+      return if trigger.nil?
+
+      fail_at!("process.trigger", "must be a mapping") unless trigger.is_a?(Hash)
+      type = trigger["type"].to_s
+      unless TRIGGER_TYPES.include?(type)
+        fail_at!("process.trigger.type", "unknown trigger type #{type.inspect} (allowed: #{TRIGGER_TYPES.join(", ")})")
+      end
+
+      return unless type == "webhook"
+
+      auth = trigger["auth"]
+      fail_at!("process.trigger.auth", "webhook trigger requires an `auth` block") unless auth.is_a?(Hash)
+
+      scheme = auth["scheme"].to_s
+      unless TRIGGER_AUTH_SCHEMES.include?(scheme)
+        fail_at!("process.trigger.auth.scheme",
+                 "unsupported scheme #{scheme.inspect} (allowed: #{TRIGGER_AUTH_SCHEMES.join(", ")})")
+      end
+
+      %w[secret_env header].each do |key|
+        unless auth[key].is_a?(String) && !auth[key].strip.empty?
+          fail_at!("process.trigger.auth.#{key}", "required and must be a non-empty string")
+        end
+      end
+
+      if auth.key?("encoding")
+        unless TRIGGER_AUTH_ENCODINGS.include?(auth["encoding"].to_s)
+          fail_at!("process.trigger.auth.encoding",
+                   "unsupported encoding #{auth["encoding"].inspect} (allowed: #{TRIGGER_AUTH_ENCODINGS.join(", ")})")
+        end
+      end
+
+      if auth.key?("prefix")
+        fail_at!("process.trigger.auth.prefix", "must be a string") unless auth["prefix"].is_a?(String)
+      end
+
+      mapping = trigger["input_mapping"]
+      return if mapping.nil?
+
+      fail_at!("process.trigger.input_mapping", "must be a mapping") unless mapping.is_a?(Hash)
+      mapping.each do |key, value|
+        unless key.is_a?(String) && !key.strip.empty?
+          fail_at!("process.trigger.input_mapping", "keys must be non-empty strings")
+        end
+        # Values can be literals (strings, numbers, booleans) or ${...}
+        # expressions. No further validation beyond type checks.
+        unless value.is_a?(String) || value.is_a?(Numeric) || [true, false].include?(value)
+          fail_at!("process.trigger.input_mapping.#{key}",
+                   "must be a string, number, or boolean literal (got #{value.class})")
+        end
       end
     end
 
