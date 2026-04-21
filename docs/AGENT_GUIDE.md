@@ -276,7 +276,23 @@ Registers a callback URL, pauses at `sub_state=waiting_for_callback`. The third 
     poll_timeout: 7d
 ```
 
-**v0.1 limitation:** the engine does NOT yet make the outbound HTTP call. It creates the callback URL and waits. You're expected to pass the callback URL to the provider via whatever mechanism they support (webhook config in their dashboard, API registration, etc.). The inbound callback receiver at `POST /sop/webhooks/:callback_id` is fully wired.
+**How it works (v0.2):** the engine fires the outbound HTTP call when the step executes, using the declared `method`, `url`, `headers`, and body. Two response modes:
+
+- **`response_mode: callback`** (default): fire the request, then wait. The engine auto-generates a unique callback URL (e.g. `http://localhost:3000/sop/webhooks/a8f3...`) and exposes it as the `${callback_url}` template variable. Reference it anywhere in `url`, `headers`, or `body_template` so the provider knows where to post back. When the provider calls `POST /sop/webhooks/:callback_id`, the engine merges the payload into the step's `outputs:` and advances.
+- **`response_mode: sync`**: fire the request and use the JSON response body directly as the step's outputs. No callback involved.
+
+**Variable interpolation** (in `url`, `headers`, and the body template):
+
+| Syntax | Resolves to |
+|---|---|
+| `${env.FOO}` | `ENV["FOO"]` — raises if unset |
+| `${process.inputs.foo}` | instance-level input |
+| `${callback_url}` | full callback URL (callback mode only) |
+| `${foo.bar.baz}` | bare path → resolves against the step's resolved inputs |
+
+**Body:** if `body_template:` references a file path, the file is loaded and interpolated. If omitted, the step's resolved `inputs` are sent as JSON with types preserved (numbers stay numbers, nested hashes stay hashes). String-interpolated templates always produce strings, so prefer omitting `body_template:` when the default shape works.
+
+**Configure the base URL** for the callback by setting `OPENSOP_BASE_URL` (defaults to `http://localhost:3000`).
 
 **Use for:** third-party integrations with async responses. Compliance providers, KYC vendors, payment processors, any API with "we'll call you back when we're done."
 

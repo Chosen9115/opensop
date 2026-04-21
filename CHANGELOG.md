@@ -4,6 +4,23 @@ All notable changes to OpenSOP. Format roughly follows [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Added — engine
+
+- **Webhook step — real outbound HTTP.** Fires the declared `method` + `url` via HTTParty when the step executes. Supports two response modes:
+  - `response_mode: sync` — uses the JSON response body as the step's outputs directly.
+  - `response_mode: callback` — fires outbound, then pauses at `waiting_for_callback` until the provider POSTs back to the auto-generated callback URL. On outbound failure, the callback row is destroyed so no orphans are left behind.
+- **`Opensop::Templating`** — `${expr}` interpolation for webhook URLs, headers, and body templates. Supports `${env.X}`, `${process.inputs.Y}`, `${callback_url}`, and bare step-input paths (`${business_record.legal_name}`). Missing variables raise loudly.
+- **`OPENSOP_BASE_URL`** — configures the public base URL used when constructing `${callback_url}` for outbound webhooks. Defaults to `http://localhost:3000`.
+
+### Added — tests
+
+- 12 new specs for `Opensop::Templating`.
+- 15 new specs for `Opensop::StepExecutors::Webhook` covering sync + callback + validation + interpolation paths, all WebMock-stubbed.
+
+### Added — project
+
+- `LICENSE` — Apache 2.0 (SPEC §8 already declared it).
+
 ## [0.1.0] — 2026-04-18
 
 First MVP release per [`SPEC.md`](./SPEC.md) §8. Defines, executes, and exposes business processes as APIs.
