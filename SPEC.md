@@ -55,9 +55,10 @@ process:
 
   # What starts this process
   trigger:
-    type: api          # api | schedule | webhook | manual
-    # For schedule: cron: "0 9 * * 1-5"
-    # For webhook: source: "website-form"
+    type: api          # api | webhook | schedule | manual
+    # For schedule (not yet implemented): cron: "0 9 * * 1-5"
+    # For webhook (implemented since v0.2): see the full schema below
+    # in §2.2 "Webhook triggers".
 
   # What goes IN to the process (provided at start)
   inputs:
@@ -311,6 +312,68 @@ process:
   replaces: "1.0"             # Marks 1.0 as deprecated
   migration: ./migrations/v1-to-v2.py  # Optional: migrate in-flight v1 instances
 ```
+
+### 2.2 Webhook triggers (starting a process from a third-party tool)
+
+When a process needs to be kicked off by a SaaS webhook (Cal.com bookings, Stripe events, HubSpot form submissions, DocuSign completions, etc.), declare a webhook trigger:
+
+```yaml
+process:
+  name: consult-request
+  version: "1.0"
+
+  trigger:
+    type: webhook
+    auth:
+      scheme: hmac-sha256              # only scheme in v0.2
+      secret_env: CAL_WEBHOOK_SECRET   # env var with the shared secret
+      header: X-Cal-Signature-256      # header the provider sends
+      encoding: hex                    # hex | base64 (default: hex)
+      prefix: "sha256="                # optional; stripped before compare
+    input_mapping:
+      attendee_email: "${payload.attendees.0.email}"
+      attendee_name:  "${payload.attendees.0.name}"
+      meeting_time:   "${payload.startTime}"
+      booking_id:     "${payload.uid}"
+      source:         "cal.com"                       # literal value
+
+  inputs:
+    - { name: attendee_email, type: string, required: true }
+    - { name: attendee_name,  type: string, required: true }
+    # ...
+```
+
+**Endpoint:** the engine exposes `POST /sop/triggers/<process-name>`. Configure the provider to post there.
+
+**Auth:** the declared HMAC scheme IS the authentication — the trigger endpoint does NOT require `X-SOP-Token`. The engine verifies the signature against the raw request body using the secret resolved from the declared `secret_env`.
+
+**Input mapping:** uses the same `${...}` syntax as webhook step interpolation, plus a new namespace `${payload.X.Y.Z}` for the inbound JSON body. Integer array indices are supported (`payload.attendees.0.email`). Literal values pass through (`source: "cal.com"`).
+
+**Response modes:**
+
+| Condition | Status | Body |
+|---|---|---|
+| Instance started successfully | 200 | `{"status":"started","instance_id":"..."}` |
+| Payload missing a mapped key, OR instance input validation failed | 200 | `{"status":"accepted","action":"logged","reason":"..."}` |
+| Malformed JSON body | 400 | `{"error":"invalid_payload",...}` |
+| HMAC mismatch or signature header absent | 401 | `{"error":"invalid_signature",...}` |
+| Process not found | 404 | `{"error":"not_found",...}` |
+| Process has no webhook trigger | 404 | `{"error":"trigger_not_configured",...}` |
+| Secret env var unset at runtime | 500 | `{"error":"trigger_misconfigured",...}` |
+
+The 200-with-logged-reason response is deliberate: providers like Cal.com send multiple event types to one endpoint (e.g. `BOOKING_CREATED` with attendees, `BOOKING_CANCELLED` without). When the payload doesn't match the mapping, the engine logs the rejection with a distinctive tag (`MAPPING_REJECTED` / `INSTANCE_REJECTED`) but returns 200 so the provider doesn't retry. If you need to handle multiple event types, declare separate processes or add a dispatch step.
+
+**Supported providers on day one:**
+
+| Provider | Signature header | Encoding | Prefix |
+|---|---|---|---|
+| Cal.com | `X-Cal-Signature-256` | hex | — |
+| Stripe | `Stripe-Signature` | hex | `v1=` (with `t=...,`) — **timestamp-scoped variant not yet supported; use at your own risk** |
+| HubSpot | `X-HubSpot-Signature-v3` | hex | — |
+| Typeform | `Typeform-Signature` | base64 | `sha256=` |
+| GitHub | `X-Hub-Signature-256` | hex | `sha256=` |
+
+Twilio uses HMAC-SHA1 which is not yet implemented — track v0.3 for that.
 
 ---
 

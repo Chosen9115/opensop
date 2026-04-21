@@ -85,6 +85,7 @@ GET  /sop/:name/:id/steps                   List steps
 POST /sop/:name/:id/steps/:step_id/submit   Advance a step
 GET  /sop/instances                         List instances (filters: state, process, limit, offset)
 POST /sop/webhooks/:callback_id             Inbound webhook callback (no auth)
+POST /sop/triggers/:process_name            Third-party webhook trigger (HMAC-authed)
 ```
 
 Auth: `X-SOP-Token` header. If `ENV['OPENSOP_API_TOKEN']` is unset, the API is open (with a `Rails.logger.warn`); if set, strict.
