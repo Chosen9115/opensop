@@ -39,6 +39,12 @@ module DenchClawBridge
       set :raise_errors, false
       set :logging, true
 
+      # Disable Rack::Protection's host-authorization check. This bridge is
+      # reached via Tailscale Funnel (hostname like *.ts.net) — Rack's default
+      # allowlist rejects those. Our real auth is the bearer token on /leads;
+      # the host header is not part of our security model.
+      set :protection, except: [ :host_authorization ]
+
       if TOKEN.empty?
         warn "[denchclaw-bridge] FATAL: DENCHCLAW_BRIDGE_TOKEN is not set"
         exit 1
