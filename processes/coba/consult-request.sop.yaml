@@ -38,9 +38,6 @@ process:
       event_type:      "${payload.payload.title}"
       booking_id:      "${payload.payload.uid}"
       source:          "cal.com"
-      # Optional: capture the volume question answer if the booker filled it.
-      # Cal.com surfaces booking questions under payload.responses.<identifier>.value
-      lead_volume:     "${payload.payload.responses.volume.value}"
 
   inputs:
     - name: attendee_email
