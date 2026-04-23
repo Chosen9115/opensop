@@ -35,7 +35,11 @@ port ENV.fetch("PORT", 3000)
 plugin :tmp_restart
 
 # Run the Solid Queue supervisor inside of Puma for single-server deployments.
-plugin :solid_queue if ENV["SOLID_QUEUE_IN_PUMA"]
+# Check the value as a string ("true" / "1") because Ruby treats any non-nil
+# ENV value as truthy — meaning SOLID_QUEUE_IN_PUMA=false would still enable
+# the plugin. Surprising + caused a production incident where Solid Queue's
+# DB-reconnect failures shut down Puma every time Postgres blipped.
+plugin :solid_queue if %w[true 1 yes on].include?(ENV["SOLID_QUEUE_IN_PUMA"].to_s.downcase)
 
 # Specify the PID file. Defaults to tmp/pids/server.pid in development.
 # In other environments, only set the PID file if requested.
