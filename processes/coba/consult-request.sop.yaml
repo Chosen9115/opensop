@@ -25,16 +25,17 @@ process:
       header: X-Cal-Signature-256
       encoding: hex
     input_mapping:
-      # Cal.com's BOOKING_CREATED payload shape. `triggerEvent` is one
-      # of BOOKING_CREATED / BOOKING_RESCHEDULED / BOOKING_CANCELLED /
-      # MEETING_STARTED / MEETING_ENDED — we filter to CREATED in
-      # Cal.com's subscription config; others still POST here but will
-      # fail input validation and get logged (Q2 option C behavior).
+      # Cal.com's BOOKING_CREATED payload shape. Fields confirmed present:
+      #   payload.title          — meeting title (NOT nested under eventType)
+      #   payload.startTime      — ISO 8601
+      #   payload.endTime        — ISO 8601
+      #   payload.uid            — unique booking ID (absent in ping payload)
+      #   payload.attendees[0]   — array, first entry is the booker
       attendee_email:  "${payload.payload.attendees.0.email}"
       attendee_name:   "${payload.payload.attendees.0.name}"
       meeting_time:    "${payload.payload.startTime}"
       meeting_end:     "${payload.payload.endTime}"
-      event_type:      "${payload.payload.eventType.title}"
+      event_type:      "${payload.payload.title}"
       booking_id:      "${payload.payload.uid}"
       source:          "cal.com"
       # Optional: capture the volume question answer if the booker filled it.
