@@ -23,9 +23,28 @@
 # ──────────────────────────────────────────────────────────────────────
 
 require "sinatra/base"
+require "rack/protection/host_authorization"
 require "json"
 require "open3"
 require "timeout"
+
+# Sinatra 4.x + rack-protection 4.x wire HostAuthorization independently of
+# `set :protection`, and none of the documented per-middleware options (tried
+# set :protection, except / host_authorization: {allow_if: ...} / disable
+# :protection) actually bypass it. This bridge is reached via Tailscale
+# Funnel (hostname like *.ts.net), which the default allowlist rejects, so
+# every inbound request was 403ing with "Host not permitted". Bearer token
+# on POST /leads is the real auth. Monkeypatch HostAuthorization to a
+# pass-through — ugly but definitive, and scoped to this process only.
+module Rack
+  module Protection
+    class HostAuthorization
+      def call(env)
+        @app.call(env)
+      end
+    end
+  end
+end
 
 module DenchClawBridge
   class App < Sinatra::Base
@@ -39,12 +58,6 @@ module DenchClawBridge
       set :raise_errors, false
       set :logging, true
 
-      # Rack::Protection's HostAuthorization rejects any Host header not in
-      # its allowlist. We're reached via Tailscale Funnel (*.ts.net) — that's
-      # intentional traffic. Bearer token on /leads is the real auth.
-      # `disable :protection` is ignored for HostAuthorization in Sinatra 4.x,
-      # so bypass it with an explicit allow-all lambda.
-      set :protection, host_authorization: { allow_if: ->(_env) { true } }
 
       if TOKEN.empty?
         warn "[denchclaw-bridge] FATAL: DENCHCLAW_BRIDGE_TOKEN is not set"
