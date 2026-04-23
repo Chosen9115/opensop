@@ -203,7 +203,10 @@ statements << insert_entry_field(deal_id, FLD_DEAL[:stage],            DEFAULT_S
 statements << insert_entry_field(deal_id, FLD_DEAL[:business_model],   DEFAULT_BUSINESS_MODEL)
 statements << insert_entry_field(deal_id, FLD_DEAL[:funnel],           DEFAULT_FUNNEL_ID)
 statements << insert_entry_field(deal_id, FLD_DEAL[:contact_name],     lead_name)
-statements << insert_entry_field(deal_id, FLD_DEAL[:contact_position], lead_title)
+# Contact Position intentionally left blank. Cal.com direct bookings map
+# lead_title from the meeting title (e.g. "Coba <> Customer"), which isn't
+# a job title — filling it produced garbage. LinkedIn Lead Gen Forms will
+# provide a real `job_title` field; wire it through when that lands.
 statements << insert_entry_field(deal_id, FLD_DEAL[:contact_email],    lead_email)
 statements << insert_entry_field(deal_id, FLD_DEAL[:channel],          channel)
 statements << insert_entry_field(deal_id, FLD_DEAL[:primary_contact],  person_id)
