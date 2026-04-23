@@ -1,0 +1,190 @@
+opensop: "0.1"
+
+# PRIVATE — Coba fork only. Never pushed to Chosen9115/opensop.
+#
+# One instance per Cal.com booking. Cal.com fires a webhook on
+# BOOKING_CREATED, verified by HMAC signature, mapped into inputs,
+# then the instance creates a DenchClaw CRM record via the bridge
+# (Tailscale Funnel → laptop Sinatra service → DuckDB insert).
+#
+# Downstream steps (confirmation email, wait for meeting time, record
+# outcome, route) are scaffolded but mostly stubbed until GAP-1
+# (notification delivery) ships.
+
+process:
+  name: consult-request
+  version: "1.0"
+  description: "Handle a consultation call booked via Cal.com — CRM, confirmation, outcome, routing"
+  owner: growth-team
+
+  trigger:
+    type: webhook
+    auth:
+      scheme: hmac-sha256
+      secret_env: CAL_WEBHOOK_SECRET
+      header: X-Cal-Signature-256
+      encoding: hex
+    input_mapping:
+      # Cal.com's BOOKING_CREATED payload shape. `triggerEvent` is one
+      # of BOOKING_CREATED / BOOKING_RESCHEDULED / BOOKING_CANCELLED /
+      # MEETING_STARTED / MEETING_ENDED — we filter to CREATED in
+      # Cal.com's subscription config; others still POST here but will
+      # fail input validation and get logged (Q2 option C behavior).
+      attendee_email:  "${payload.payload.attendees.0.email}"
+      attendee_name:   "${payload.payload.attendees.0.name}"
+      meeting_time:    "${payload.payload.startTime}"
+      meeting_end:     "${payload.payload.endTime}"
+      event_type:      "${payload.payload.eventType.title}"
+      booking_id:      "${payload.payload.uid}"
+      source:          "cal.com"
+      # Optional: capture the volume question answer if the booker filled it.
+      # Cal.com surfaces booking questions under payload.responses.<identifier>.value
+      lead_volume:     "${payload.payload.responses.volume.value}"
+
+  inputs:
+    - name: attendee_email
+      type: string
+      format: email
+      required: true
+    - name: attendee_name
+      type: string
+      required: true
+    - name: meeting_time
+      type: string
+      required: true
+      description: "ISO 8601 start time"
+    - name: meeting_end
+      type: string
+      description: "ISO 8601 end time"
+    - name: event_type
+      type: string
+    - name: booking_id
+      type: string
+      required: true
+      description: "Cal.com uid — unique per booking; use for dedup downstream"
+    - name: source
+      type: string
+    - name: lead_volume
+      type: string
+      description: "Answer to the 'monthly cross-border volume' question, if filled"
+
+  outputs:
+    - name: crm_deal_id
+      from: steps.create-crm-record.outputs.deal_id
+    - name: crm_person_id
+      from: steps.create-crm-record.outputs.person_id
+    - name: meeting_attended
+      from: steps.record-outcome.outputs.attended
+    - name: qualified
+      from: steps.record-outcome.outputs.qualified
+    - name: routed_to
+      from: steps.route.outputs.routed_to
+
+  steps:
+    # ─── 1. Create CRM record in DenchClaw ──────────────────────────
+    - id: create-crm-record
+      name: "Insert lead into DenchClaw"
+      type: webhook
+      description: "Outbound POST to the DenchClaw bridge on the laptop (via Tailscale Funnel). Inserts v_people + v_deal rows. Idempotent on email."
+      inputs:
+        - name: lead_email
+          from: process.inputs.attendee_email
+        - name: lead_name
+          from: process.inputs.attendee_name
+        - name: lead_title
+          from: process.inputs.event_type
+        - name: source
+          from: process.inputs.source
+        - name: platform_campaign_id
+          from: process.inputs.booking_id
+      webhook:
+        method: POST
+        url: "${env.DENCHCLAW_BRIDGE_URL}/leads"
+        headers:
+          Authorization: "Bearer ${env.DENCHCLAW_BRIDGE_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - name: person_id
+          type: string
+        - name: deal_id
+          type: string
+        - name: was_duplicate
+          type: boolean
+
+    # ─── 2. Send booking confirmation email ─────────────────────────
+    - id: send-confirmation
+      name: "Send booking confirmation to attendee"
+      type: notification
+      description: "Stubbed today (GAP-1). Cal.com already sends its own confirmation — this is Coba's branded follow-up with diagnostic prep notes."
+      inputs:
+        - name: to
+          from: process.inputs.attendee_email
+        - name: attendee_name
+          from: process.inputs.attendee_name
+        - name: meeting_time
+          from: process.inputs.meeting_time
+      outputs:
+        - name: email_sent
+          type: boolean
+
+    # ─── 3. Wait for meeting to happen ──────────────────────────────
+    - id: wait-for-meeting
+      name: "Wait until meeting time has passed"
+      type: wait
+      description: "Pauses until ~1 hour after the scheduled end. GAP-6: currently returns immediately with seconds:, so this is functionally a no-op today — record-outcome becomes active right away. Once GAP-6 ships we'll flip to `until: instance.metadata.meeting_end + 1h`."
+      wait:
+        seconds: 3600
+
+    # ─── 4. Record the outcome (human-submitted after the call) ─────
+    - id: record-outcome
+      name: "Record meeting outcome"
+      type: form
+      description: "Submitted by Carlos after the call. Attended Y/N, qualification, notes."
+      outputs:
+        - name: attended
+          type: boolean
+          required: true
+        - name: qualified
+          type: enum
+          values: [yes-hot, yes-nurture, no-fit, no-show]
+          required: true
+        - name: decision_volume
+          type: enum
+          values: ["<50k", "50k-250k", "250k-1m", "1m-5m", ">5m", "unknown"]
+        - name: notes
+          type: string
+        - name: next_step
+          type: enum
+          values: [start-onboarding, schedule-follow-up, send-proposal, dead, nurture]
+          required: true
+
+    # ─── 5. Route based on outcome ──────────────────────────────────
+    - id: route
+      name: "Route the lead to the next stage"
+      type: judgment
+      description: "Currently an echo of record-outcome.next_step; once agent-proposed routing lands, this becomes a judgment step that suggests routing based on the meeting transcript/notes."
+      inputs:
+        - name: next_step
+          from: steps.record-outcome.outputs.next_step
+        - name: qualified
+          from: steps.record-outcome.outputs.qualified
+        - name: notes
+          from: steps.record-outcome.outputs.notes
+      outputs:
+        - name: routed_to
+          type: enum
+          values: [onboarding, nurture, follow-up, proposal, dead]
+          required: true
+        - name: rationale
+          type: string
+      judgment:
+        allow_agent: true
+        confidence_threshold: 0.7
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#growth-alerts"
+
+  tags: [growth, consult, cal-com, logistics]
