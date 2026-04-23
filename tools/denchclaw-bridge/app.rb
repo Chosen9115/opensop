@@ -39,12 +39,12 @@ module DenchClawBridge
       set :raise_errors, false
       set :logging, true
 
-      # Disable Rack::Protection entirely. It's designed for HTML apps with
-      # cookies/sessions; we're a JSON API with bearer-token auth on the only
-      # non-trivial endpoint. HostAuthorization in particular rejects the
-      # Tailscale Funnel hostname (*.ts.net) from Fly — the exact traffic we
-      # exist to accept.
-      disable :protection
+      # Rack::Protection's HostAuthorization rejects any Host header not in
+      # its allowlist. We're reached via Tailscale Funnel (*.ts.net) — that's
+      # intentional traffic. Bearer token on /leads is the real auth.
+      # `disable :protection` is ignored for HostAuthorization in Sinatra 4.x,
+      # so bypass it with an explicit allow-all lambda.
+      set :protection, host_authorization: { allow_if: ->(_env) { true } }
 
       if TOKEN.empty?
         warn "[denchclaw-bridge] FATAL: DENCHCLAW_BRIDGE_TOKEN is not set"
