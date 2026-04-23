@@ -30,6 +30,13 @@ module Sop
     end
 
     def receive
+      sig_header = request.headers.to_h.find { |k, _| k.to_s.downcase.include?("signature") }&.first
+      Rails.logger.info(
+        "[Sop::TriggersController] RECEIVED process=#{params[:process_name]} " \
+        "ua=#{request.user_agent.to_s[0, 80].inspect} ip=#{request.remote_ip} " \
+        "content_length=#{request.content_length} signature_header=#{sig_header.inspect}"
+      )
+
       process = Sop::Process.published.where(name: params[:process_name]).to_a.max_by { |p| version_key(p.version) }
 
       unless process
@@ -90,6 +97,10 @@ module Sop
           return
         end
 
+      Rails.logger.info(
+        "[Sop::TriggersController] MAPPED process=#{process.name} inputs_keys=#{inputs.keys.inspect}"
+      )
+
       begin
         instance = Opensop::InstanceExecutor.start(
           process: process,
@@ -105,6 +116,11 @@ module Sop
         render json: { status: "accepted", action: "logged", reason: e.message }, status: :ok
         return
       end
+
+      Rails.logger.info(
+        "[Sop::TriggersController] STARTED process=#{process.name} " \
+        "instance_id=#{instance.id} state=#{instance.state}"
+      )
 
       render json: {
         status: "started",
