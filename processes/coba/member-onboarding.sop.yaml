@@ -33,12 +33,15 @@ opensop: "0.1"
 #     n8n workflows triggered by OpenSOP webhook steps — Coba Rails stops
 #     being the integration layer for those providers.
 #
-# Branches not yet covered in this v1.0:
-#   - Factoring flow (customer_information + financial_statements). Today
-#     factoring is a parallel track only for members who opt in. Covered
-#     separately as its own process when prioritized.
-#   - Watchlist / OFAC screening. features.md mentions it; the code path
-#     isn't clearly dedicated — likely subsumed in Rio's KYC. Flag for Carlos.
+# Explicitly OUT OF SCOPE for this process (confirmed with Carlos 2026-04-24):
+#   - Factoring track. The code still has the scaffolding (customer_information,
+#     financial_statements steps + factoring_complete?) but the feature is
+#     hidden from new users and no new factoring members will come through
+#     banking. Do not treat it as existing.
+#   - Watchlist / OFAC screening is handled externally by Monex USA and by
+#     Rio as part of their KYC. Coba does no formal in-house OFAC check —
+#     so no OpenSOP step models it. The `review-application` judgment
+#     step is where ops consumes Rio's verdict (rio_status) to decide.
 
 process:
   name: member-onboarding
