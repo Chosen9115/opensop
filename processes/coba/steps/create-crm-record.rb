@@ -1,5 +1,15 @@
 #!/usr/bin/env ruby
+# encoding: utf-8
 # frozen_string_literal: true
+
+# Force UTF-8 for all IO. launchd spawns this script with LANG/LC_CTYPE
+# unset and Ruby defaults to US-ASCII, which blows up the moment a
+# lead_message or company name contains any UTF-8 character (em-dash,
+# accented letters, etc.). Set explicitly here so the encoding posture
+# doesn't depend on who invoked us (Fly engine vs. launchd-spawned bridge).
+Encoding.default_external = Encoding::UTF_8
+Encoding.default_internal = Encoding::UTF_8
+[STDIN, STDOUT, STDERR].each { |io| io.set_encoding(Encoding::UTF_8) rescue nil }
 
 # PRIVATE — Coba fork only. Contains DenchClaw-specific IDs and defaults.
 #
