@@ -48,8 +48,10 @@ FLD_DEAL = {
   contact_name:      "4ac9b2c5-d41c-4523-a39d-051dc5633042",
   contact_position:  "3fd5c475-b16b-4b8e-822e-bc8b78e87ca2",
   contact_email:     "e6b40d6e-f999-4ed3-a5b4-2d768b7e7133",
+  contact_phone:     "8061325e-06db-416f-b63f-6131799181dd",
   channel:           "0830f7f7-c77c-499d-839f-46caca2a5d88",
-  primary_contact:   "1f7ef9a3-7bc6-40d9-9dde-066c720d84c7"
+  primary_contact:   "1f7ef9a3-7bc6-40d9-9dde-066c720d84c7",
+  notes:             "5b35268f-d9a6-4d08-8d8c-c6f3e5e84215"
 }.freeze
 
 # ── Coba defaults for new leads ───────────────────────────────────────
@@ -150,15 +152,34 @@ abort_with("lead_email is required") if lead_email.empty?
 lead_name            = input["lead_name"].to_s.strip
 lead_company         = (input["lead_company"].to_s.strip.empty? ? input["enriched_company"].to_s : input["lead_company"]).to_s.strip
 lead_title           = input["lead_title"].to_s.strip
+lead_phone           = input["lead_phone"].to_s.strip
+lead_inquiry_type    = input["lead_inquiry_type"].to_s.strip
+lead_volume          = input["lead_volume"].to_s.strip
+lead_message         = input["lead_message"].to_s.strip
 source               = input["source"].to_s.strip.downcase
 platform_campaign_id = input["platform_campaign_id"].to_s.strip
 channel              = SOURCE_TO_CHANNEL[source] || "Email"
 
-# Idempotency check
+# Compose a Notes blob from the richer website-form fields. Persisted on
+# the deal entry's Notes (richtext) column so the human doing qualify/
+# review sees the full context without hunting. If none of the three are
+# populated (e.g., LinkedIn path) this stays nil and we skip the insert.
+notes_body = [
+  (lead_inquiry_type.empty? ? nil : "**Inquiry type:** #{lead_inquiry_type}"),
+  (lead_volume.empty?       ? nil : "**Monthly volume:** #{lead_volume}"),
+  (lead_message.empty?      ? nil : "\n#{lead_message}")
+].compact.join("\n")
+notes_body = nil if notes_body.empty?
+
+# Idempotency check — email is the dedup key across ALL sources (LinkedIn,
+# website, direct, referral). Same email = one deal, regardless of channel.
+# If the original deal is stale and we want a re-engagement flow later, add
+# a time-window check here; current behaviour is "permanent dedup on email".
 existing_person_id = find_person_by_email(lead_email)
 if existing_person_id
   existing_deal_id = find_deal_for_person(existing_person_id)
   if existing_deal_id
+    warn "[create-crm-record] DEDUP_HIT email=#{lead_email} person_id=#{existing_person_id} deal_id=#{existing_deal_id} source=#{source}"
     puts JSON.dump({
       "person_id"     => existing_person_id,
       "deal_id"       => existing_deal_id,
@@ -191,6 +212,7 @@ unless existing_person_id
   statements << insert_entry(person_id, OBJ_PEOPLE)
   statements << insert_entry_field(person_id, FLD_PEOPLE[:full_name], lead_name.empty? ? lead_email : lead_name)
   statements << insert_entry_field(person_id, FLD_PEOPLE[:email],     lead_email)
+  statements << insert_entry_field(person_id, FLD_PEOPLE[:phone],     lead_phone)
   statements << insert_entry_field(person_id, FLD_PEOPLE[:company],   lead_company)
   statements << insert_entry_field(person_id, FLD_PEOPLE[:job_title], lead_title)
   statements << insert_entry_field(person_id, FLD_PEOPLE[:status],    DEFAULT_PEOPLE_STATUS)
@@ -208,8 +230,10 @@ statements << insert_entry_field(deal_id, FLD_DEAL[:contact_name],     lead_name
 # a job title — filling it produced garbage. LinkedIn Lead Gen Forms will
 # provide a real `job_title` field; wire it through when that lands.
 statements << insert_entry_field(deal_id, FLD_DEAL[:contact_email],    lead_email)
+statements << insert_entry_field(deal_id, FLD_DEAL[:contact_phone],    lead_phone)
 statements << insert_entry_field(deal_id, FLD_DEAL[:channel],          channel)
 statements << insert_entry_field(deal_id, FLD_DEAL[:primary_contact],  person_id)
+statements << insert_entry_field(deal_id, FLD_DEAL[:notes],            notes_body)
 
 statements << "COMMIT;"
 
