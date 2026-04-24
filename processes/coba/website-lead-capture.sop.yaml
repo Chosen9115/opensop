@@ -119,11 +119,15 @@ process:
           type: string
       run: ./coba/steps/enrich-lead.rb
 
-    # ─── 2. Create CRM record (automated → DenchClaw DuckDB) ───────────
+    # ─── 2. Create CRM record (webhook → DenchClaw bridge on laptop) ───
+    # The bridge shells this payload into the same create-crm-record.rb
+    # script that lead-capture uses locally. Running via webhook (not
+    # type: automated) keeps the Fly VM out of the DuckDB path — the DB
+    # lives on Carlos's laptop and is reached via Tailscale Funnel.
     - id: create-crm-record
-      name: "Insert lead into DenchClaw CRM"
-      type: automated
-      description: "Inserts a v_people row (contact) + v_deal row (pipeline) linked via entry_fields. Idempotent on email; also de-dupes within a 10-minute window for rapid resubmits."
+      name: "Insert lead into DenchClaw CRM (via bridge)"
+      type: webhook
+      description: "Outbound POST to the DenchClaw bridge. Same contract as consult-request — the bridge pipes the JSON body into create-crm-record.rb on the laptop and returns person_id/deal_id/was_duplicate. Idempotent on email."
       inputs:
         - name: lead_name
           from: process.inputs.lead_name
@@ -143,6 +147,13 @@ process:
           from: process.inputs.source
         - name: enriched_company
           from: steps.enrich.outputs.enriched_company
+      webhook:
+        method: POST
+        url: "${env.DENCHCLAW_BRIDGE_URL}/leads"
+        headers:
+          Authorization: "Bearer ${env.DENCHCLAW_BRIDGE_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
       outputs:
         - name: deal_id
           type: string
@@ -151,7 +162,6 @@ process:
         - name: was_duplicate
           type: boolean
           description: "True if a deal already existed for this email — skipped creation and returned existing IDs."
-      run: ./coba/steps/create-crm-record.rb
 
     # ─── 3. Send welcome (notification, stubbed) ───────────────────────
     - id: send-welcome
