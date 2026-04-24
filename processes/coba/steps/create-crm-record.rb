@@ -153,6 +153,53 @@ def find_deal_for_person(person_id)
   rows.first && rows.first["deal_id"]
 end
 
+def find_notes_for_deal(deal_id)
+  rows = duckdb_query(<<~SQL)
+    SELECT value
+    FROM entry_fields
+    WHERE entry_id = #{sql_escape(deal_id)}
+      AND field_id = #{sql_escape(FLD_DEAL[:notes])}
+    LIMIT 1;
+  SQL
+  rows.first && rows.first["value"]
+end
+
+# Compose an inbound-touch block to append to a deal's Notes. The tag
+# "(touch:<external_id>)" in the header is the idempotency marker —
+# before appending we grep existing Notes for this tag, skip if present.
+# That way retries from the trigger layer don't multiply touches.
+def format_touch(external_id:, source:, inquiry_type:, volume:, message:)
+  timestamp = Time.now.utc.strftime("%Y-%m-%d %H:%M UTC")
+  tag = external_id.to_s.strip.empty? ? "" : " (touch:#{external_id})"
+  parts = []
+  parts << "**#{timestamp} — inbound #{source} touch#{tag}**"
+  parts << "- Inquiry type: #{inquiry_type}" unless inquiry_type.to_s.strip.empty?
+  parts << "- Volume: #{volume}"              unless volume.to_s.strip.empty?
+  if message.to_s.strip != ""
+    parts << ""
+    parts << message.to_s
+  end
+  parts.join("\n")
+end
+
+def upsert_deal_notes(deal_id, new_notes)
+  existing = find_notes_for_deal(deal_id)
+  if existing.nil?
+    # no Notes row yet → insert fresh
+    duckdb_exec(insert_entry_field(deal_id, FLD_DEAL[:notes], new_notes))
+    :inserted
+  else
+    combined = "#{existing}\n\n---\n\n#{new_notes}"
+    duckdb_exec(<<~SQL)
+      UPDATE entry_fields
+      SET value = #{sql_escape(combined)}, updated_at = NOW()
+      WHERE entry_id = #{sql_escape(deal_id)}
+        AND field_id = #{sql_escape(FLD_DEAL[:notes])};
+    SQL
+    :appended
+  end
+end
+
 # ── Main ──────────────────────────────────────────────────────────────
 input = JSON.parse(STDIN.read)
 
@@ -168,6 +215,7 @@ lead_volume          = input["lead_volume"].to_s.strip
 lead_message         = input["lead_message"].to_s.strip
 source               = input["source"].to_s.strip.downcase
 platform_campaign_id = input["platform_campaign_id"].to_s.strip
+external_id          = input["external_id"].to_s.strip
 channel              = SOURCE_TO_CHANNEL[source] || "Email"
 
 # Compose a Notes blob from the richer website-form fields. Persisted on
@@ -183,17 +231,48 @@ notes_body = nil if notes_body.empty?
 
 # Idempotency check — email is the dedup key across ALL sources (LinkedIn,
 # website, direct, referral). Same email = one deal, regardless of channel.
-# If the original deal is stale and we want a re-engagement flow later, add
-# a time-window check here; current behaviour is "permanent dedup on email".
+# On dedup hit, UPSERT: we don't create a duplicate deal, but we DO append
+# a timestamped touch block to the existing deal's Notes so re-engagement
+# data (what they asked, volume, message) is preserved for the sales rep.
+# Guarded by external_id tag — replays with the same trigger payload are
+# no-ops.
 existing_person_id = find_person_by_email(lead_email)
 if existing_person_id
   existing_deal_id = find_deal_for_person(existing_person_id)
   if existing_deal_id
     warn "[create-crm-record] DEDUP_HIT email=#{lead_email} person_id=#{existing_person_id} deal_id=#{existing_deal_id} source=#{source}"
+
+    # Only upsert if we actually have new touch data to add. LinkedIn-path
+    # inputs don't include inquiry_type/volume/message, so for those we
+    # silently return as before.
+    has_touch_data = !(lead_inquiry_type.empty? && lead_volume.empty? && lead_message.empty?)
+    appended = false
+    if has_touch_data
+      existing_notes = find_notes_for_deal(existing_deal_id).to_s
+      touch_marker   = external_id.empty? ? nil : "(touch:#{external_id})"
+      already_seen   = touch_marker && existing_notes.include?(touch_marker)
+
+      if already_seen
+        warn "[create-crm-record] TOUCH_REPLAY external_id=#{external_id} — existing Notes already has this tag, skipping append"
+      else
+        touch = format_touch(
+          external_id:   external_id,
+          source:        source.empty? ? "unknown" : source,
+          inquiry_type:  lead_inquiry_type,
+          volume:        lead_volume,
+          message:       lead_message
+        )
+        result = upsert_deal_notes(existing_deal_id, touch)
+        warn "[create-crm-record] TOUCH_#{result.to_s.upcase} deal_id=#{existing_deal_id} external_id=#{external_id} source=#{source}"
+        appended = true
+      end
+    end
+
     puts JSON.dump({
       "person_id"     => existing_person_id,
       "deal_id"       => existing_deal_id,
-      "was_duplicate" => true
+      "was_duplicate" => true,
+      "touch_appended" => appended
     })
     exit 0
   end

@@ -145,6 +145,8 @@ process:
           from: process.inputs.lead_message
         - name: source
           from: process.inputs.source
+        - name: external_id
+          from: process.inputs.external_id
         - name: enriched_company
           from: steps.enrich.outputs.enriched_company
       webhook:
@@ -161,7 +163,10 @@ process:
           type: string
         - name: was_duplicate
           type: boolean
-          description: "True if a deal already existed for this email — skipped creation and returned existing IDs."
+          description: "True if a deal already existed for this email — skipped deal creation and upserted the touch into the existing deal's Notes instead."
+        - name: touch_appended
+          type: boolean
+          description: "True if we appended a new inbound-touch block to the existing deal's Notes (dedup hit + had new inquiry/volume/message data). False if dedup hit with no new touch data, or if the external_id marker was already present (replay)."
 
     # ─── 3. Send welcome (notification, stubbed) ───────────────────────
     - id: send-welcome
