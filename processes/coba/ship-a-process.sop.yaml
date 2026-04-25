@@ -1,0 +1,292 @@
+opensop: "0.1"
+
+# PRIVATE — Coba fork only. Never pushed to Chosen9115/opensop.
+#
+# ─────────────────────────────────────────────────────────────────────
+# THE SEED PROCESS
+# ─────────────────────────────────────────────────────────────────────
+#
+# This is Process #1. The bootstrap. The meta-process that produces
+# every other Coba process. Self-applicable: when you want to add a
+# new business process to the OpenSOP inventory, you start an instance
+# of THIS process with the candidate as input.
+#
+# Why this exists (per the 2026-04-25 chicken-and-egg framing):
+#
+#   "If I started a new company today, I'd need a process that
+#    captures how processes get built. The first process IS the
+#    meta-process. Once it exists, every subsequent process flows
+#    through it."
+#
+# What this process does NOT do:
+#   - Improve existing processes. That's the Toyota Production Agent's
+#     job — a separate weekly cron in n8n that observes runtime data
+#     and produces kaizen cards.
+#   - Discover candidates. That's the Discovery Agent's job — a
+#     separate cron that scans the codebase for process-shaped things
+#     we forgot existed.
+#   - Run autonomously. This is a tracked human-driven workflow with
+#     judgment steps. Each step is a deliberate decision that becomes
+#     part of the audit trail.
+#
+# What this process IS:
+#   - The audit trail. Every "we mapped a process" event becomes an
+#     instance with timestamps, evidence references, drafted YAML,
+#     validation results, deploy status, gap inventory.
+#   - The shape every future process-mapping conversation should
+#     follow — so we stop reinventing the workflow each time.
+#   - Self-applicable. We can run an instance of ship-a-process to
+#     ship a v1.1 of ship-a-process. Recursive on purpose.
+#
+# Three-tier alignment:
+#   - This process: business-process semantics (deliberate steps,
+#     human judgment). OpenSOP-native.
+#   - The TPA: integration fabric (cron + API reads + Slack post).
+#     n8n-native, lives in coba-ai/n8n-workflows.
+#   - Discovery Agent: same — scheduled n8n workflow that scans the
+#     codebase via gh API + posts candidate findings.
+
+process:
+  name: ship-a-process
+  version: "1.0"
+  description: "The seed process. Map and ship a new business process to OpenSOP. Self-applicable."
+  owner: platform-team
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: candidate_name
+      type: string
+      required: true
+      description: "Slug for the new process. Lowercase kebab-case. Becomes the YAML filename + the engine-side name."
+    - name: brief
+      type: string
+      required: true
+      description: "One-paragraph description of what this process is and why it matters now."
+    - name: requested_by
+      type: string
+      required: true
+      description: "Who asked: Carlos, ops, an agent (TPA, Discovery), a customer-facing event."
+    - name: priority
+      type: enum
+      values: [revenue-critical, retention, ops-efficiency, audit, exploratory]
+      required: true
+      description: "Drives sequencing. Revenue-critical jumps the queue."
+    - name: source_hints
+      type: string
+      description: "Optional. Pointers the requester already has — file paths, doc links, related processes, prior conversations."
+
+  outputs:
+    - name: yaml_path
+      from: steps.commit-and-deploy.outputs.yaml_path
+    - name: deployed
+      from: steps.validate-engine-load.outputs.loaded
+    - name: gap_count
+      from: steps.document-gaps.outputs.gap_count
+    - name: tpa_subscribed
+      from: steps.schedule-tpa-review.outputs.subscribed
+
+  steps:
+
+    # ─── 1. Confirm candidate ────────────────────────────────────────
+    # Sanity check before we burn time. Does this candidate actually
+    # need to be a process, or is it (a) already covered by an
+    # existing process, (b) better as an n8n workflow (plumbing,
+    # not business logic), (c) better as a feature inside an
+    # existing app? The three-tier rule decides.
+    - id: confirm-candidate
+      name: "Confirm candidate fits the OpenSOP layer"
+      type: judgment
+      description: "Apply the three-tier rule. Process if business-process semantics. n8n workflow if plumbing. Feature if pure UI/UX. Reject (gracefully) if duplicate of an existing process."
+      inputs:
+        - name: candidate_name
+          from: process.inputs.candidate_name
+        - name: brief
+          from: process.inputs.brief
+      outputs:
+        - name: decision
+          type: enum
+          values: [proceed, redirect-to-n8n, redirect-to-feature, duplicate-of-existing, skip]
+          required: true
+        - name: rationale
+          type: string
+          description: "Required if decision != proceed."
+        - name: existing_process_name
+          type: string
+          description: "If decision = duplicate-of-existing, the name of the existing process."
+      judgment:
+        allow_agent: true
+        confidence_threshold: 0.85
+
+    # ─── 2. Gather evidence ──────────────────────────────────────────
+    # The "read the code" step. For a process to be FAITHFUL to current
+    # behavior (per the 2026-04-24 mandate), we need primary sources:
+    # the actual controllers, services, jobs, models that implement it
+    # today. No guessing. No aspirational steps. If a behavior isn't
+    # reflected in code, it doesn't go in the YAML.
+    - id: gather-evidence
+      name: "Gather code + doc evidence"
+      type: form
+      description: "Inventory primary sources: Rails files, design docs, prior YAMLs to crib from, Circleback transcripts, ops Slack threads. The output is the bibliography the YAML cites."
+      inputs:
+        - name: source_hints
+          from: process.inputs.source_hints
+      outputs:
+        - name: code_paths
+          type: string
+          description: "Newline-separated list of authoritative file paths."
+        - name: doc_paths
+          type: string
+          description: "Newline-separated list of doc paths (features.md sections, spec docs, transcripts)."
+        - name: state_machine_summary
+          type: string
+          description: "Plain-English summary of the lifecycle: states, transitions, who triggers each."
+        - name: external_systems
+          type: string
+          description: "JSON array of external services touched: e.g., [Rio, Monex, Resend]."
+
+    # ─── 3. Draft the YAML ───────────────────────────────────────────
+    # Output: a syntactically-valid OpenSOP process YAML, faithful to
+    # the evidence collected. Use existing private processes as shape
+    # references (consult-request, member-onboarding, send-payment).
+    # Step types must come from STEP_TYPES; field types from
+    # FIELD_TYPES; webhook response_modes from WEBHOOK_RESPONSE_MODES.
+    - id: draft-yaml
+      name: "Draft the process YAML"
+      type: form
+      description: "Produce the candidate YAML at processes/coba/<candidate-name>.sop.yaml. Faithful to evidence. Cite code paths in comments."
+      inputs:
+        - name: candidate_name
+          from: process.inputs.candidate_name
+        - name: state_machine_summary
+          from: steps.gather-evidence.outputs.state_machine_summary
+      outputs:
+        - name: yaml_draft_path
+          type: string
+          required: true
+          description: "Local file path to the drafted YAML."
+        - name: step_count
+          type: number
+          required: true
+        - name: step_type_breakdown
+          type: string
+          description: "JSON: {form: N, automated: N, judgment: N, ...}."
+
+    # ─── 4. Validate against the engine ──────────────────────────────
+    # Run Opensop::Registry against the draft. Parse errors must be
+    # zero before proceeding. This is a fail-loud step — bad YAML
+    # never makes it to a commit.
+    - id: validate-engine-load
+      name: "Validate via opensop:load_processes"
+      type: webhook
+      description: "Fly-side rake task that runs Opensop::Registry.load_all on the draft. Returns parse errors if any."
+      inputs:
+        - name: yaml_draft_path
+          from: steps.draft-yaml.outputs.yaml_draft_path
+      webhook:
+        method: POST
+        url: "${env.OPENSOP_BASE_URL}/sop/dev/validate"
+        headers:
+          X-SOP-Token: "${env.OPENSOP_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+        # Note: /sop/dev/validate is a placeholder endpoint we'll add
+        # later. For now, this step is a no-op proxy and the actual
+        # validation happens out-of-band via `fly ssh console -C
+        # 'bin/rails opensop:load_processes'`. Captured here so the
+        # audit trail records who validated what, when.
+      outputs:
+        - name: loaded
+          type: boolean
+          required: true
+        - name: parse_errors
+          type: string
+          description: "Empty on success; otherwise the engine's error output."
+
+    # ─── 5. Commit + deploy ──────────────────────────────────────────
+    # Git commit to coba-ai/opensop, push, fly deploy, run
+    # opensop:load_processes on the deployed app. End-state: the new
+    # process is live and discoverable at /sop/<name>/schema.
+    - id: commit-and-deploy
+      name: "Commit + deploy + reload"
+      type: webhook
+      description: "git add → commit → push origin main → fly deploy → fly ssh console opensop:load_processes. Verifies the new process appears in /sop/ discovery."
+      inputs:
+        - name: yaml_draft_path
+          from: steps.draft-yaml.outputs.yaml_draft_path
+        - name: candidate_name
+          from: process.inputs.candidate_name
+      webhook:
+        method: POST
+        url: "${env.OPENSOP_BASE_URL}/sop/dev/deploy_process"
+        headers:
+          X-SOP-Token: "${env.OPENSOP_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+        # Same caveat as validate-engine-load: this endpoint is a
+        # placeholder. Deploy happens out-of-band today; instance
+        # records the human-driven action.
+      outputs:
+        - name: yaml_path
+          type: string
+          required: true
+        - name: commit_sha
+          type: string
+        - name: deploy_id
+          type: string
+        - name: schema_url
+          type: string
+          description: "Discovery URL: /sop/<name>/schema."
+
+    # ─── 6. Document gaps ────────────────────────────────────────────
+    # Every captured process has gaps — things that are MANUAL today,
+    # things that COULD be n8n, things that need new engine features.
+    # Catalog them explicitly so they don't disappear into "we'll get
+    # to it later" forgottenland.
+    - id: document-gaps
+      name: "Catalog manual / n8n / engine gaps"
+      type: form
+      description: "Three lists. (1) Manual today, fine for now. (2) n8n candidates — could be wired this week. (3) Engine gaps — needs OpenSOP capability that doesn't exist yet."
+      inputs:
+        - name: candidate_name
+          from: process.inputs.candidate_name
+      outputs:
+        - name: gap_count
+          type: number
+          required: true
+        - name: manual_gaps
+          type: string
+          description: "JSON array of {step_id, why_manual}."
+        - name: n8n_candidate_gaps
+          type: string
+          description: "JSON array of {step_id, proposed_workflow}."
+        - name: engine_gaps
+          type: string
+          description: "JSON array of {step_id, missing_capability}. Goes to GAPS.md."
+
+    # ─── 7. Schedule TPA review ──────────────────────────────────────
+    # New processes get added to the TPA's watch list. The TPA's
+    # weekly cron will analyze instance history starting next run.
+    # Implemented via n8n: this step posts to a Slack channel that
+    # the TPA reads as part of its watch-list config.
+    - id: schedule-tpa-review
+      name: "Subscribe new process to TPA"
+      type: notification
+      description: "Tell the Toyota Production Agent there's a new process to watch. TPA picks it up on its next weekly run."
+      inputs:
+        - name: candidate_name
+          from: process.inputs.candidate_name
+        - name: priority
+          from: process.inputs.priority
+      outputs:
+        - name: subscribed
+          type: boolean
+          required: true
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#platform-alerts"
+
+  tags: [meta, bootstrap, platform, ship-a-process, coba]
