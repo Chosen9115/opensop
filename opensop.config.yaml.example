@@ -1,0 +1,24 @@
+# OpenSOP workspace configuration — example.
+#
+# Copy this file to `opensop.config.yaml` at the repo root to register
+# custom tools that `llm` and `automated` steps may declare in their
+# `tools:` lists (see SPEC-v0.2.md §2.6).
+#
+# The five built-in tools — Read, Grep, Glob, Write, WebFetch — are always
+# registered, even with no config file. Anything declared below is merged
+# on top. A custom tool that reuses a built-in name overrides the built-in
+# (a warning is logged at boot).
+#
+# tools:
+#   # A webhook-handler tool that posts a message to a Slack channel.
+#   # Reference it from a step as:  tools: [Slack]
+#   Slack:
+#     # Handler dispatches the call. Built-in handlers are namespaced
+#     # `builtin:<name>`. The `webhook` handler issues an HTTP POST to `url`.
+#     handler: webhook
+#     # Incoming webhook URL. Treat as a secret — prefer env-var indirection
+#     # in real configs (e.g. `url: env:SLACK_WEBHOOK_URL`).
+#     url: https://hooks.slack.com/services/T000/B000/XXXXXXXX
+#     # Optional human-readable description surfaced in the UI and exposed
+#     # to LLM tool-use prompts.
+#     description: "Post a message to #ops"
