@@ -35,7 +35,7 @@ module Opensop
 
       # If the definition hasn't changed, skip.
       if record.persisted? && record.definition == definition
-        Rails.logger.info("[Opensop::Registry] unchanged: #{process_block["name"]} v#{process_block["version"]}")
+        Rails.logger.info("[Opensop::Registry] unchanged: #{process_block["name"]} v#{process_block["version"]} (#{path})")
         return record
       end
 

@@ -1,13 +1,29 @@
 class Sop::Step < ApplicationRecord
   self.table_name = "sop_steps"
 
-  STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait].freeze
+  STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait llm loop].freeze
   STATES = %w[pending active completed failed skipped].freeze
   SUB_STATES = %w[running waiting_for_input waiting_for_callback waiting_for_approval escalated].freeze
 
   belongs_to :instance,
              class_name: "Sop::Instance",
              foreign_key: :instance_id
+
+  belongs_to :parent_iteration,
+             class_name: "Sop::StepIteration",
+             foreign_key: :parent_iteration_id,
+             optional: true
+
+  has_many :llm_calls,
+           class_name: "Sop::LlmCall",
+           foreign_key: :step_id,
+           dependent: :destroy
+
+  has_many :iterations,
+           class_name: "Sop::StepIteration",
+           foreign_key: :parent_step_id,
+           dependent: :destroy,
+           inverse_of: :parent_step
 
   enum :state, {
     pending: "pending",

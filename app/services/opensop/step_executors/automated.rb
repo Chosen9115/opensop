@@ -59,6 +59,17 @@ module Opensop
           raise StepFailure, "script stdout must be a JSON object, got #{parsed.class}"
         end
 
+        validation_mode = definition["validation"] || "lenient"
+        if validation_mode == "strict"
+          declared_names = Array(definition["outputs"]).map { |o| o["name"].to_s }
+          missing = declared_names.reject { |n| parsed.key?(n) }
+          if missing.any?
+            raise StepFailure,
+                  "validation: strict — script stdout is missing declared output(s): #{missing.join(", ")}. " \
+                  "Got keys: #{parsed.keys.inspect}."
+          end
+        end
+
         { outputs: parsed }
       end
 
