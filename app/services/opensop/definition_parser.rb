@@ -11,12 +11,19 @@ module Opensop
     SPEC_VERSION = "0.1"
     SUPPORTED_SPEC_VERSIONS = %w[0.1 0.2].freeze
     STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait llm loop].freeze
-    TRIGGER_TYPES = %w[api webhook schedule manual].freeze
+    TRIGGER_TYPES = %w[api webhook schedule manual interval].freeze
+    INTERVAL_FORMAT = /\A(\d+)([smhd])\z/
+    INTERVAL_UNIT_SECONDS = { "s" => 1, "m" => 60, "h" => 3600, "d" => 86_400 }.freeze
+    INTERVAL_MIN_SECONDS = 5
     TRIGGER_AUTH_SCHEMES = %w[hmac-sha256].freeze
     TRIGGER_AUTH_ENCODINGS = %w[hex base64].freeze
     LOOP_VARIANT_KEYS = %w[for_each repeat_until while].freeze
     LOOP_AGGREGATE_MODES = %w[sum concat last].freeze
     LOOP_DEFAULT_MAX_ITERATIONS = 1000
+    # `loop.max_iterations:` accepts a literal positive Integer OR a template
+    # string of the shape `{{ process.inputs.<name> }}` resolved at instance
+    # start time. See `validate_loop!` and `StepExecutors::Loop#call`.
+    LOOP_MAX_ITERATIONS_TEMPLATE_FORMAT = /\A\{\{\s*process\.inputs\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}\z/
     FIELD_TYPES = %w[
       string number boolean enum date datetime
       file file[] string[] object reference currency
@@ -230,11 +237,16 @@ module Opensop
         block["as"] = "item"
       end
 
-      # `max_iterations:` is required for repeat_until/while, optional for for_each
+      # `max_iterations:` is required for repeat_until/while, optional for for_each.
+      # Accepts a literal positive Integer or a `{{ process.inputs.<name> }}`
+      # template string resolved at instance start.
       if block.key?("max_iterations")
         mi = block["max_iterations"]
-        unless mi.is_a?(Integer) && mi > 0
-          fail_at!("#{path}.loop.max_iterations", "must be a positive integer")
+        is_int = mi.is_a?(Integer) && mi > 0
+        is_tmpl = mi.is_a?(String) && mi.match?(LOOP_MAX_ITERATIONS_TEMPLATE_FORMAT)
+        unless is_int || is_tmpl
+          fail_at!("#{path}.loop.max_iterations",
+                   "must be a positive integer or a `{{ process.inputs.<name> }}` template string")
         end
       else
         if variant == "for_each"
@@ -344,6 +356,11 @@ module Opensop
         fail_at!("process.trigger.type", "unknown trigger type #{type.inspect} (allowed: #{TRIGGER_TYPES.join(", ")})")
       end
 
+      if type == "interval"
+        validate_interval_trigger!(trigger)
+        return
+      end
+
       return unless type == "webhook"
 
       auth = trigger["auth"]
@@ -387,6 +404,36 @@ module Opensop
                    "must be a string, number, or boolean literal (got #{value.class})")
         end
       end
+    end
+
+    # `trigger.type: interval` (SPEC-v0.2.md §2.10) — parser-only support for
+    # sub-minute cadence. The runtime scheduler isn't wired yet; this method
+    # validates shape, parses the duration, and stores `interval_seconds:` on
+    # the trigger hash so the future scheduler can consume it directly.
+    def validate_interval_trigger!(trigger)
+      raw = trigger["interval"]
+      unless raw.is_a?(String) && !raw.strip.empty?
+        fail_at!("process.trigger.interval",
+                 "required and must be a non-empty string (e.g. '30s', '5m')")
+      end
+
+      m = raw.strip.match(INTERVAL_FORMAT)
+      unless m
+        fail_at!("process.trigger.interval",
+                 "malformed interval #{raw.inspect}: expected `<positive-int><unit>` " \
+                 "where unit is one of #{INTERVAL_UNIT_SECONDS.keys.join(", ")} (e.g. '30s', '5m', '1h')")
+      end
+
+      amount = m[1].to_i
+      unit   = m[2]
+      seconds = amount * INTERVAL_UNIT_SECONDS.fetch(unit)
+
+      if seconds < INTERVAL_MIN_SECONDS
+        fail_at!("process.trigger.interval",
+                 "#{raw.inspect} is below the 5s minimum per SPEC-v0.2.md §2.10 (got #{seconds}s)")
+      end
+
+      trigger["interval_seconds"] = seconds
     end
 
     def validate_webhook!(step, path)
