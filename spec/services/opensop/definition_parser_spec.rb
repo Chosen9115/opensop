@@ -195,5 +195,151 @@ RSpec.describe Opensop::DefinitionParser do
           .to raise_error(described_class::InvalidDefinition, /input_mapping/)
       end
     end
+
+    describe "v0.2 features" do
+      def v02_process(steps:, extra_process: {})
+        {
+          "opensop" => "0.2",
+          "process" => {
+            "name" => "v02-proc",
+            "version" => "1.0",
+            "steps" => steps
+          }.merge(extra_process)
+        }
+      end
+
+      def valid_llm_step(overrides = {})
+        {
+          "id" => "classify",
+          "name" => "Classify",
+          "type" => "llm",
+          "model" => "claude-sonnet-4-7",
+          "prompt" => "Classify the message: {{ message }}",
+          "expected_output_schema" => {
+            "intent" => "enum[question, task, complaint]",
+            "confidence" => "number"
+          }
+        }.merge(overrides)
+      end
+
+      it "still accepts v0.1 files (no regression)" do
+        result = described_class.call(minimal_process)
+        expect(result.ok?).to be true
+        expect(result.value["opensop"]).to eq("0.1")
+      end
+
+      it "accepts opensop: '0.2'" do
+        result = described_class.call(v02_process(steps: []))
+        expect(result.ok?).to be true
+        expect(result.value["opensop"]).to eq("0.2")
+      end
+
+      it "accepts a valid llm step and applies defaults" do
+        result = described_class.call(v02_process(steps: [valid_llm_step]))
+        expect(result.ok?).to be true
+        step = result.value["process"]["steps"].first
+        expect(step["tools"]).to eq([])
+        expect(step["retry_on_incomplete"]).to be true
+        expect(step["max_retries"]).to eq(2)
+      end
+
+      it "accepts an llm step using prompt_file instead of prompt" do
+        step = valid_llm_step
+        step.delete("prompt")
+        step["prompt_file"] = "prompts/classify.md"
+        result = described_class.call(v02_process(steps: [step]))
+        expect(result.ok?).to be true
+      end
+
+      it "rejects an llm step with both prompt and prompt_file" do
+        step = valid_llm_step("prompt_file" => "prompts/classify.md")
+        expect { described_class.call(v02_process(steps: [step])) }
+          .to raise_error(
+            described_class::InvalidDefinition,
+            /llm step 'classify' requires either prompt: or prompt_file:, not both/
+          )
+      end
+
+      it "rejects an llm step with neither prompt nor prompt_file" do
+        step = valid_llm_step
+        step.delete("prompt")
+        expect { described_class.call(v02_process(steps: [step])) }
+          .to raise_error(
+            described_class::InvalidDefinition,
+            /llm step 'classify' requires either prompt: or prompt_file:, not both/
+          )
+      end
+
+      it "rejects an llm step missing expected_output_schema" do
+        step = valid_llm_step
+        step.delete("expected_output_schema")
+        expect { described_class.call(v02_process(steps: [step])) }
+          .to raise_error(described_class::InvalidDefinition, /expected_output_schema/)
+      end
+
+      it "accepts tools: on an automated step and surfaces the value" do
+        steps = [ {
+          "id" => "do-thing", "name" => "Do thing", "type" => "automated",
+          "run" => "scripts/do.rb",
+          "tools" => [ "Read", "Grep" ]
+        } ]
+        result = described_class.call(v02_process(steps: steps))
+        expect(result.ok?).to be true
+        expect(result.value["process"]["steps"].first["tools"]).to eq([ "Read", "Grep" ])
+      end
+
+      it "rejects tools: that is not an array of strings" do
+        steps = [ {
+          "id" => "do-thing", "name" => "Do thing", "type" => "automated",
+          "run" => "scripts/do.rb",
+          "tools" => "Read"
+        } ]
+        expect { described_class.call(v02_process(steps: steps)) }
+          .to raise_error(described_class::InvalidDefinition, /tools.*array of non-empty strings/)
+      end
+
+      it "accepts a collection output with a valid item_schema" do
+        steps = [ {
+          "id" => "fetch", "name" => "Fetch", "type" => "automated", "run" => "scripts/fetch.rb",
+          "outputs" => [ {
+            "name" => "leads", "type" => "object",
+            "collection" => true,
+            "item_schema" => { "email" => "string", "score" => "number" }
+          } ]
+        } ]
+        result = described_class.call(v02_process(steps: steps))
+        expect(result.ok?).to be true
+      end
+
+      it "rejects collection: true without item_schema" do
+        steps = [ {
+          "id" => "fetch", "name" => "Fetch", "type" => "automated", "run" => "scripts/fetch.rb",
+          "outputs" => [ { "name" => "leads", "type" => "object", "collection" => true } ]
+        } ]
+        expect { described_class.call(v02_process(steps: steps)) }
+          .to raise_error(
+            described_class::InvalidDefinition,
+            /output 'leads' has collection: true but no item_schema/
+          )
+      end
+
+      it "accepts process-level post_review and shared_state_writes passthrough" do
+        result = described_class.call(v02_process(
+          steps: [],
+          extra_process: {
+            "post_review" => { "type" => "llm", "model" => "claude-haiku-4-7" },
+            "shared_state_writes" => [ "last_run_at", "model_version" ]
+          }
+        ))
+        expect(result.ok?).to be true
+        expect(result.value["process"]["shared_state_writes"]).to eq([ "last_run_at", "model_version" ])
+      end
+
+      it "rejects post_review that is not a mapping" do
+        hash = v02_process(steps: [], extra_process: { "post_review" => "nope" })
+        expect { described_class.call(hash) }
+          .to raise_error(described_class::InvalidDefinition, /process\.post_review/)
+      end
+    end
   end
 end

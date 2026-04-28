@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_18_000006) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_28_000002) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -62,6 +62,27 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_000006) do
     t.index ["state"], name: "index_sop_instances_on_state"
   end
 
+  create_table "sop_llm_calls", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.integer "attempt", default: 1, null: false
+    t.integer "cost_cents"
+    t.datetime "created_at", null: false
+    t.text "error"
+    t.datetime "finished_at"
+    t.integer "input_tokens"
+    t.string "model", null: false
+    t.integer "output_tokens"
+    t.string "prompt_hash", null: false
+    t.jsonb "request_payload", default: {}
+    t.jsonb "response_payload", default: {}
+    t.datetime "started_at", null: false
+    t.string "status", null: false
+    t.uuid "step_id", null: false
+    t.datetime "updated_at", null: false
+    t.index ["status"], name: "index_sop_llm_calls_on_status"
+    t.index ["step_id", "attempt"], name: "index_sop_llm_calls_on_step_id_and_attempt", unique: true
+    t.index ["step_id"], name: "index_sop_llm_calls_on_step_id"
+  end
+
   create_table "sop_processes", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.datetime "created_at", null: false
     t.jsonb "definition", default: {}, null: false
@@ -94,16 +115,19 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_000006) do
     t.string "step_name", null: false
     t.string "step_type", null: false
     t.string "sub_state"
+    t.jsonb "tools", default: []
     t.datetime "updated_at", null: false
     t.index ["instance_id", "position"], name: "index_sop_steps_on_instance_id_and_position"
     t.index ["instance_id", "step_id"], name: "index_sop_steps_on_instance_id_and_step_id", unique: true
     t.index ["instance_id"], name: "index_sop_steps_on_instance_id"
     t.index ["state"], name: "index_sop_steps_on_state"
     t.index ["step_type"], name: "index_sop_steps_on_step_type"
+    t.index ["tools"], name: "index_sop_steps_on_tools", using: :gin
   end
 
   add_foreign_key "sop_callbacks", "sop_instances", column: "instance_id"
   add_foreign_key "sop_events", "sop_instances", column: "instance_id"
   add_foreign_key "sop_instances", "sop_processes", column: "process_id"
+  add_foreign_key "sop_llm_calls", "sop_steps", column: "step_id"
   add_foreign_key "sop_steps", "sop_instances", column: "instance_id"
 end
