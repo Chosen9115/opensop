@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_28_000002) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_28_000004) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -98,6 +98,21 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_28_000002) do
     t.index ["tags"], name: "index_sop_processes_on_tags", using: :gin
   end
 
+  create_table "sop_step_iterations", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.text "error"
+    t.datetime "finished_at"
+    t.integer "index", null: false
+    t.jsonb "iteration_inputs", default: {}
+    t.jsonb "outputs", default: {}
+    t.uuid "parent_step_id", null: false
+    t.datetime "started_at", null: false
+    t.string "state", default: "running", null: false
+    t.datetime "updated_at", null: false
+    t.index ["parent_step_id", "index"], name: "index_sop_step_iterations_on_parent_step_id_and_index", unique: true
+    t.index ["parent_step_id"], name: "index_sop_step_iterations_on_parent_step_id"
+  end
+
   create_table "sop_steps", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.integer "attempt", default: 1, null: false
     t.datetime "completed_at"
@@ -108,6 +123,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_28_000002) do
     t.jsonb "inputs", default: {}
     t.uuid "instance_id", null: false
     t.jsonb "outputs", default: {}
+    t.uuid "parent_iteration_id"
     t.integer "position", null: false
     t.datetime "started_at"
     t.string "state", default: "pending", null: false
@@ -120,6 +136,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_28_000002) do
     t.index ["instance_id", "position"], name: "index_sop_steps_on_instance_id_and_position"
     t.index ["instance_id", "step_id"], name: "index_sop_steps_on_instance_id_and_step_id", unique: true
     t.index ["instance_id"], name: "index_sop_steps_on_instance_id"
+    t.index ["parent_iteration_id"], name: "index_sop_steps_on_parent_iteration_id"
     t.index ["state"], name: "index_sop_steps_on_state"
     t.index ["step_type"], name: "index_sop_steps_on_step_type"
     t.index ["tools"], name: "index_sop_steps_on_tools", using: :gin
@@ -129,5 +146,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_28_000002) do
   add_foreign_key "sop_events", "sop_instances", column: "instance_id"
   add_foreign_key "sop_instances", "sop_processes", column: "process_id"
   add_foreign_key "sop_llm_calls", "sop_steps", column: "step_id"
+  add_foreign_key "sop_step_iterations", "sop_steps", column: "parent_step_id"
   add_foreign_key "sop_steps", "sop_instances", column: "instance_id"
 end
