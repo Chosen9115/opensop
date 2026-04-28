@@ -6,7 +6,7 @@ opensop: "0.2"
 
 process:
   name: learning-log
-  version: "3.0"
+  version: "3.1"
   description: "Nightly journal synthesis — Hermes drives, OpenSOP audits each phase"
   owner: hermes-os
 
@@ -52,6 +52,8 @@ process:
         - { name: outbox_path, type: string }
         - { name: outbox, type: object, description: "Full Slack outbox payload — channel + text per entry" }
         - { name: errors, type: object }
+        - { name: prompt_skill, type: string, description: "Name of the skill JSON whose body was used as the prompt" }
+        - { name: prompt_used, type: string, description: "Verbatim prompt body sent to the LLM at fire time — survives subsequent skill edits" }
       timeout: 35m
 
     - id: observer
