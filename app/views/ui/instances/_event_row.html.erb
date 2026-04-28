@@ -23,7 +23,7 @@
       </span>
     </div>
     <% if event.data.present? %>
-      <pre class="mt-1 text-[11px] text-slate-600 font-mono whitespace-pre-wrap break-words"><%= event.data.to_json %></pre>
+      <pre class="mt-1 text-[11px] text-slate-700 font-mono bg-slate-50 border border-slate-200 rounded p-2 whitespace-pre overflow-x-auto"><%= JSON.pretty_generate(event.data) %></pre>
     <% end %>
   </div>
 </li>

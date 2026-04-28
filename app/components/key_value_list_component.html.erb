@@ -5,7 +5,13 @@
     <% entries.each_with_index do |(key, value), i| %>
       <div class="grid grid-cols-3 gap-2 px-4 py-2 <%= i.odd? ? 'bg-slate-50' : 'bg-white' %>">
         <dt class="col-span-1 font-medium text-slate-600 break-words"><%= key %></dt>
-        <dd class="col-span-2 text-slate-900 font-mono text-xs break-words whitespace-pre-wrap"><%= format_value(value) %></dd>
+        <dd class="col-span-2 text-slate-900 font-mono text-xs break-words whitespace-pre-wrap min-w-0">
+          <% if complex?(value) %>
+            <pre class="text-xs font-mono text-slate-800 bg-slate-50 border border-slate-200 rounded-md p-2 overflow-x-auto whitespace-pre"><%= format_value(value) %></pre>
+          <% else %>
+            <%= format_value(value) %>
+          <% end %>
+        </dd>
       </div>
     <% end %>
   </dl>
