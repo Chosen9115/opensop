@@ -21,6 +21,7 @@ A `.sop.yaml` file declaring `opensop: "0.2"` may use any feature in this docume
 | 2.11 | Fan-out subprocess (`fan_out:` on `subprocess`) | §2.5 (extended) | 📋 Roadmapped (Phase 4) — parser will reject today |
 | 2.12 | Process `post_review:` hook | §2.1 (process-level field) | 📋 Roadmapped (Phase 5) |
 | 2.13 | Inter-instance shared state (`instance.shared_state.<key>`) | §2.4 reference syntax + §2.1 declaration | 📋 Roadmapped (Phase 5) |
+| 2.14 | `validation:` on `automated` steps (opt-in strict-mode output presence check) | §2.5 (new step field) | ✅ Shipped (alpha.5) |
 
 **Status legend:** ✅ Shipped (live on `main`, deployed to opensop.fly.dev) · 🚧 Parser-only (definition parses today, runtime arrives in a later phase) · 📋 Roadmapped (parser will reject) · 🔮 Deferred to v0.3.
 
@@ -350,6 +351,54 @@ Every read and write emits an event (`shared_state.read`, `shared_state.written`
 
 ---
 
+## §2.14 — `validation:` on `automated` steps (NEW)
+
+**Status:** ✅ Shipped (alpha.5).
+
+### Motivation
+
+In 0.1, an `automated` step with declared `outputs:` would silently accept scripts that omit some declared keys. The engine returns `state: completed` with the missing fields populated as `null`, and downstream `from: steps.x.outputs.<missing>` references then fail with a misleading "unresolved input reference" error far away from the actual cause. This is a footgun for any process that fans data forward — and it surfaced loudly in the HermesOS dogfooding pass.
+
+`validation:` is the opt-in fix. **Default behavior is unchanged** so existing v0.1 and v0.2 processes keep working. Authors who want loud, early failure on output drift opt into strict mode per step.
+
+### Shape
+
+```yaml
+- id: sync
+  type: automated
+  run: steps/sync.rb
+  validation: strict           # NEW — opt-in. Default is "lenient".
+  outputs:
+    - { name: status, type: enum, values: [ok, error] }
+    - { name: count, type: number }
+```
+
+### Modes
+
+| Mode | Behavior |
+|---|---|
+| `lenient` (default) | Current behavior. Whatever the script's stdout JSON parses to is the step output. Missing declared keys silently become `null` when referenced downstream. |
+| `strict` | After stdout parses, the executor checks that **every declared output `name` is a key** in the parsed Hash. If any are missing, the step fails with `StepFailure` listing both the missing names and the actual keys returned. Extra keys (not declared) are still permitted — many scripts legitimately emit debug data alongside their declared outputs. |
+
+### Scope (presence-only in this commit)
+
+Strict mode currently checks **presence only**, not type. Type-grammar validation against the `outputs:` block is a larger change — the type grammar overlaps with `expected_output_schema:` on `llm` steps (§2.5), and unifying those is best done together. Targeting v0.3.
+
+### Failure example
+
+Given the YAML above, a script that prints `{"status": "ok"}` (no `count`) under `validation: strict` produces:
+
+```
+StepFailure: validation: strict — script stdout is missing declared output(s): count.
+Got keys: ["status"].
+```
+
+### Why opt-in?
+
+Flipping the default to strict would silently break processes whose scripts have always omitted some declared outputs and whose downstream steps had been quietly tolerating `nil`. Opt-in keeps the upgrade path clean — pin a process to `validation: strict` once you've audited the script.
+
+---
+
 ## Summary of new SPEC.md anchors
 
 | New section | Topic |
@@ -360,6 +409,7 @@ Every read and write emits an event (`shared_state.read`, `shared_state.written`
 | §2.4 (reference syntax) | `[*]`, `[n]`, `.field` selectors; `instance.shared_state.<key>` |
 | §2.2 (trigger types) | `interval:`, `at: […]`, real cron `schedule:` |
 | §2.1 (process-level fields) | `post_review:`, `shared_state_writes:` |
+| §2.5 (per-step fields) | `validation:` on `automated` (lenient \| strict) |
 | §6.5 (technical decisions, NEW) | LLM provider abstraction; tool registry |
 
 These will be folded into `SPEC.md` proper when v0.2 ships.
