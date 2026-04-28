@@ -14,7 +14,8 @@ module Opensop
       "subprocess"   => "Opensop::StepExecutors::Subprocess",
       "notification" => "Opensop::StepExecutors::Notification",
       "wait"         => "Opensop::StepExecutors::Wait",
-      "llm"          => "Opensop::StepExecutors::Llm"
+      "llm"          => "Opensop::StepExecutors::Llm",
+      "loop"         => "Opensop::StepExecutors::Loop"
     }.freeze
 
     module_function

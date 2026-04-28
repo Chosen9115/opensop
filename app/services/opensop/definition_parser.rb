@@ -10,10 +10,13 @@ module Opensop
   class DefinitionParser
     SPEC_VERSION = "0.1"
     SUPPORTED_SPEC_VERSIONS = %w[0.1 0.2].freeze
-    STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait llm].freeze
+    STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait llm loop].freeze
     TRIGGER_TYPES = %w[api webhook schedule manual].freeze
     TRIGGER_AUTH_SCHEMES = %w[hmac-sha256].freeze
     TRIGGER_AUTH_ENCODINGS = %w[hex base64].freeze
+    LOOP_VARIANT_KEYS = %w[for_each repeat_until while].freeze
+    LOOP_AGGREGATE_MODES = %w[sum concat last].freeze
+    LOOP_DEFAULT_MAX_ITERATIONS = 1000
     FIELD_TYPES = %w[
       string number boolean enum date datetime
       file file[] string[] object reference currency
@@ -24,7 +27,10 @@ module Opensop
       /\Aprocess\.inputs\.[A-Za-z_][A-Za-z0-9_]*\z/,
       /\Asteps\.[a-z0-9][a-z0-9_-]*\.outputs\.[A-Za-z_][A-Za-z0-9_]*\z/,
       /\Aenv\.[A-Za-z_][A-Za-z0-9_]*\z/,
-      /\Ainstance\.[A-Za-z_][A-Za-z0-9_]*\z/
+      /\Ainstance\.[A-Za-z_][A-Za-z0-9_]*\z/,
+      # `loop.<name>` references the loop executor's per-iteration variable
+      # (the `as:` binding plus `index`). Body steps inside a `loop:` use this.
+      /\Aloop\.[A-Za-z_][A-Za-z0-9_]*\z/
     ].freeze
 
     class InvalidDefinition < StandardError; end
@@ -125,7 +131,7 @@ module Opensop
       end
     end
 
-    def validate_step!(step, path, ids)
+    def validate_step!(step, path, ids, allow_loop: true)
       require_string!(step, "id", "#{path}.id")
       unless step["id"].to_s.match?(STEP_ID_FORMAT)
         fail_at!("#{path}.id", "invalid format (must match /[a-z0-9][a-z0-9_-]*/)")
@@ -152,6 +158,8 @@ module Opensop
         fail_at!("#{path}.condition", "must be a string") unless step["condition"].is_a?(String)
       end
 
+      validate_exit_when!(step, path)
+
       case step["type"]
       when "automated"
         fail_at!("#{path}.run", "automated step requires a `run` path") unless step["run"].is_a?(String) && !step["run"].strip.empty?
@@ -164,6 +172,104 @@ module Opensop
         validate_judgment!(step, path)
       when "llm"
         validate_llm!(step, path)
+      when "loop"
+        unless allow_loop
+          fail_at!(path, "nested loop steps are not supported in v0.2")
+        end
+        validate_loop!(step, path, ids)
+      end
+    end
+
+    # `exit_when:` (v0.2 §2.8) — optional predicate string that, when true at
+    # step end, terminates the entire process with the literal exit_outputs.
+    # We only shape-check here; the predicate itself is evaluated at runtime.
+    def validate_exit_when!(step, path)
+      has_when = step.key?("exit_when")
+      has_outputs = step.key?("exit_outputs")
+
+      if has_when
+        unless step["exit_when"].is_a?(String) && !step["exit_when"].strip.empty?
+          fail_at!("#{path}.exit_when", "must be a non-empty string predicate")
+        end
+        unless step["exit_outputs"].is_a?(Hash)
+          fail_at!(path, "step '#{step["id"]}' has exit_when: but no exit_outputs: hash")
+        end
+      elsif has_outputs
+        fail_at!(path, "step '#{step["id"]}' has exit_outputs: without exit_when:")
+      end
+    end
+
+    # `loop:` step (v0.2 §2.9). Validates the loop block + body steps.
+    # Nested loops are explicitly disallowed in v0.2.
+    def validate_loop!(step, path, ids)
+      block = step["loop"]
+      unless block.is_a?(Hash)
+        fail_at!("#{path}.loop", "loop step requires a `loop` block")
+      end
+
+      variant_keys = LOOP_VARIANT_KEYS.select { |k| block.key?(k) }
+      if variant_keys.empty?
+        fail_at!("#{path}.loop", "must specify exactly one of: #{LOOP_VARIANT_KEYS.join(", ")}")
+      elsif variant_keys.size > 1
+        fail_at!("#{path}.loop",
+                 "must specify exactly one of: #{LOOP_VARIANT_KEYS.join(", ")} (got #{variant_keys.join(", ")})")
+      end
+
+      variant = variant_keys.first
+      value = block[variant]
+      unless value.is_a?(String) && !value.strip.empty?
+        fail_at!("#{path}.loop.#{variant}", "must be a non-empty string")
+      end
+
+      # `as:` defaults to "item"
+      if block.key?("as")
+        unless block["as"].is_a?(String) && !block["as"].strip.empty?
+          fail_at!("#{path}.loop.as", "must be a non-empty string")
+        end
+      else
+        block["as"] = "item"
+      end
+
+      # `max_iterations:` is required for repeat_until/while, optional for for_each
+      if block.key?("max_iterations")
+        mi = block["max_iterations"]
+        unless mi.is_a?(Integer) && mi > 0
+          fail_at!("#{path}.loop.max_iterations", "must be a positive integer")
+        end
+      else
+        if variant == "for_each"
+          block["max_iterations"] = LOOP_DEFAULT_MAX_ITERATIONS
+        else
+          fail_at!("#{path}.loop.max_iterations",
+                   "required for #{variant}: loops")
+        end
+      end
+
+      if block.key?("aggregate")
+        agg = block["aggregate"]
+        unless agg.is_a?(Hash) && !agg.empty?
+          fail_at!("#{path}.loop.aggregate", "must be a non-empty mapping of output_name => mode")
+        end
+        agg.each do |output_name, mode|
+          unless output_name.is_a?(String) && !output_name.strip.empty?
+            fail_at!("#{path}.loop.aggregate", "keys must be non-empty strings")
+          end
+          unless LOOP_AGGREGATE_MODES.include?(mode.to_s)
+            fail_at!("#{path}.loop.aggregate.#{output_name}",
+                     "must be one of: #{LOOP_AGGREGATE_MODES.join(" | ")} (got #{mode.inspect})")
+          end
+        end
+      end
+
+      body = step["body"]
+      unless body.is_a?(Array) && !body.empty?
+        fail_at!("#{path}.body", "loop step requires a non-empty `body:` array of steps")
+      end
+
+      body.each_with_index do |body_step, i|
+        body_path = "#{path}.body[#{i}]"
+        fail_at!(body_path, "must be a mapping") unless body_step.is_a?(Hash)
+        validate_step!(body_step, body_path, ids, allow_loop: false)
       end
     end
 
