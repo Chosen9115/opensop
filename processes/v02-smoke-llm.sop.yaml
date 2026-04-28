@@ -1,0 +1,45 @@
+opensop: "0.2"
+
+process:
+  name: v02-smoke-llm
+  version: "1.0"
+  description: "Smoke test for the llm step type — classifies a user message"
+  owner: opensop-core
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: user_message
+      type: string
+      required: true
+      description: "The message to classify"
+
+  outputs:
+    - name: intent
+      from: steps.classify.outputs.intent
+    - name: confidence
+      from: steps.classify.outputs.confidence
+
+  steps:
+    - id: classify
+      name: "Classify user intent"
+      type: llm
+      model: claude-sonnet-4-7
+      prompt: |
+        Classify this user message into one of: question, task, complaint.
+        Return JSON only.
+        Message: {{ user_message }}
+      tools: []
+      expected_output_schema:
+        intent: enum[question, task, complaint]
+        confidence: number
+        rationale: string
+      inputs:
+        - name: user_message
+          from: process.inputs.user_message
+      outputs:
+        - { name: intent, type: enum, values: [question, task, complaint] }
+        - { name: confidence, type: number }
+        - { name: rationale, type: string }
+      timeout: 2m
