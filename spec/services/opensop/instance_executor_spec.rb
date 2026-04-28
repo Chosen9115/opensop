@@ -259,6 +259,204 @@ RSpec.describe Opensop::InstanceExecutor do
     end
   end
 
+  describe "exit_when:" do
+    # Two-step process: gate (form) -> notify (notification).
+    # The gate carries `exit_when: outputs.score < 0.4` and literal
+    # `exit_outputs: { outcome: "rejected" }`. Form steps let us inject a
+    # specific `score` deterministically via submit_step.
+    let(:exit_process) do
+      build_process(
+        name: "exit-when-proc",
+        inputs: [ { "name" => "alpha", "type" => "string", "required" => true } ],
+        outputs: [
+          { "name" => "outcome", "from" => "steps.gate.outputs.outcome" }
+        ],
+        steps: [
+          {
+            "id" => "gate",
+            "name" => "Gate",
+            "type" => "form",
+            "outputs" => [ { "name" => "score", "type" => "number" } ],
+            "exit_when" => "outputs.score < 0.4",
+            "exit_outputs" => { "outcome" => "rejected" }
+          },
+          {
+            "id" => "notify",
+            "name" => "Notify",
+            "type" => "notification"
+          }
+        ]
+      )
+    end
+
+    it "terminates the process and never runs subsequent steps when the predicate is true" do
+      instance = described_class.start(process: exit_process, inputs: { "alpha" => "ok" })
+
+      described_class.submit_step(
+        instance: instance,
+        step_id: "gate",
+        outputs: { "score" => 0.3 }
+      )
+
+      instance.reload
+      gate   = instance.steps.find_by(step_id: "gate")
+      notify = instance.steps.find_by(step_id: "notify")
+
+      aggregate_failures do
+        expect(instance.state).to eq("completed")
+        expect(instance.outputs).to include("outcome" => "rejected")
+        expect(gate.state).to eq("completed")
+        # Notify never advanced — the engine returned before reaching it.
+        expect(notify.state).to eq("pending")
+        expect(instance.events.where(event_type: "instance.exited_early")).to exist
+        expect(instance.events.where(event_type: "step.completed",
+                                     step_id: "notify")).not_to exist
+      end
+    end
+
+    it "emits an instance.exited_early event whose data carries the step_id and exit_outputs" do
+      instance = described_class.start(process: exit_process, inputs: { "alpha" => "ok" })
+      described_class.submit_step(instance: instance, step_id: "gate",
+                                  outputs: { "score" => 0.1 })
+
+      event = instance.reload.events.find_by(event_type: "instance.exited_early")
+      expect(event).to be_present
+      expect(event.data).to include("step_id" => "gate")
+      expect(event.data["exit_outputs"]).to include("outcome" => "rejected")
+    end
+
+    it "continues normal advancement when the predicate is false" do
+      instance = described_class.start(process: exit_process, inputs: { "alpha" => "ok" })
+
+      described_class.submit_step(
+        instance: instance,
+        step_id: "gate",
+        outputs: { "score" => 0.7 }
+      )
+
+      instance.reload
+      notify = instance.steps.find_by(step_id: "notify")
+
+      aggregate_failures do
+        expect(instance.state).to eq("completed")
+        expect(notify.state).to eq("completed")
+        expect(instance.events.where(event_type: "instance.exited_early")).not_to exist
+      end
+    end
+
+    it "merges exit_outputs into existing instance.outputs rather than replacing them" do
+      # Pre-populate the instance with prior outputs (simulating earlier
+      # state collected before the gate ran). exit_outputs must merge in.
+      instance = described_class.start(process: exit_process, inputs: { "alpha" => "ok" })
+      instance.update!(outputs: { "prior_key" => "prior_value" })
+
+      described_class.submit_step(
+        instance: instance,
+        step_id: "gate",
+        outputs: { "score" => 0.2 }
+      )
+
+      instance.reload
+      aggregate_failures do
+        expect(instance.outputs).to include(
+          "prior_key" => "prior_value",
+          "outcome"   => "rejected"
+        )
+      end
+    end
+
+    it "treats an exit_when expression referencing a missing output as falsy and continues" do
+      # ConditionEvaluator's documented semantics: an unresolved reference
+      # returns nil; numeric comparisons against nil are false (safe_compare).
+      # So `outputs.nonexistent < 0.4` evaluates false and the process
+      # continues normally rather than exiting or raising.
+      proc_with_bad_ref = build_process(
+        name: "exit-when-missing-ref",
+        inputs: [ { "name" => "alpha", "type" => "string", "required" => true } ],
+        outputs: [ { "name" => "outcome", "from" => "steps.gate.outputs.outcome" } ],
+        steps: [
+          {
+            "id" => "gate",
+            "name" => "Gate",
+            "type" => "form",
+            "outputs" => [ { "name" => "score", "type" => "number" } ],
+            "exit_when" => "outputs.nonexistent < 0.4",
+            "exit_outputs" => { "outcome" => "rejected" }
+          },
+          { "id" => "notify", "name" => "Notify", "type" => "notification" }
+        ]
+      )
+
+      instance = described_class.start(process: proc_with_bad_ref,
+                                       inputs: { "alpha" => "ok" })
+      described_class.submit_step(instance: instance, step_id: "gate",
+                                  outputs: { "score" => 0.5 })
+
+      instance.reload
+      aggregate_failures do
+        expect(instance.events.where(event_type: "instance.exited_early")).not_to exist
+        expect(instance.steps.find_by(step_id: "notify").state).to eq("completed")
+        expect(instance.state).to eq("completed")
+      end
+    end
+  end
+
+  describe ".try_exit_early! (public extension point)" do
+    # Used by the loop executor to honor exit_when on body steps without
+    # routing through advance!. Verifies the contract: returns :continue
+    # when the predicate is false / absent, returns :exited and terminates
+    # the instance when the predicate is true.
+    let(:instance) do
+      proc_rec = build_process(
+        name: "try-exit-helper-proc",
+        steps: [ { "id" => "noop", "name" => "Noop", "type" => "notification" } ]
+      )
+      Sop::Instance.create!(
+        process: proc_rec,
+        process_name: proc_rec.name,
+        process_version: proc_rec.version,
+        state: "running",
+        inputs: {},
+        outputs: { "preserved" => "value" },
+        metadata: {}
+      )
+    end
+
+    let(:step) do
+      instance.steps.create!(
+        step_id: "gate", step_name: "Gate", step_type: "form",
+        state: "completed", inputs: {}, outputs: { "score" => 0.2 },
+        position: 1, attempt: 1
+      )
+    end
+
+    it "returns :continue when no exit_when is present" do
+      result = described_class.try_exit_early!(step, { "id" => "gate" }, instance)
+      expect(result).to eq(:continue)
+      expect(instance.reload.state).to eq("running")
+    end
+
+    it "returns :exited and completes the instance when the predicate is true" do
+      definition = {
+        "id" => "gate",
+        "exit_when" => "outputs.score < 0.4",
+        "exit_outputs" => { "outcome" => "rejected" }
+      }
+
+      result = described_class.try_exit_early!(step, definition, instance)
+
+      instance.reload
+      aggregate_failures do
+        expect(result).to eq(:exited)
+        expect(instance.state).to eq("completed")
+        expect(instance.outputs).to include(
+          "preserved" => "value",
+          "outcome"   => "rejected"
+        )
+      end
+    end
+  end
+
   describe "automated step failure (missing script)" do
     let(:process) do
       build_process(
