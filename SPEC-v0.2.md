@@ -10,25 +10,29 @@ A `.sop.yaml` file declaring `opensop: "0.2"` may use any feature in this docume
 
 ## What's new in 0.2
 
-| § | Addition | New SPEC.md anchor |
-|---|---|---|
-| 2.5 | `llm` step type | §2.5 (new step type row) |
-| 2.6 | `tools:` capability list on `llm` and `automated` | §2.5 (extended) |
-| 2.7 | Collection outputs (`collection: true` + `item_schema`) | §2.4 (extended) |
-| 2.8 | `exit_when:` step-level early-exit with outputs | §2.5 (new step field) |
-| 2.9 | `loop:` step (for_each / repeat_until / while) | §2.5 (new step type row) |
-| 2.10 | Triggers: `interval:`, `at: […]`, real `schedule:` (cron) | §2.2 (extended) |
-| 2.11 | Fan-out subprocess (`fan_out:` on `subprocess`) | §2.5 (extended) |
-| 2.12 | Process `post_review:` hook | §2.1 (process-level field) |
-| 2.13 | Inter-instance shared state (`instance.shared_state.<key>`) | §2.4 reference syntax + §2.1 declaration |
+| § | Addition | New SPEC.md anchor | Status |
+|---|---|---|---|
+| 2.5 | `llm` step type | §2.5 (new step type row) | ✅ Shipped (Phase 1) |
+| 2.6 | `tools:` capability list on `llm` and `automated` | §2.5 (extended) | ✅ Shipped (Phase 1) — runtime sandbox advisory on `automated` |
+| 2.7 | Collection outputs (`collection: true` + `item_schema`) | §2.4 (extended) | ✅ Shipped (Phase 1) |
+| 2.8 | `exit_when:` step-level early-exit with outputs | §2.5 (new step field) | ✅ Shipped (Phase 2) |
+| 2.9 | `loop:` step (for_each / repeat_until / while) | §2.5 (new step type row) | ✅ Shipped (Phase 2) |
+| 2.10 | Triggers: `interval:`, `at: […]`, real `schedule:` (cron) | §2.2 (extended) | 🚧 Parser-only for `interval:` (Phase 3 will add the scheduler); 📋 Roadmapped for `schedule:` cron and `at: […]` (Phase 3, parser will reject today) |
+| 2.11 | Fan-out subprocess (`fan_out:` on `subprocess`) | §2.5 (extended) | 📋 Roadmapped (Phase 4) — parser will reject today |
+| 2.12 | Process `post_review:` hook | §2.1 (process-level field) | 📋 Roadmapped (Phase 5) |
+| 2.13 | Inter-instance shared state (`instance.shared_state.<key>`) | §2.4 reference syntax + §2.1 declaration | 📋 Roadmapped (Phase 5) |
+
+**Status legend:** ✅ Shipped (live on `main`, deployed to opensop.fly.dev) · 🚧 Parser-only (definition parses today, runtime arrives in a later phase) · 📋 Roadmapped (parser will reject) · 🔮 Deferred to v0.3.
 
 **Deferred to v0.3** (intentionally out of scope for v0.2):
-- `async: true` on steps — needs the data shapes from §2.7/§2.9/§2.11 to settle first.
-- Templates / `extends:` — overlay/override semantics deserve their own milestone.
+- 🔮 `async: true` on steps — needs the data shapes from §2.7/§2.9/§2.11 to settle first.
+- 🔮 Templates / `extends:` — overlay/override semantics deserve their own milestone.
 
 ---
 
 ## §2.5 — `llm` step type (NEW)
+
+**Status:** ✅ Shipped — live on opensop.fly.dev (Phase 1).
 
 A first-class call to a language model with structured output. Distinct from:
 - `judgment` — *decision* with confidence threshold and human escalation.
@@ -68,6 +72,8 @@ A first-class call to a language model with structured output. Distinct from:
 4. On schema failure: if `retry_on_incomplete: true`, retry up to `max_retries` with a corrective system message; otherwise the step transitions to `failed`.
 5. Validated fields populate the step's `outputs:`.
 
+> Schema validation is strict by default. After `max_retries + 1` attempts fail validation, the step transitions to `failed` with an error listing each missing or wrong-typed field. The corresponding `Sop::LlmCall` row records `status: schema_failed` with the raw response in `response_payload` for debugging.
+
 ### Events emitted
 
 - `step.llm.requested` — model, prompt hash, tool list
@@ -90,6 +96,8 @@ Authors should not have to write a script wrapper to call an LLM. Factoring the 
 ---
 
 ## §2.6 — `tools:` capability list (NEW)
+
+**Status:** ✅ Shipped (Phase 1) — declaration and registration are live; runtime sandbox on `automated` steps is advisory (declared in YAML, surfaced in the UI, not yet enforced).
 
 A declared, runtime-enforced list of capabilities a step is allowed to use.
 
@@ -119,6 +127,8 @@ Built-in tools shipped with v0.2: `Read`, `Grep`, `Glob`, `Write` (subject to `p
 
 ## §2.7 — Collection outputs (NEW)
 
+**Status:** ✅ Shipped — live on opensop.fly.dev (Phase 1).
+
 Lets a step emit *N items* of the same shape — the data backbone for loops and fan-out.
 
 ```yaml
@@ -146,6 +156,8 @@ The runtime validates each item against `item_schema` at step completion.
 
 ## §2.8 — `exit_when:` (NEW)
 
+**Status:** ✅ Shipped — live on opensop.fly.dev (Phase 2).
+
 Step-level early-exit. If the predicate is true at step end, the *process* terminates with the literal `exit_outputs:` and emits `instance.completed`. Not an error.
 
 ```yaml
@@ -165,6 +177,8 @@ Predicate grammar: identical to existing `condition:` (SPEC.md §2 line 275).
 ---
 
 ## §2.9 — `loop:` step type (NEW)
+
+**Status:** ✅ Shipped — live on opensop.fly.dev (Phase 2). Supports `for_each`, `repeat_until`, `while` with `sum` / `concat` / `last` aggregation.
 
 ```yaml
 - id: process-each-lead
@@ -186,6 +200,8 @@ Predicate grammar: identical to existing `condition:` (SPEC.md §2 line 275).
     - { name: results, type: object, collection: true, item_schema: { ... } }
 ```
 
+> `max_iterations:` accepts a literal positive integer OR a single `{{ process.inputs.<name> }}` template (resolved at instance start). Other reference forms (e.g. `steps.*.outputs.*`) are not supported.
+
 ### Variants
 
 | Variant | Termination |
@@ -206,6 +222,8 @@ Each iteration creates a `sop_step_iteration` row (new table; see roadmap). The 
 
 ## §2.10 — Triggers (EXTENDED)
 
+**Status:** 🚧 Mixed — `interval:` parses today (parser-only; the scheduler that consumes it is Phase 3). `schedule:` (cron) and `at: […]` are 📋 Roadmapped (Phase 3); the parser will reject those forms today.
+
 SPEC.md §2.2 currently lists trigger types but only `api` is implemented. v0.2 adds:
 
 ```yaml
@@ -220,6 +238,12 @@ trigger:
   interval: 30s                    # 5s minimum; supports s, m, h, d
 ```
 
+> **`interval:` parsing rules (shipped today):**
+> - Allowed unit suffixes: `s` (seconds), `m` (minutes), `h` (hours), `d` (days). Examples: `30s`, `5m`, `2h`, `1d`.
+> - 5-second minimum.
+> - The parser stores `interval_seconds:` on the trigger record. That field is the contract any future scheduler implementation must consume.
+> - Parsing is shipped today; the scheduler that consumes `interval_seconds` is Phase 3.
+
 ```yaml
 trigger:
   type: schedule
@@ -232,6 +256,8 @@ Backed by a Solid Queue–driven scheduler (see roadmap Phase 3).
 ---
 
 ## §2.11 — Fan-out subprocess (EXTENDED)
+
+**Status:** 📋 Roadmapped — Phase 4. Parser will reject `fan_out:` today.
 
 The existing `subprocess` step gets a `fan_out:` modifier:
 
@@ -257,6 +283,8 @@ Each item spawns a child instance. Parent waits for all children. Child failure 
 ---
 
 ## §2.12 — `post_review:` process hook (NEW)
+
+**Status:** 📋 Roadmapped — Phase 5. Parser will reject `post_review:` today.
 
 A process-level observer that runs after every instance reaches a terminal state (`completed` or `failed`).
 
@@ -285,6 +313,8 @@ The hook itself is just a step — it can be `llm`, `automated`, `notification`,
 ---
 
 ## §2.13 — Inter-instance shared state (NEW)
+
+**Status:** 📋 Roadmapped — Phase 5. Parser will reject `shared_state_writes:` and `instance.shared_state.<key>` references today.
 
 A small, declared, observable global state per process. **Use sparingly** — it punctures the "each instance is self-contained" model.
 

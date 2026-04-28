@@ -281,6 +281,116 @@ RSpec.describe Opensop::StepExecutors::Loop do
     end
   end
 
+  describe "#call — max_iterations as `{{ process.inputs.<name> }}` template" do
+    let(:instance) { create(:sop_instance, inputs: { "max_batches" => 2 }) }
+
+    it "resolves the template against instance.inputs at execution time" do
+      definition = {
+        "loop" => {
+          "repeat_until"   => "outputs.done == true",
+          "max_iterations" => "{{ process.inputs.max_batches }}",
+          "aggregate"      => { "count" => "last" }
+        },
+        "body" => [
+          {
+            "id"     => "tick",
+            "type"   => "automated",
+            "name"   => "Tick",
+            "run"    => counter_script,
+            "inputs" => []
+          }
+        ],
+        "outputs" => [
+          { "name" => "count", "type" => "number" }
+        ]
+      }
+
+      expect {
+        described_class.new.call(loop_step, instance, definition)
+      }.to raise_error(described_class::StepFailure, /max_iterations \(2\)/)
+    end
+
+    it "accepts a numeric String input value" do
+      instance.update!(inputs: { "max_batches" => "3" })
+      definition = {
+        "loop" => {
+          "repeat_until"   => "outputs.done == true",
+          "max_iterations" => "{{ process.inputs.max_batches }}",
+          "aggregate"      => { "count" => "last" }
+        },
+        "body" => [
+          {
+            "id"     => "tick",
+            "type"   => "automated",
+            "name"   => "Tick",
+            "run"    => counter_script,
+            "inputs" => []
+          }
+        ],
+        "outputs" => [
+          { "name" => "count", "type" => "number" }
+        ]
+      }
+
+      result = described_class.new.call(loop_step, instance, definition)
+      expect(result[:outputs]["count"]).to eq(3)
+    end
+
+    it "raises StepFailure when the referenced input is missing" do
+      instance.update!(inputs: {})
+      definition = {
+        "loop" => {
+          "repeat_until"   => "outputs.done == true",
+          "max_iterations" => "{{ process.inputs.max_batches }}",
+          "aggregate"      => { "count" => "last" }
+        },
+        "body" => [
+          {
+            "id"     => "tick",
+            "type"   => "automated",
+            "name"   => "Tick",
+            "run"    => counter_script,
+            "inputs" => []
+          }
+        ],
+        "outputs" => [
+          { "name" => "count", "type" => "number" }
+        ]
+      }
+
+      expect {
+        described_class.new.call(loop_step, instance, definition)
+      }.to raise_error(described_class::StepFailure, /missing process input.*max_batches/)
+    end
+
+    it "raises StepFailure when the resolved value is non-integer" do
+      instance.update!(inputs: { "max_batches" => "abc" })
+      definition = {
+        "loop" => {
+          "repeat_until"   => "outputs.done == true",
+          "max_iterations" => "{{ process.inputs.max_batches }}",
+          "aggregate"      => { "count" => "last" }
+        },
+        "body" => [
+          {
+            "id"     => "tick",
+            "type"   => "automated",
+            "name"   => "Tick",
+            "run"    => counter_script,
+            "inputs" => []
+          }
+        ],
+        "outputs" => [
+          { "name" => "count", "type" => "number" }
+        ]
+      }
+
+      expect {
+        described_class.new.call(loop_step, instance, definition)
+      }.to raise_error(described_class::StepFailure, /must resolve to a positive integer/)
+    end
+  end
+
   describe "#call — while" do
     it "runs zero times when the predicate is false initially" do
       definition = {

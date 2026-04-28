@@ -194,6 +194,74 @@ RSpec.describe Opensop::DefinitionParser do
         expect { described_class.call(with_trigger(valid_webhook_trigger("input_mapping" => { "x" => [] }))) }
           .to raise_error(described_class::InvalidDefinition, /input_mapping/)
       end
+
+      describe "interval trigger (SPEC-v0.2.md §2.10)" do
+        it "accepts `30s` and stores interval_seconds: 30" do
+          hash = with_trigger({ "type" => "interval", "interval" => "30s" })
+          result = described_class.call(hash)
+          expect(result.ok?).to be true
+          expect(result.value["process"]["trigger"]["interval_seconds"]).to eq(30)
+        end
+
+        it "accepts `5m` and stores interval_seconds: 300" do
+          hash = with_trigger({ "type" => "interval", "interval" => "5m" })
+          result = described_class.call(hash)
+          expect(result.value["process"]["trigger"]["interval_seconds"]).to eq(300)
+        end
+
+        it "accepts `2h` and stores interval_seconds: 7200" do
+          hash = with_trigger({ "type" => "interval", "interval" => "2h" })
+          result = described_class.call(hash)
+          expect(result.value["process"]["trigger"]["interval_seconds"]).to eq(7200)
+        end
+
+        it "accepts `1d` and stores interval_seconds: 86400" do
+          hash = with_trigger({ "type" => "interval", "interval" => "1d" })
+          result = described_class.call(hash)
+          expect(result.value["process"]["trigger"]["interval_seconds"]).to eq(86_400)
+        end
+
+        it "accepts the documented 5s minimum boundary" do
+          hash = with_trigger({ "type" => "interval", "interval" => "5s" })
+          expect(described_class.call(hash).ok?).to be true
+        end
+
+        it "rejects `4s` (below the 5s minimum)" do
+          hash = with_trigger({ "type" => "interval", "interval" => "4s" })
+          expect { described_class.call(hash) }
+            .to raise_error(described_class::InvalidDefinition, /5s minimum per SPEC-v0.2.md §2.10/)
+        end
+
+        it "rejects a missing interval field" do
+          hash = with_trigger({ "type" => "interval" })
+          expect { described_class.call(hash) }
+            .to raise_error(described_class::InvalidDefinition, /process\.trigger\.interval/)
+        end
+
+        it "rejects an empty interval string" do
+          hash = with_trigger({ "type" => "interval", "interval" => "  " })
+          expect { described_class.call(hash) }
+            .to raise_error(described_class::InvalidDefinition, /process\.trigger\.interval/)
+        end
+
+        it "rejects an interval with no unit suffix (e.g. `30`)" do
+          hash = with_trigger({ "type" => "interval", "interval" => "30" })
+          expect { described_class.call(hash) }
+            .to raise_error(described_class::InvalidDefinition, /malformed interval/)
+        end
+
+        it "rejects an interval with an unknown unit (e.g. `30x`)" do
+          hash = with_trigger({ "type" => "interval", "interval" => "30x" })
+          expect { described_class.call(hash) }
+            .to raise_error(described_class::InvalidDefinition, /malformed interval/)
+        end
+
+        it "rejects a non-string interval value" do
+          hash = with_trigger({ "type" => "interval", "interval" => 30 })
+          expect { described_class.call(hash) }
+            .to raise_error(described_class::InvalidDefinition, /process\.trigger\.interval/)
+        end
+      end
     end
 
     describe "v0.2 features" do
@@ -399,6 +467,32 @@ RSpec.describe Opensop::DefinitionParser do
         block = { "while" => "outputs.keep_going == true", "max_iterations" => 50 }
         result = described_class.call(v02_process(steps: [ loop_step(loop_block: block) ]))
         expect(result.ok?).to be true
+      end
+
+      it "accepts max_iterations as a `{{ process.inputs.<name> }}` template string" do
+        block = { "while" => "outputs.keep_going == true", "max_iterations" => "{{ process.inputs.max_batches }}" }
+        result = described_class.call(v02_process(steps: [ loop_step(loop_block: block) ]))
+        expect(result.ok?).to be true
+        expect(result.value["process"]["steps"].first["loop"]["max_iterations"])
+          .to eq("{{ process.inputs.max_batches }}")
+      end
+
+      it "rejects max_iterations strings that are not the supported template shape" do
+        block = { "while" => "outputs.keep_going == true", "max_iterations" => "{{ steps.foo.outputs.bar }}" }
+        expect { described_class.call(v02_process(steps: [ loop_step(loop_block: block) ])) }
+          .to raise_error(described_class::InvalidDefinition, /process\.inputs.*template/)
+      end
+
+      it "rejects max_iterations with a non-positive integer" do
+        block = { "while" => "outputs.keep_going == true", "max_iterations" => 0 }
+        expect { described_class.call(v02_process(steps: [ loop_step(loop_block: block) ])) }
+          .to raise_error(described_class::InvalidDefinition, /positive integer/)
+      end
+
+      it "rejects max_iterations with a non-integer non-string value" do
+        block = { "while" => "outputs.keep_going == true", "max_iterations" => 3.5 }
+        expect { described_class.call(v02_process(steps: [ loop_step(loop_block: block) ])) }
+          .to raise_error(described_class::InvalidDefinition, /positive integer/)
       end
 
       it "rejects both for_each: and while: present together" do
