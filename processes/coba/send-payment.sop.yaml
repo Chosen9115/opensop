@@ -1,0 +1,417 @@
+opensop: "0.1"
+
+# PRIVATE — Coba fork only. Never pushed to Chosen9115/opensop.
+#
+# Coba Send-Payment Process (v1.0) — First-Transaction Flow
+#
+# Captures the send-payment lifecycle as it exists in Coba Rails today
+# (2026-04-24). This is THE revenue-making process: every completed
+# instance is an FX-spread event. Faithful mirror — no aspirational
+# steps.
+#
+# Code references:
+#   - app/controllers/members/send_payment_controller.rb — 4-step wizard
+#     (recipient → payment_details → information → review → confirm)
+#   - app/services/payments/base.rb — routes to the correct rail based on
+#     funding currency + recipient's bank account currency + same_party flag
+#   - app/services/payments/monex.rb — standard cross-border Monex path
+#   - app/services/payments/spei.rb — same-party USD→MXN SPEI path (IFT)
+#   - app/jobs/monex/send_payment_job.rb — async Monex submission
+#   - app/services/transaction_logger/payment.rb — Transaction row creation
+#   - app/models/transaction.rb — status enum: pending | approved | declined
+#
+# Two rails converge into one process:
+#   1. Monex cross-border (USD→MXN or USD→USD or MXN→MXN to external
+#      beneficiary): Payments::Monex
+#   2. SPEI same-party (USD-funded, MXN-delivered, same-owner accounts):
+#      Payments::Spei. The IFT + value-date email-to-Monex-support
+#      notification (per monex-ift-notification-spec.md, already live via
+#      Resend) happens inside the SPEI path.
+#
+# The routing decision is deterministic from the inputs — encoded in
+# Payments::Base.class_for — so the process doesn't need a branching
+# step. The `execute-payment` webhook step calls a single Coba API
+# endpoint which dispatches to the right rail internally. The `rail`
+# output surfaces which path was taken.
+#
+# Integration strategy (matches member-onboarding Phase plan):
+#   Phase A (now): YAML documents current behavior.
+#   Phase B (next): Coba Rails posts to /sop/send-payment/start when
+#     the member reaches the confirm step, then submits step outputs
+#     as the wizard advances. Rails stays source-of-truth for
+#     Transaction + Monex calls; OpenSOP owns the lifecycle + audit.
+#   Phase C (later): Monex settlement callbacks route through n8n
+#     (signed by Monex if they support it, otherwise Coba-proxied),
+#     which advances the wait step here.
+
+process:
+  name: send-payment
+  version: "1.0"
+  description: "Member sends a payment: 4-step wizard → Monex deal → Monex or SPEI rail → settlement → balance sync. The revenue-making process."
+  owner: banking-team
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: member_id
+      type: string
+      required: true
+      description: "Coba-side Member PK."
+    - name: account_id
+      type: string
+      required: true
+      description: "Account PK — members may have multiple accounts."
+    - name: initiator_email
+      type: string
+      format: email
+      description: "The user (member or collaborator) who initiated the payment."
+
+  outputs:
+    - name: transaction_id
+      from: steps.log-transaction.outputs.transaction_id
+    - name: rail
+      from: steps.execute-payment.outputs.rail
+    - name: final_status
+      from: steps.mark-settled.outputs.status
+      description: "approved or declined — the terminal Transaction.status."
+    - name: amount_from
+      from: steps.select-payment-details.outputs.amount_from
+    - name: amount_to
+      from: steps.select-payment-details.outputs.amount_to
+    - name: foreign_exchange
+      from: steps.review-quote.outputs.display_rate
+
+  steps:
+
+    # ─── 1. Recipient selection ──────────────────────────────────────
+    # Code: SendPaymentController#recipient
+    # Member picks from their account's recipients. Recipients with
+    # usable (unarchived, non-stale) bank accounts are surfaced first.
+    - id: select-recipient
+      name: "Select recipient"
+      type: form
+      description: "Member chooses a recipient from their address book. Backoffice/admin recipients and collaborators have the same surface."
+      inputs:
+        - name: member_id
+          from: process.inputs.member_id
+      outputs:
+        - name: recipient_id
+          type: string
+          required: true
+        - name: recipient_name
+          type: string
+        - name: same_party
+          type: boolean
+          description: "True if the recipient is flagged as same-party (same beneficial owner). Drives the SPEI rail."
+        - name: same_company
+          type: boolean
+          description: "Similar to same_party but at the legal-entity level."
+
+    # ─── 2. Payment details ──────────────────────────────────────────
+    # Code: SendPaymentController#payment_details
+    # Member picks funding account (currency source) + recipient bank
+    # account (currency destination) + amounts. Amount is typed on
+    # one side; the other is computed via the live Monex quote.
+    - id: select-payment-details
+      name: "Select funding source and amounts"
+      type: form
+      description: "Funding bank account, recipient bank account, amount_from + amount_to. from_currency + to_currency are derived from the bank accounts."
+      inputs:
+        - name: recipient_id
+          from: steps.select-recipient.outputs.recipient_id
+      outputs:
+        - name: bank_account_id
+          type: string
+          required: true
+        - name: from_currency
+          type: string
+          required: true
+        - name: to_currency
+          type: string
+          required: true
+        - name: amount_from
+          type: number
+          required: true
+        - name: amount_to
+          type: number
+        - name: funding_currency
+          type: string
+          description: "Usually same as from_currency; separated for SPEI path where funding is USD but destination is MXN."
+
+    # ─── 3. Information ──────────────────────────────────────────────
+    # Code: SendPaymentController#information
+    # Email to notify on completion, human-readable description, memo,
+    # payer reference (goes on the wire), supporting documents (AML).
+    - id: provide-information
+      name: "Provide payment details"
+      type: form
+      description: "Notification email, description, memo, reference, supporting documents. Also the place we track whether this is the first transaction to this recipient."
+      inputs:
+        - name: recipient_id
+          from: steps.select-recipient.outputs.recipient_id
+      outputs:
+        - name: email
+          type: string
+          format: email
+        - name: description
+          type: string
+        - name: memo
+          type: string
+        - name: reference
+          type: string
+          description: "Goes on the wire. For FFC bank accounts, auto-replaced by 'FFC <Recipient>' with reference moved to instructions."
+        - name: supporting_documents_count
+          type: number
+        - name: first_transaction_to_recipient
+          type: boolean
+          description: "True if recipient.transactions.none? — used to prompt extra confirmations UX-side."
+
+    # ─── 4. Review + live quote ──────────────────────────────────────
+    # Code: SendPaymentController#review + Monex::Quote.find / start_quick
+    # Coba fetches a fresh Monex quote (wid + value_date + display_rate).
+    # The quote has a short TTL — the UI shows a countdown timer.
+    - id: review-quote
+      name: "Fetch Monex quote and show review"
+      type: webhook
+      description: "Hit Monex for a priced quote (wid, value_date, display_rate). Quote expires fast — member must confirm before it does."
+      inputs:
+        - name: member_id
+          from: process.inputs.member_id
+        - name: amount_from
+          from: steps.select-payment-details.outputs.amount_from
+        - name: from_currency
+          from: steps.select-payment-details.outputs.from_currency
+        - name: to_currency
+          from: steps.select-payment-details.outputs.to_currency
+      webhook:
+        method: POST
+        url: "${env.COBA_API_URL}/api/monex/quote"
+        headers:
+          Authorization: "Bearer ${env.COBA_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - name: wid
+          type: string
+          required: true
+          description: "Monex quote identifier. Consumed by the execute step."
+        - name: value_date
+          type: string
+          description: "When Monex will settle. Ideally same-day/T+1; sometimes T+2-3, which triggers the value-date-notification flow."
+        - name: display_rate
+          type: string
+        - name: quote_cost
+          type: number
+        - name: quote_expires_at
+          type: string
+
+    # ─── 5. Confirm (member clicks send) ─────────────────────────────
+    # Code: SendPaymentController#confirm
+    # The moment the member accepts the quote. Approval step because
+    # it's an irreversible commitment to move money.
+    - id: confirm-payment
+      name: "Member confirms payment"
+      type: approval
+      description: "Final member confirmation. Validates: valid Monex quote, bank_account_enabled, sufficient balance. Nothing moves money yet — just the signal to execute."
+      inputs:
+        - name: wid
+          from: steps.review-quote.outputs.wid
+        - name: quote_expires_at
+          from: steps.review-quote.outputs.quote_expires_at
+      outputs:
+        - name: confirmed_at
+          type: string
+        - name: foreign_exchange_token
+          type: string
+          description: "Required for the SPEI rail; blank for Monex cross-border."
+        - name: lat
+          type: string
+          description: "Device geolocation — AML signal."
+        - name: lng
+          type: string
+
+    # ─── 6. Log transaction ──────────────────────────────────────────
+    # Code: TransactionLogger::Payment#log / TransactionLogger::Spei#log
+    # Creates a Transaction row with status: pending. This is where the
+    # audit trail starts. Any downstream failure flips this to declined.
+    - id: log-transaction
+      name: "Log pending transaction"
+      type: webhook
+      description: "Persist the Transaction row (status=pending). From here on, every state change on the row is part of the settlement audit trail."
+      inputs:
+        - name: member_id
+          from: process.inputs.member_id
+        - name: account_id
+          from: process.inputs.account_id
+        - name: bank_account_id
+          from: steps.select-payment-details.outputs.bank_account_id
+        - name: amount_from
+          from: steps.select-payment-details.outputs.amount_from
+        - name: amount_to
+          from: steps.select-payment-details.outputs.amount_to
+        - name: from_currency
+          from: steps.select-payment-details.outputs.from_currency
+        - name: to_currency
+          from: steps.select-payment-details.outputs.to_currency
+        - name: wid
+          from: steps.review-quote.outputs.wid
+        - name: reference
+          from: steps.provide-information.outputs.reference
+      webhook:
+        method: POST
+        url: "${env.COBA_API_URL}/api/transactions"
+        headers:
+          Authorization: "Bearer ${env.COBA_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - name: transaction_id
+          type: string
+          required: true
+        - name: status
+          type: enum
+          values: [pending, approved, declined]
+          required: true
+
+    # ─── 7. Execute payment (rail dispatch) ──────────────────────────
+    # Code: Payments::Monex#perform_payment OR Payments::Spei#save
+    # Coba's API picks the rail from the inputs (funding currency +
+    # recipient currency + same_party flag). Returns the rail chosen.
+    # For SPEI: also creates the SpeiTransfer row + Coba-beneficiary
+    # Monex payment + sends the IFT/value-date notification email to
+    # Monex USA support via Resend. That email pipeline is already live
+    # and is NOT re-modeled here — this step represents the rail
+    # dispatch as a black box and trusts the Coba side to handle its
+    # sub-steps.
+    - id: execute-payment
+      name: "Submit payment via chosen rail"
+      type: webhook
+      description: "Dispatch to Monex or SPEI rail depending on same-party + currency mix. Returns rail taken. Async Monex submission continues in background via Monex::SendPaymentJob; the synchronous response is the acknowledgment."
+      inputs:
+        - name: transaction_id
+          from: steps.log-transaction.outputs.transaction_id
+        - name: wid
+          from: steps.review-quote.outputs.wid
+        - name: foreign_exchange_token
+          from: steps.confirm-payment.outputs.foreign_exchange_token
+      webhook:
+        method: POST
+        url: "${env.COBA_API_URL}/api/payments/execute"
+        headers:
+          Authorization: "Bearer ${env.COBA_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - name: rail
+          type: enum
+          values: [monex, spei]
+          required: true
+          description: "Which rail Payments::Base selected. Drives operational reporting."
+        - name: monex_deal_id
+          type: string
+          description: "Present on the Monex rail."
+        - name: spei_transfer_id
+          type: string
+          description: "Present on the SPEI rail."
+        - name: ift_notification_sent
+          type: boolean
+          description: "SPEI rail: true if the IFT/value-date notification email was dispatched to Monex support via Resend."
+
+    # ─── 8. Notify member ────────────────────────────────────────────
+    # Code: Transaction#notify! (from Payments::Monex#save /
+    # Payments::Spei#send_email_notification)
+    # Fires the submission confirmation to the member and the internal
+    # backoffice digest. Happens IMMEDIATELY on execute-payment success
+    # — does not wait for Monex settlement.
+    - id: notify-submission
+      name: "Notify member + backoffice of submission"
+      type: notification
+      description: "Submission confirmation email to the member (and supporting docs/CC to ops)."
+      inputs:
+        - name: transaction_id
+          from: steps.log-transaction.outputs.transaction_id
+        - name: to
+          from: steps.provide-information.outputs.email
+      outputs:
+        - name: notified
+          type: boolean
+
+    # ─── 9. Wait for Monex settlement ────────────────────────────────
+    # Code: Monex::SendPaymentJob → Monex::SubmitPayment → async Monex
+    # webhook → our Rails-side handler updates Transaction.status
+    # Member views the "pending" transaction in the UI; the wait ends
+    # when Monex confirms (approved) or fails (declined). Value-date
+    # delay is the common case that sits in this step — the longer it
+    # sits past T+1, the more an ops notification is warranted (this
+    # is where the monex-ift-notification-spec's value-date escalation
+    # already fires independently from Resend).
+    - id: wait-for-settlement
+      name: "Wait for Monex settlement"
+      type: wait
+      description: "Monex processes the deal asynchronously. This step pauses until the Rails-side Monex webhook handler advances the step with the terminal status."
+      inputs:
+        - name: monex_deal_id
+          from: steps.execute-payment.outputs.monex_deal_id
+      wait:
+        until: monex.deal_settled
+        # The Coba Rails Monex webhook handler (or, Phase C, an n8n
+        # workflow) calls POST /sop/send-payment/<id>/steps/wait-for-
+        # settlement/submit with {status, settled_at}.
+      outputs:
+        - name: status
+          type: enum
+          values: [approved, declined]
+          required: true
+        - name: settled_at
+          type: string
+
+    # ─── 10. Mark settled + sync balances ────────────────────────────
+    # Code: Monex webhook handler transitions Transaction via
+    # approved! / declined!; fires Monex::SyncMemberBalancesJob.
+    - id: mark-settled
+      name: "Mark transaction settled + sync balances"
+      type: webhook
+      description: "Update Transaction.status to the terminal value and enqueue SyncMemberBalancesJob so the member's in-app balance reflects the outcome immediately."
+      inputs:
+        - name: transaction_id
+          from: steps.log-transaction.outputs.transaction_id
+        - name: status
+          from: steps.wait-for-settlement.outputs.status
+      webhook:
+        method: POST
+        url: "${env.COBA_API_URL}/api/transactions/mark_settled"
+        headers:
+          Authorization: "Bearer ${env.COBA_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - name: status
+          type: enum
+          values: [approved, declined]
+          required: true
+        - name: balances_synced
+          type: boolean
+
+    # ─── 11. Notify completion ───────────────────────────────────────
+    # Sends the "your payment went through" (or "your payment failed")
+    # follow-up. Separate from the step-8 submission notification.
+    - id: notify-completion
+      name: "Notify member of final outcome"
+      type: notification
+      description: "Final settlement notification. On approved: success email (amount, recipient, value date). On declined: failure email with next-steps guidance + backoffice CC."
+      inputs:
+        - name: transaction_id
+          from: steps.log-transaction.outputs.transaction_id
+        - name: status
+          from: steps.mark-settled.outputs.status
+      outputs:
+        - name: notified
+          type: boolean
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#banking-alerts"
+
+  tags: [banking, payments, send, monex, spei, revenue, coba]

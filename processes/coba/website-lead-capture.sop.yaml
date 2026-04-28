@@ -1,0 +1,226 @@
+opensop: "0.1"
+
+# PRIVATE — Coba fork only. Never pushed to Chosen9115/opensop.
+#
+# Captures leads from the coba.ai /contact.html form.
+#
+# Pipeline: Web3Forms (email to contact@coba.ai)
+#        → n8n workflow "web3forms-to-opensop"
+#        → HMAC-signed POST to /sop/triggers/website-lead-capture
+#        → THIS PROCESS starts an instance
+#
+# n8n owns the transport/parse/auth concerns (three-tier integration rule:
+# see feedback_no_adapters.md in your memory). OpenSOP only sees a clean
+# JSON payload with already-verified HMAC.
+#
+# Why a separate process (not reusing lead-capture)? The engine allows only
+# ONE trigger block per process. lead-capture's trigger hardcodes LinkedIn
+# payload shape + source="linkedin". Duplicating into a sibling process is
+# the lower-risk, higher-clarity choice. If/when the engine learns to
+# support multi-trigger processes or YAML step includes, consolidate.
+
+process:
+  name: website-lead-capture
+  version: "1.0"
+  description: "Process a lead captured from coba.ai contact form (via Web3Forms + n8n)."
+  owner: growth-team
+
+  trigger:
+    type: webhook
+    auth:
+      scheme: hmac-sha256
+      secret_env: WEBSITE_WEBHOOK_SECRET
+      header: X-Website-Signature-256
+      encoding: hex
+      prefix: "sha256="
+    input_mapping:
+      # n8n normalises the Web3Forms email into this flat JSON shape before
+      # POSTing. Every field below MUST be present in the n8n payload — the
+      # templating engine raises MissingVariable on absent keys (caught by
+      # the triggers controller and turned into a 200 + logged drop).
+      lead_name:          "${payload.name}"
+      lead_email:         "${payload.email}"
+      lead_company:       "${payload.company}"
+      lead_phone:         "${payload.phone}"
+      lead_inquiry_type:  "${payload.inquiry_type}"
+      lead_volume:        "${payload.volume}"
+      lead_message:       "${payload.message}"
+      source:             "direct"
+      intent:             "schedule-consult"
+      external_id:        "${payload.submission_id}"
+
+  inputs:
+    - name: lead_name
+      type: string
+      required: true
+    - name: lead_email
+      type: string
+      format: email
+      required: true
+    - name: lead_company
+      type: string
+      description: "Company name. Required on the form but stay defensive — Web3Forms can deliver partial payloads on validation edge cases."
+    - name: lead_phone
+      type: string
+      description: "Phone number; may include a WhatsApp marker per the form label. Not format-validated."
+    - name: lead_inquiry_type
+      type: enum
+      values: ["Quick Pay", "Banking", "Global Payouts", "Embedded Rails / API", "General Inquiry"]
+      description: "Which product area the visitor selected. Drives qualification routing."
+    - name: lead_volume
+      type: enum
+      values: ["< $100K", "$100K - $500K", "$500K - $1M", "$1M+"]
+      description: "Monthly payment volume bucket. Signals deal size for qualify step."
+    - name: lead_message
+      type: string
+      description: "Free-form message body from the contact form."
+    - name: source
+      type: enum
+      values: [linkedin, facebook, seo, direct, referral, other]
+      required: true
+    - name: intent
+      type: enum
+      values: [lead-magnet, schedule-consult, start-onboarding, unknown]
+      description: "Contact-form leads are treated as schedule-consult intent by default (set in the trigger mapping)."
+    - name: external_id
+      type: string
+      description: "n8n-generated stable ID (email + submittedAt-bucket hash). Used for dedup."
+
+  outputs:
+    - name: crm_deal_id
+      from: steps.create-crm-record.outputs.deal_id
+    - name: crm_person_id
+      from: steps.create-crm-record.outputs.person_id
+    - name: was_duplicate
+      from: steps.create-crm-record.outputs.was_duplicate
+    - name: qualified
+      from: steps.qualify.outputs.qualified
+    - name: routed_to
+      from: steps.qualify.outputs.routed_to
+
+  steps:
+    # ─── 1. Enrich (automated) ─────────────────────────────────────────
+    - id: enrich
+      name: "Enrich lead from public data"
+      type: automated
+      description: "Derive company from email domain if missing. Stub today — swap in Clearbit/Apollo when a real provider is wired."
+      inputs:
+        - name: lead_email
+          from: process.inputs.lead_email
+        - name: lead_company
+          from: process.inputs.lead_company
+      outputs:
+        - name: enriched_company
+          type: string
+        - name: company_size_bucket
+          type: enum
+          values: [micro, small, medium, large, unknown]
+        - name: industry
+          type: string
+      run: ./coba/steps/enrich-lead.rb
+
+    # ─── 2. Create CRM record (webhook → DenchClaw bridge on laptop) ───
+    # The bridge shells this payload into the same create-crm-record.rb
+    # script that lead-capture uses locally. Running via webhook (not
+    # type: automated) keeps the Fly VM out of the DuckDB path — the DB
+    # lives on Carlos's laptop and is reached via Tailscale Funnel.
+    - id: create-crm-record
+      name: "Insert lead into DenchClaw CRM (via bridge)"
+      type: webhook
+      description: "Outbound POST to the DenchClaw bridge. Same contract as consult-request — the bridge pipes the JSON body into create-crm-record.rb on the laptop and returns person_id/deal_id/was_duplicate. Idempotent on email."
+      inputs:
+        - name: lead_name
+          from: process.inputs.lead_name
+        - name: lead_email
+          from: process.inputs.lead_email
+        - name: lead_company
+          from: process.inputs.lead_company
+        - name: lead_phone
+          from: process.inputs.lead_phone
+        - name: lead_inquiry_type
+          from: process.inputs.lead_inquiry_type
+        - name: lead_volume
+          from: process.inputs.lead_volume
+        - name: lead_message
+          from: process.inputs.lead_message
+        - name: source
+          from: process.inputs.source
+        - name: external_id
+          from: process.inputs.external_id
+        - name: enriched_company
+          from: steps.enrich.outputs.enriched_company
+      webhook:
+        method: POST
+        url: "${env.DENCHCLAW_BRIDGE_URL}/leads"
+        headers:
+          Authorization: "Bearer ${env.DENCHCLAW_BRIDGE_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - name: deal_id
+          type: string
+        - name: person_id
+          type: string
+        - name: was_duplicate
+          type: boolean
+          description: "True if a deal already existed for this email — skipped deal creation and upserted the touch into the existing deal's Notes instead."
+        - name: touch_appended
+          type: boolean
+          description: "True if we appended a new inbound-touch block to the existing deal's Notes (dedup hit + had new inquiry/volume/message data). False if dedup hit with no new touch data, or if the external_id marker was already present (replay)."
+
+    # ─── 3. Send welcome (notification, stubbed) ───────────────────────
+    - id: send-welcome
+      name: "Send welcome + acknowledgment"
+      type: notification
+      description: "Stubbed (GAP-1). Will confirm receipt + set expectation for follow-up within 24h."
+      inputs:
+        - name: to
+          from: process.inputs.lead_email
+        - name: lead_name
+          from: process.inputs.lead_name
+      outputs:
+        - name: email_sent
+          type: boolean
+
+    # ─── 4. Qualify (judgment) ─────────────────────────────────────────
+    - id: qualify
+      name: "Qualify and route"
+      type: judgment
+      description: "Score the lead on inquiry_type + volume + enrichment signals; route to consult-request (high), nurture (medium), or park (low). Agent proposes; human can override."
+      inputs:
+        - name: lead_email
+          from: process.inputs.lead_email
+        - name: lead_company
+          from: process.inputs.lead_company
+        - name: lead_inquiry_type
+          from: process.inputs.lead_inquiry_type
+        - name: lead_volume
+          from: process.inputs.lead_volume
+        - name: lead_message
+          from: process.inputs.lead_message
+        - name: source
+          from: process.inputs.source
+        - name: company_size_bucket
+          from: steps.enrich.outputs.company_size_bucket
+        - name: industry
+          from: steps.enrich.outputs.industry
+      outputs:
+        - name: qualified
+          type: boolean
+          required: true
+        - name: routed_to
+          type: enum
+          values: [consult-request, nurture, park]
+          required: true
+        - name: rationale
+          type: string
+      judgment:
+        allow_agent: true
+        confidence_threshold: 0.7
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#growth-alerts"
+
+  tags: [growth, lead, capture, website, coba]

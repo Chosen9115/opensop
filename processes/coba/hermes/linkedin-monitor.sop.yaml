@@ -1,0 +1,41 @@
+opensop: "0.2"
+
+# B-mode (audit layer) — macOS launchd cron drives execution.
+# OpenSOP records each tick via form-step submission from the host script.
+# Real schedule is in the launchd plist
+# at ~/Library/LaunchAgents/com.hermes.linkedin-monitor.plist
+# (every 30 min during business hours, America/Chicago).
+
+process:
+  name: linkedin-monitor
+  version: "3.0"
+  description: "LinkedIn invitation-manager monitor — host drives, OpenSOP audits"
+  owner: hermes-os-host
+
+  trigger:
+    type: api
+
+  inputs:
+    - { name: hermes_invocation_id, type: string, required: false }
+
+  outputs:
+    - { name: status, from: steps.monitor.outputs.status }
+    - { name: newly_accepted, from: steps.monitor.outputs.newly_accepted }
+
+  steps:
+    - id: monitor
+      name: "Diff invitation-manager snapshot"
+      type: form
+      outputs:
+        - { name: status, type: enum, values: [ok, skipped, error] }
+        - { name: elapsed_seconds, type: number }
+        - { name: skip_reason, type: string, description: "outside_business_hours | profile_lock_held | empty" }
+        - { name: prev_count, type: number }
+        - { name: current_count, type: number }
+        - { name: newly_accepted, type: number }
+        - { name: new_invites_observed, type: number }
+        - { name: newly_accepted_urls, type: object, description: "Array of profile URLs newly absent vs prev snapshot" }
+        - { name: new_invites_observed_urls, type: object, description: "Array of profile URLs newly present vs prev snapshot" }
+        - { name: error, type: string }
+        - { name: summary_payload, type: object, description: "Full diff record + summary" }
+      timeout: 3m

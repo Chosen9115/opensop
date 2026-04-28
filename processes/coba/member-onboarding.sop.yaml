@@ -1,0 +1,526 @@
+opensop: "0.1"
+
+# PRIVATE — Coba fork only. Never pushed to Chosen9115/opensop.
+#
+# Coba Member Onboarding Process (v1.0)
+#
+# This YAML is a FAITHFUL MIRROR of the onboarding flow as it exists in the
+# Coba Rails app today (2026-04-24). Nothing here is aspirational — every
+# step, every field, every transition corresponds to something already
+# running in prod.
+#
+# Code references (Coba repo):
+#   - app/services/onboarding/steps.rb          — step sequence definition
+#   - app/services/onboarding/*.rb              — per-step validators + savers
+#   - app/controllers/members/onboarding_controller.rb — Wicked::Wizard driver
+#   - app/models/member.rb                      — state + move_to_step
+#   - app/services/rio/onboard_user.rb          — Rio KYC integration
+#   - app/services/monex/entity_registration.rb — Monex entity creation
+#   - app/services/monex/create_business_user.rb— final approval
+#   - app/controllers/guests/members_controller.rb — Rio KYC trigger path
+#   - app/controllers/v2/backoffice/members_controller.rb — ops approve/reject
+#   - app/jobs/rio_onboard_user_job.rb, onboarding_complete_email_job.rb
+#
+# Integration strategy (per Carlos 2026-04-24):
+#   Phase A (now): write this YAML as documentation of current behavior.
+#     No wire-up yet. The Coba Rails app continues to drive everything.
+#   Phase B (next): the Coba app calls this process's API when a new
+#     Member is created (POST /sop/member-onboarding/start), then posts
+#     step-submission after each wizard step save and after each
+#     backoffice transition. OpenSOP becomes the audit trail + state
+#     machine source-of-truth.
+#   Phase C (later): steps that fire external calls (Rio, Monex) become
+#     n8n workflows triggered by OpenSOP webhook steps — Coba Rails stops
+#     being the integration layer for those providers.
+#
+# Explicitly OUT OF SCOPE for this process (confirmed with Carlos 2026-04-24):
+#   - Factoring track. The code still has the scaffolding (customer_information,
+#     financial_statements steps + factoring_complete?) but the feature is
+#     hidden from new users and no new factoring members will come through
+#     banking. Do not treat it as existing.
+#   - Watchlist / OFAC screening is handled externally by Monex USA and by
+#     Rio as part of their KYC. Coba does no formal in-house OFAC check —
+#     so no OpenSOP step models it. The `review-application` judgment
+#     step is where ops consumes Rio's verdict (rio_status) to decide.
+
+process:
+  name: member-onboarding
+  version: "1.0"
+  description: "Coba member onboarding — from signup through Rio KYC, Monex entity registration, and approval to a transaction-ready account."
+  owner: banking-team
+
+  # Today the Coba Rails app creates Member records directly via signup.
+  # In Phase B, the app will POST to /sop/member-onboarding/start with
+  # the minimum seed inputs to mint an instance that tracks the same
+  # lifecycle OpenSOP-side.
+  trigger:
+    type: api
+
+  inputs:
+    - name: member_id
+      type: string
+      required: true
+      description: "Coba-side Member PK. Used to correlate OpenSOP instance with the Rails record."
+    - name: email
+      type: string
+      format: email
+      required: true
+    - name: name
+      type: string
+      description: "First name for persons; legal name for businesses."
+    - name: last_name
+      type: string
+      description: "Person type only — blank for business."
+    - name: acquisition_channel
+      type: string
+      description: "How they found Coba. Informs attribution + campaign-lifecycle linkage."
+    - name: invitation_token
+      type: string
+      description: "Optional. Set if the member was invited via a referral or sales rep."
+
+  outputs:
+    - name: rio_id
+      from: steps.rio-kyc-onboard.outputs.rio_id
+    - name: rio_status
+      from: steps.rio-kyc-onboard.outputs.rio_status
+    - name: monex_entity_id
+      from: steps.create-monex-entity.outputs.entity_id
+    - name: monex_entity_number
+      from: steps.create-monex-entity.outputs.entity_number
+    - name: final_status
+      from: steps.activate-member.outputs.onboarding_status
+      description: "Terminal Member.onboarding_status value: approved or fail."
+
+  # ─────────────────────────────────────────────────────────────────────
+  # STEPS
+  #
+  # Seven wizard steps + three orchestration steps. Wizard steps are
+  # `form` type (waiting on the user / sales rep via the Coba UI).
+  # Ops-touched steps are `judgment` or `approval`. External calls are
+  # `webhook`.
+  # ─────────────────────────────────────────────────────────────────────
+
+  steps:
+
+    # ─── 1. Type of account ──────────────────────────────────────────
+    # Code: app/services/onboarding/type_of_account.rb
+    # User picks: business | person | person_no_business. Optionally
+    # enables the factoring feature (see v1.1 process when priorized).
+    - id: type-of-account
+      name: "Select account type"
+      type: form
+      description: "Member picks entity type. Sets member.entity_type; advances onboarding_status to business_information."
+      inputs:
+        - name: member_id
+          from: process.inputs.member_id
+      outputs:
+        - name: account_type
+          type: enum
+          values: [business, person, person_no_business]
+          required: true
+        - name: factoring_requested
+          type: boolean
+          description: "If true, the factoring track is engaged alongside the main flow (not modeled in this process v1.0)."
+
+    # ─── 2. Business information (business track) ────────────────────
+    # Code: app/services/onboarding/business_information.rb
+    # Covers legal identity + nature of business + articles of incorp + website.
+    # For `person` types, many of these are still collected via the same
+    # form with different labels.
+    - id: business-information
+      name: "Collect business information"
+      type: form
+      description: "Legal name, entity structure, incorporation country, nature of business, articles of incorporation file, website, customer source."
+      inputs:
+        - name: account_type
+          from: steps.type-of-account.outputs.account_type
+      outputs:
+        - name: incorporation_country
+          type: string
+        - name: entity_structure
+          type: string
+          description: "LLC, SA de CV, sole prop, etc."
+        - name: business_name
+          type: string
+          description: "Stored as member.name for business; otherwise first name."
+        - name: last_name
+          type: string
+          description: "Person-type only."
+        - name: phone_number
+          type: string
+        - name: nature_of_business_id
+          type: number
+          description: "Index into Monex::Constants::NATURE_OF_BUSINESS."
+        - name: nature_of_business_description
+          type: string
+        - name: origin_of_funds
+          type: string
+        - name: website_url
+          type: string
+        - name: customer_source
+          type: string
+        - name: articles_of_incorporation_uploaded
+          type: boolean
+        - name: economic_activity_supporting_documents_count
+          type: number
+
+    # ─── 3. Address ──────────────────────────────────────────────────
+    # Code: app/services/onboarding/address.rb
+    # Physical address (fiscal) + optional separate operating address +
+    # proof-of-address upload. Geocoded (lat/lng stored on member).
+    - id: address
+      name: "Collect physical address"
+      type: form
+      description: "Country, street, city, state, postal code. Proof-of-address upload. Optional operating address if different from fiscal."
+      outputs:
+        - name: address_country
+          type: string
+          required: true
+        - name: address_street
+          type: string
+        - name: address_city
+          type: string
+        - name: address_state
+          type: string
+        - name: address_postal_code
+          type: string
+        - name: proof_of_address_uploaded
+          type: boolean
+        - name: has_operating_address
+          type: boolean
+        - name: lat
+          type: string
+          description: "Geocoding result."
+        - name: lng
+          type: string
+
+    # ─── 4. Activity ─────────────────────────────────────────────────
+    # Code: app/services/onboarding/activity.rb
+    # Expected transaction pattern: directions, frequency, currencies,
+    # counterparties. This is the "AML narrative" the compliance team
+    # reviews later.
+    - id: activity
+      name: "Collect intended activity"
+      type: form
+      description: "What the member plans to do with the account. Transaction directions (send/receive USD/MXN), frequency, counterparties. Drives downstream AML review."
+      outputs:
+        - name: intended_use_accepted
+          type: boolean
+          required: true
+        - name: acquisition_channel
+          type: string
+          required: true
+        - name: receiving_usd
+          type: boolean
+        - name: sending_usd
+          type: boolean
+        - name: receiving_mxn
+          type: boolean
+        - name: sending_mxn
+          type: boolean
+        - name: receiving_other
+          type: boolean
+        - name: sending_other
+          type: boolean
+        - name: transaction_frequency
+          type: string
+        - name: preferred_other_currency
+          type: string
+        - name: inbound_counterparties
+          type: string
+          description: "JSON-serialized list of counterparty objects."
+        - name: outbound_counterparties
+          type: string
+
+    # ─── 5. Tax and compliance ───────────────────────────────────────
+    # Code: app/services/onboarding/tax_and_compliance.rb
+    # RFC (Mexico) or equivalent taxpayer id + tax compliance certificate
+    # upload. US-based persons may skip the certificate upload.
+    - id: tax-and-compliance
+      name: "Collect tax and compliance"
+      type: form
+      description: "Taxpayer ID (RFC for Mexico), date of incorporation, tax compliance certificate upload."
+      outputs:
+        - name: taxpayer_id
+          type: string
+          required: true
+        - name: date_of_incorporation
+          type: string
+          description: "ISO date. Business track only."
+        - name: tax_compliance_certificate_uploaded
+          type: boolean
+          description: "Required unless US-based person."
+
+    # ─── 6. Ownership ────────────────────────────────────────────────
+    # Code: app/services/onboarding/ownership.rb
+    # Beneficial-owner list for businesses. Each owner: name, DOB,
+    # government_id upload, ownership%, phone, email. Advances to terms.
+    - id: ownership
+      name: "Collect beneficial ownership"
+      type: form
+      description: "List of entity owners with identity documents. Business track only; person tracks self-declare."
+      outputs:
+        - name: owners_count
+          type: number
+          required: true
+        - name: owners_summary
+          type: string
+          description: "JSON-serialized: [{first_name, last_name, ownership_percentage, id_uploaded}...]."
+
+    # ─── 7. Terms ────────────────────────────────────────────────────
+    # Code: app/services/onboarding/terms.rb
+    # Three consents: USD terms, credit agreement, Monex agreement.
+    # On accept: sets terms_accepted_at timestamps + moves member to
+    # `application_review` + fires OnboardingCompleteEmailJob.
+    - id: terms
+      name: "Accept terms"
+      type: approval
+      description: "Member accepts USD terms + credit agreement + Monex agreement. Sets monex_terms_accepted_at. Transitions onboarding_status from `terms` to `application_review`."
+      outputs:
+        - name: terms_of_service_accepted
+          type: boolean
+          required: true
+        - name: credit_agreement_accepted
+          type: boolean
+          required: true
+        - name: monex_agreement_accepted
+          type: boolean
+          required: true
+        - name: accepted_at
+          type: string
+          description: "ISO timestamp."
+
+    # ─── 8. Send welcome email ───────────────────────────────────────
+    # Code: app/jobs/onboarding_complete_email_job.rb
+    # Fire-and-forget email to the member acknowledging receipt of the
+    # application. Today this is enqueued inside the Terms service's
+    # save method. Modeled here as a real step so we can see when it
+    # fired and to what address.
+    - id: send-welcome-email
+      name: "Send application-received email"
+      type: notification
+      description: "Welcome + acknowledgment email. Currently fires from Terms#save — already working in Rails."
+      inputs:
+        - name: to
+          from: process.inputs.email
+        - name: name
+          from: process.inputs.name
+      outputs:
+        - name: email_sent
+          type: boolean
+
+    # ─── 9. Rio KYC onboard ──────────────────────────────────────────
+    # Code: app/services/rio/onboard_user.rb (fires via RioOnboardUserJob)
+    # External KYC provider. Today this runs in a SEPARATE flow — the
+    # Guests::MembersController#update action (a non-authenticated link
+    # sent to the member after application review) triggers
+    # RioOnboardUserJob.perform_later(member.id). The job does:
+    #   create_user → add_additional_information → upload_documents →
+    #   accept_terms_and_conditions → request_review
+    #
+    # Result: member.rio_id + member.rio_status="review". Rio then calls
+    # back asynchronously when they approve (webhook → member.rio_status
+    # = "approved").
+    #
+    # Modeled as a webhook step in callback mode — we fire to Rio, then
+    # wait for Rio's async approval webhook to land.
+    - id: rio-kyc-onboard
+      name: "Submit KYC package to Rio"
+      type: webhook
+      description: "Send member identity + business docs + activity profile + beneficial owners to Rio for KYC. Rio processes asynchronously and calls back when approved or rejected."
+      inputs:
+        - name: member_id
+          from: process.inputs.member_id
+        - name: email
+          from: process.inputs.email
+      webhook:
+        method: POST
+        url: "${env.COBA_API_URL}/api/rio/onboard_member"
+        headers:
+          Authorization: "Bearer ${env.COBA_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: callback
+        poll_timeout: 7d
+      outputs:
+        - name: rio_id
+          type: string
+          required: true
+        - name: rio_status
+          type: enum
+          values: [onboarding, review, approved, rejected]
+          required: true
+
+    # ─── 10. Ops review (backoffice) ─────────────────────────────────
+    # Code: app/controllers/v2/backoffice/members_controller.rb#approve
+    #        + MemberApproval service
+    # Humans in the loop: backoffice staff review the application in
+    # v2/backoffice and click approve/reject. Today this is a manual
+    # action — modeled here so the state machine captures the human
+    # decision point.
+    - id: review-application
+      name: "Backoffice review and decision"
+      type: judgment
+      description: "Ops staff reviews the KYC package, Rio status, AML narrative. Decision: approve → advance to Monex entity registration. Reject → fail state."
+      inputs:
+        - name: member_id
+          from: process.inputs.member_id
+        - name: rio_status
+          from: steps.rio-kyc-onboard.outputs.rio_status
+      outputs:
+        - name: decision
+          type: enum
+          values: [approve, reject]
+          required: true
+        - name: rejection_reason
+          type: string
+          description: "Required if decision=reject. Stored on member.close_reason."
+        - name: reviewer
+          type: string
+          description: "Backoffice user email."
+      judgment:
+        allow_agent: false
+        confidence_threshold: 1.0
+
+    # ─── 11. Create Monex entity ─────────────────────────────────────
+    # Code: app/services/monex/entity_registration.rb
+    # On approve, creates the entity in Monex USA's banking system. Sets
+    # member.entity_id, member.entity_number. Transitions member to
+    # `pending_approval` status.
+    - id: create-monex-entity
+      name: "Register entity with Monex"
+      type: webhook
+      description: "Create banking entity in Monex USA with full KYB package. Returns entity_id + entity_number. Sets member.onboarding_status to pending_approval."
+      inputs:
+        - name: member_id
+          from: process.inputs.member_id
+        - name: rio_id
+          from: steps.rio-kyc-onboard.outputs.rio_id
+      webhook:
+        method: POST
+        url: "${env.COBA_API_URL}/api/monex/entity_registration"
+        headers:
+          Authorization: "Bearer ${env.COBA_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - name: entity_id
+          type: string
+          required: true
+        - name: entity_number
+          type: string
+          required: true
+
+    # ─── 12. Upload documents to Monex ───────────────────────────────
+    # Code: app/services/monex/entity_registration.rb + entities_controller
+    # Uploads the KYC docs (articles, proof of address, owner IDs,
+    # compliance cert) to Monex for their review. Runs iteratively —
+    # one call per document type.
+    - id: upload-documents-to-monex
+      name: "Upload supporting documents to Monex"
+      type: webhook
+      description: "Push articles of incorporation, proof of address, tax compliance certificate, and entity owner IDs to Monex via /api/metal/banking/entities/documents."
+      inputs:
+        - name: entity_id
+          from: steps.create-monex-entity.outputs.entity_id
+        - name: member_id
+          from: process.inputs.member_id
+      webhook:
+        method: POST
+        url: "${env.COBA_API_URL}/api/monex/upload_documents"
+        headers:
+          Authorization: "Bearer ${env.COBA_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - name: documents_uploaded
+          type: number
+        - name: errors
+          type: string
+          description: "JSON array of per-document errors if any."
+
+    # ─── 13. Request Monex review ────────────────────────────────────
+    # Code: API::Metal::Banking::EntitiesController#request_review
+    # Tells Monex "we've uploaded everything, please review." Moves
+    # metal_client status to application_review.
+    - id: request-monex-review
+      name: "Request Monex review"
+      type: webhook
+      description: "Flag the Monex entity as ready for their compliance review."
+      inputs:
+        - name: entity_id
+          from: steps.create-monex-entity.outputs.entity_id
+      webhook:
+        method: POST
+        url: "${env.COBA_API_URL}/api/metal/banking/entities/review"
+        headers:
+          Authorization: "Bearer ${env.COBA_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - name: review_requested
+          type: boolean
+
+    # ─── 14. Wait for Monex approval ─────────────────────────────────
+    # Code: app/services/monex/create_business_user.rb (fires on approval)
+    # Monex processes the review async. When they approve, our side
+    # receives a webhook which runs Monex::CreateBusinessUser and sets
+    # member.onboarding_status = 'approved'.
+    #
+    # Modeled as a wait step — the instance pauses until Monex
+    # approval arrives.
+    - id: wait-for-monex-approval
+      name: "Wait for Monex approval"
+      type: wait
+      description: "Pauses until Monex approves the entity. Approval arrives via webhook; the Rails side (Monex::CreateBusinessUser) processes it and notifies OpenSOP via the callback URL."
+      inputs:
+        - name: entity_id
+          from: steps.create-monex-entity.outputs.entity_id
+      wait:
+        until: monex.entity_approved
+        # The engine's wait executor returns `waiting_for_callback` when `until`
+        # is present. The Coba Rails side will call
+        # POST /sop/member-onboarding/<id>/steps/wait-for-monex-approval/submit
+        # from its Monex webhook handler to advance past this step.
+      outputs:
+        - name: monex_approved
+          type: boolean
+          required: true
+        - name: approval_timestamp
+          type: string
+
+    # ─── 15. Activate member ─────────────────────────────────────────
+    # Code: app/services/monex/create_business_user.rb
+    # Final transition: set member.onboarding_status = 'approved',
+    # enable active_transacting, queue Monex::SyncMemberBalancesJob.
+    # Member can now transact.
+    - id: activate-member
+      name: "Activate member for transactions"
+      type: webhook
+      description: "Flip Member to approved state and trigger initial Monex balance sync."
+      inputs:
+        - name: member_id
+          from: process.inputs.member_id
+      webhook:
+        method: POST
+        url: "${env.COBA_API_URL}/api/members/activate"
+        headers:
+          Authorization: "Bearer ${env.COBA_API_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - name: onboarding_status
+          type: enum
+          values: [approved, fail]
+          required: true
+        - name: active_transacting
+          type: boolean
+
+  # On error (any step fails or is rejected), alert the growth team in
+  # Slack so someone unblocks the member. Matches the lead-capture
+  # on_error pattern.
+  on_error:
+    notify:
+      channel: slack
+      target: "#banking-alerts"
+
+  tags: [banking, onboarding, kyc, monex, rio, coba]

@@ -114,6 +114,11 @@ module Opensop
 
         if result[:outputs]
           complete_step!(instance, step, outputs: result[:outputs], decided_by: "system")
+          # Step-level early exit: if the step's `exit_when:` predicate is
+          # true, terminate the entire process now with `exit_outputs:`.
+          if try_exit_early!(step, step_def, instance) == :exited
+            return instance
+          end
           next # loop, try next step
         elsif result[:waiting]
           pause_step!(instance, step, sub_state: result[:waiting])
@@ -141,6 +146,11 @@ module Opensop
       validate_outputs!(step_def["outputs"], outputs, instance: instance) if step_def
 
       complete_step!(instance, step, outputs: outputs, decided_by: decided_by, confidence: confidence)
+      # Step-level early exit fires here too, so a human/agent submission
+      # can short-circuit the process the same way an automated step can.
+      if step_def && try_exit_early!(step, step_def, instance) == :exited
+        return instance
+      end
       advance!(instance)
       instance
     end
@@ -164,6 +174,102 @@ module Opensop
                    data: { reason: reason })
       end
       instance
+    end
+
+    # Public extension point: evaluate a completed step's `exit_when:`
+    # predicate and, if truthy, terminate the entire process with the
+    # step definition's literal `exit_outputs:`. Returns `:exited` when
+    # the process was terminated, `:continue` otherwise.
+    #
+    # Called by `advance!` and `submit_step` automatically after every
+    # successful `complete_step!`. Also exposed publicly so the loop
+    # executor (which dispatches body-step executors directly without
+    # routing through `advance!`) can invoke the same logic after each
+    # body step completes — a body step's exit_when terminates the WHOLE
+    # process per SPEC-v0.2 §2.8, not just the loop iteration.
+    #
+    # @param step [Sop::Step] the just-completed step
+    # @param definition [Hash] the step's YAML-derived definition hash
+    # @param instance [Sop::Instance] the parent instance
+    # @return [Symbol] :exited or :continue
+    def try_exit_early!(step, definition, instance)
+      return :continue unless definition.is_a?(Hash)
+      expr = definition["exit_when"]
+      return :continue if expr.nil? || expr.to_s.strip.empty?
+
+      # Per SPEC-v0.2 §2.8, `outputs.<key>` inside `exit_when:` refers to
+      # the just-completed step's own outputs. Rewrite into the canonical
+      # `steps.<id>.outputs.<key>` form so InputResolver (via
+      # ConditionEvaluator) can resolve it from the persisted step row.
+      rewritten = rewrite_outputs_refs(expr.to_s, step.step_id)
+
+      evaluator = Opensop::ConditionEvaluator.new(instance: instance)
+      truthy =
+        begin
+          evaluator.call(rewritten)
+        rescue Opensop::ConditionEvaluator::InvalidExpression
+          false
+        end
+      return :continue unless truthy
+
+      exit_outputs = definition["exit_outputs"] || {}
+      merged = (instance.outputs || {}).merge(exit_outputs)
+
+      attrs = { state: "completed", outputs: merged }
+      attrs[:completed_at] = Time.current if instance.respond_to?(:completed_at)
+
+      ActiveRecord::Base.transaction do
+        instance.update!(attrs)
+        emit_event(instance, event_type: "instance.exited_early",
+                   data: { step_id: step.step_id, exit_outputs: exit_outputs })
+      end
+      :exited
+    end
+
+    # Rewrite bare `outputs.<key>` references inside an exit_when expression
+    # into the fully-qualified `steps.<step_id>.outputs.<key>` form so the
+    # standard InputResolver / ConditionEvaluator can resolve them. We only
+    # touch identifiers OUTSIDE single/double quoted string literals so a
+    # comparison like `outputs.tag == 'outputs.foo'` rewrites only the LHS.
+    def rewrite_outputs_refs(expr, step_id)
+      out = +""
+      i = 0
+      n = expr.length
+      while i < n
+        ch = expr[i]
+        if ch == "'" || ch == '"'
+          # Copy the quoted literal verbatim, honoring backslash escapes.
+          quote = ch
+          out << ch
+          i += 1
+          while i < n
+            c = expr[i]
+            out << c
+            i += 1
+            if c == "\\" && i < n
+              out << expr[i]
+              i += 1
+            elsif c == quote
+              break
+            end
+          end
+        elsif (m = expr[i..].match(/\A(?<!\w)outputs\.([A-Za-z_][A-Za-z0-9_]*)/))
+          # Guard the left edge: only rewrite when not preceded by a word
+          # char (so `myoutputs.x` stays untouched).
+          prev = i.zero? ? "" : expr[i - 1]
+          if prev =~ /\w/
+            out << ch
+            i += 1
+          else
+            out << "steps.#{step_id}.outputs.#{m[1]}"
+            i += m[0].length
+          end
+        else
+          out << ch
+          i += 1
+        end
+      end
+      out
     end
 
     # -- Internals --------------------------------------------------------

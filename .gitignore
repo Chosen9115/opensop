@@ -40,6 +40,9 @@
 # Swarm session state (local only)
 /.swarm/
 
+# Playwright MCP local cache
+/.playwright-mcp/
+
 # Private process libraries in downstream forks.
 # These directories exist only in private forks (e.g., a company's fork
 # with their internal processes). Reserve the names here so public clones

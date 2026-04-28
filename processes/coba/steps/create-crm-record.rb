@@ -1,5 +1,15 @@
 #!/usr/bin/env ruby
+# encoding: utf-8
 # frozen_string_literal: true
+
+# Force UTF-8 for all IO. launchd spawns this script with LANG/LC_CTYPE
+# unset and Ruby defaults to US-ASCII, which blows up the moment a
+# lead_message or company name contains any UTF-8 character (em-dash,
+# accented letters, etc.). Set explicitly here so the encoding posture
+# doesn't depend on who invoked us (Fly engine vs. launchd-spawned bridge).
+Encoding.default_external = Encoding::UTF_8
+Encoding.default_internal = Encoding::UTF_8
+[STDIN, STDOUT, STDERR].each { |io| io.set_encoding(Encoding::UTF_8) rescue nil }
 
 # PRIVATE — Coba fork only. Contains DenchClaw-specific IDs and defaults.
 #
@@ -48,8 +58,10 @@ FLD_DEAL = {
   contact_name:      "4ac9b2c5-d41c-4523-a39d-051dc5633042",
   contact_position:  "3fd5c475-b16b-4b8e-822e-bc8b78e87ca2",
   contact_email:     "e6b40d6e-f999-4ed3-a5b4-2d768b7e7133",
+  contact_phone:     "8061325e-06db-416f-b63f-6131799181dd",
   channel:           "0830f7f7-c77c-499d-839f-46caca2a5d88",
-  primary_contact:   "1f7ef9a3-7bc6-40d9-9dde-066c720d84c7"
+  primary_contact:   "1f7ef9a3-7bc6-40d9-9dde-066c720d84c7",
+  notes:             "5b35268f-d9a6-4d08-8d8c-c6f3e5e84215"
 }.freeze
 
 # ── Coba defaults for new leads ───────────────────────────────────────
@@ -141,6 +153,53 @@ def find_deal_for_person(person_id)
   rows.first && rows.first["deal_id"]
 end
 
+def find_notes_for_deal(deal_id)
+  rows = duckdb_query(<<~SQL)
+    SELECT value
+    FROM entry_fields
+    WHERE entry_id = #{sql_escape(deal_id)}
+      AND field_id = #{sql_escape(FLD_DEAL[:notes])}
+    LIMIT 1;
+  SQL
+  rows.first && rows.first["value"]
+end
+
+# Compose an inbound-touch block to append to a deal's Notes. The tag
+# "(touch:<external_id>)" in the header is the idempotency marker —
+# before appending we grep existing Notes for this tag, skip if present.
+# That way retries from the trigger layer don't multiply touches.
+def format_touch(external_id:, source:, inquiry_type:, volume:, message:)
+  timestamp = Time.now.utc.strftime("%Y-%m-%d %H:%M UTC")
+  tag = external_id.to_s.strip.empty? ? "" : " (touch:#{external_id})"
+  parts = []
+  parts << "**#{timestamp} — inbound #{source} touch#{tag}**"
+  parts << "- Inquiry type: #{inquiry_type}" unless inquiry_type.to_s.strip.empty?
+  parts << "- Volume: #{volume}"              unless volume.to_s.strip.empty?
+  if message.to_s.strip != ""
+    parts << ""
+    parts << message.to_s
+  end
+  parts.join("\n")
+end
+
+def upsert_deal_notes(deal_id, new_notes)
+  existing = find_notes_for_deal(deal_id)
+  if existing.nil?
+    # no Notes row yet → insert fresh
+    duckdb_exec(insert_entry_field(deal_id, FLD_DEAL[:notes], new_notes))
+    :inserted
+  else
+    combined = "#{existing}\n\n---\n\n#{new_notes}"
+    duckdb_exec(<<~SQL)
+      UPDATE entry_fields
+      SET value = #{sql_escape(combined)}, updated_at = NOW()
+      WHERE entry_id = #{sql_escape(deal_id)}
+        AND field_id = #{sql_escape(FLD_DEAL[:notes])};
+    SQL
+    :appended
+  end
+end
+
 # ── Main ──────────────────────────────────────────────────────────────
 input = JSON.parse(STDIN.read)
 
@@ -150,19 +209,70 @@ abort_with("lead_email is required") if lead_email.empty?
 lead_name            = input["lead_name"].to_s.strip
 lead_company         = (input["lead_company"].to_s.strip.empty? ? input["enriched_company"].to_s : input["lead_company"]).to_s.strip
 lead_title           = input["lead_title"].to_s.strip
+lead_phone           = input["lead_phone"].to_s.strip
+lead_inquiry_type    = input["lead_inquiry_type"].to_s.strip
+lead_volume          = input["lead_volume"].to_s.strip
+lead_message         = input["lead_message"].to_s.strip
 source               = input["source"].to_s.strip.downcase
 platform_campaign_id = input["platform_campaign_id"].to_s.strip
+external_id          = input["external_id"].to_s.strip
 channel              = SOURCE_TO_CHANNEL[source] || "Email"
 
-# Idempotency check
+# Compose a Notes blob from the richer website-form fields. Persisted on
+# the deal entry's Notes (richtext) column so the human doing qualify/
+# review sees the full context without hunting. If none of the three are
+# populated (e.g., LinkedIn path) this stays nil and we skip the insert.
+notes_body = [
+  (lead_inquiry_type.empty? ? nil : "**Inquiry type:** #{lead_inquiry_type}"),
+  (lead_volume.empty?       ? nil : "**Monthly volume:** #{lead_volume}"),
+  (lead_message.empty?      ? nil : "\n#{lead_message}")
+].compact.join("\n")
+notes_body = nil if notes_body.empty?
+
+# Idempotency check — email is the dedup key across ALL sources (LinkedIn,
+# website, direct, referral). Same email = one deal, regardless of channel.
+# On dedup hit, UPSERT: we don't create a duplicate deal, but we DO append
+# a timestamped touch block to the existing deal's Notes so re-engagement
+# data (what they asked, volume, message) is preserved for the sales rep.
+# Guarded by external_id tag — replays with the same trigger payload are
+# no-ops.
 existing_person_id = find_person_by_email(lead_email)
 if existing_person_id
   existing_deal_id = find_deal_for_person(existing_person_id)
   if existing_deal_id
+    warn "[create-crm-record] DEDUP_HIT email=#{lead_email} person_id=#{existing_person_id} deal_id=#{existing_deal_id} source=#{source}"
+
+    # Only upsert if we actually have new touch data to add. LinkedIn-path
+    # inputs don't include inquiry_type/volume/message, so for those we
+    # silently return as before.
+    has_touch_data = !(lead_inquiry_type.empty? && lead_volume.empty? && lead_message.empty?)
+    appended = false
+    if has_touch_data
+      existing_notes = find_notes_for_deal(existing_deal_id).to_s
+      touch_marker   = external_id.empty? ? nil : "(touch:#{external_id})"
+      already_seen   = touch_marker && existing_notes.include?(touch_marker)
+
+      if already_seen
+        warn "[create-crm-record] TOUCH_REPLAY external_id=#{external_id} — existing Notes already has this tag, skipping append"
+      else
+        touch = format_touch(
+          external_id:   external_id,
+          source:        source.empty? ? "unknown" : source,
+          inquiry_type:  lead_inquiry_type,
+          volume:        lead_volume,
+          message:       lead_message
+        )
+        result = upsert_deal_notes(existing_deal_id, touch)
+        warn "[create-crm-record] TOUCH_#{result.to_s.upcase} deal_id=#{existing_deal_id} external_id=#{external_id} source=#{source}"
+        appended = true
+      end
+    end
+
     puts JSON.dump({
       "person_id"     => existing_person_id,
       "deal_id"       => existing_deal_id,
-      "was_duplicate" => true
+      "was_duplicate" => true,
+      "touch_appended" => appended
     })
     exit 0
   end
@@ -191,6 +301,7 @@ unless existing_person_id
   statements << insert_entry(person_id, OBJ_PEOPLE)
   statements << insert_entry_field(person_id, FLD_PEOPLE[:full_name], lead_name.empty? ? lead_email : lead_name)
   statements << insert_entry_field(person_id, FLD_PEOPLE[:email],     lead_email)
+  statements << insert_entry_field(person_id, FLD_PEOPLE[:phone],     lead_phone)
   statements << insert_entry_field(person_id, FLD_PEOPLE[:company],   lead_company)
   statements << insert_entry_field(person_id, FLD_PEOPLE[:job_title], lead_title)
   statements << insert_entry_field(person_id, FLD_PEOPLE[:status],    DEFAULT_PEOPLE_STATUS)
@@ -203,10 +314,15 @@ statements << insert_entry_field(deal_id, FLD_DEAL[:stage],            DEFAULT_S
 statements << insert_entry_field(deal_id, FLD_DEAL[:business_model],   DEFAULT_BUSINESS_MODEL)
 statements << insert_entry_field(deal_id, FLD_DEAL[:funnel],           DEFAULT_FUNNEL_ID)
 statements << insert_entry_field(deal_id, FLD_DEAL[:contact_name],     lead_name)
-statements << insert_entry_field(deal_id, FLD_DEAL[:contact_position], lead_title)
+# Contact Position intentionally left blank. Cal.com direct bookings map
+# lead_title from the meeting title (e.g. "Coba <> Customer"), which isn't
+# a job title — filling it produced garbage. LinkedIn Lead Gen Forms will
+# provide a real `job_title` field; wire it through when that lands.
 statements << insert_entry_field(deal_id, FLD_DEAL[:contact_email],    lead_email)
+statements << insert_entry_field(deal_id, FLD_DEAL[:contact_phone],    lead_phone)
 statements << insert_entry_field(deal_id, FLD_DEAL[:channel],          channel)
 statements << insert_entry_field(deal_id, FLD_DEAL[:primary_contact],  person_id)
+statements << insert_entry_field(deal_id, FLD_DEAL[:notes],            notes_body)
 
 statements << "COMMIT;"
 

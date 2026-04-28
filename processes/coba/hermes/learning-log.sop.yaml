@@ -1,0 +1,66 @@
+opensop: "0.2"
+
+# B-mode (audit layer) — Hermes scheduler still drives execution.
+# OpenSOP records each phase via form-step submissions from Hermes.
+# `run:` is intentionally absent on every step.
+
+process:
+  name: learning-log
+  version: "3.0"
+  description: "Nightly journal synthesis — Hermes drives, OpenSOP audits each phase"
+  owner: hermes-os
+
+  trigger:
+    type: api  # Hermes calls /sop/learning-log/start at scheduler tick
+
+  inputs:
+    - { name: hermes_invocation_id, type: string, required: false }
+    - { name: compose_skill, type: string, required: false }
+    - { name: model, type: string, required: false }
+
+  outputs:
+    - { name: status, from: steps.compose.outputs.status }
+    - { name: slack_sent, from: steps.compose.outputs.slack_sent }
+    - { name: observer_status, from: steps.observer.outputs.status }
+
+  steps:
+    - id: gather
+      name: "Python gather (deterministic)"
+      type: form
+      outputs:
+        - { name: status, type: enum, values: [ok, error] }
+        - { name: elapsed_seconds, type: number }
+        - { name: bundle_path, type: string }
+        - { name: bundle_size_bytes, type: number }
+        - { name: bundle_keys, type: object }
+        - { name: bundle_summary, type: object }
+        - { name: raw_bundle, type: object, description: "Full gather payload" }
+        - { name: returncode, type: number }
+        - { name: stderr_tail, type: string }
+        - { name: stdout_tail, type: string }
+      timeout: 5m
+
+    - id: compose
+      name: "LLM compose + Python deliver to Slack"
+      type: form
+      outputs:
+        - { name: status, type: enum, values: [ok, error] }
+        - { name: elapsed_seconds, type: number }
+        - { name: slack_sent, type: number }
+        - { name: slack_failed, type: number }
+        - { name: report_path, type: string }
+        - { name: outbox_path, type: string }
+        - { name: outbox, type: object, description: "Full Slack outbox payload — channel + text per entry" }
+        - { name: errors, type: object }
+      timeout: 35m
+
+    - id: observer
+      name: "Sonnet observer — post-hoc check"
+      type: form
+      outputs:
+        - { name: status, type: enum, values: [ok, exception, skipped] }
+        - { name: elapsed_seconds, type: number }
+        - { name: report_path, type: string }
+        - { name: usage, type: object, description: "cost_usd + token counts" }
+        - { name: raw, type: object }
+      timeout: 10m

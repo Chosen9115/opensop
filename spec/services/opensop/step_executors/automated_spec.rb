@@ -66,5 +66,122 @@ RSpec.describe Opensop::StepExecutors::Automated do
         described_class.new.call(step, instance, { "run" => "" })
       }.to raise_error(described_class::StepFailure, /missing `run:` path/)
     end
+
+    describe "v0.2 validation: mode (SPEC-v0.2.md §2.14)" do
+      it "is lenient by default — missing declared outputs silently become nil downstream" do
+        script = write_script("lenient.rb", <<~RUBY)
+          #!/usr/bin/env ruby
+          puts "{}"
+        RUBY
+
+        result = described_class.new.call(step, instance, {
+          "run" => script,
+          "outputs" => [
+            { "name" => "a", "type" => "string" },
+            { "name" => "b", "type" => "string" }
+          ]
+        })
+
+        expect(result[:outputs]).to eq({})
+      end
+
+      it "is also lenient when validation: 'lenient' is explicit" do
+        script = write_script("lenient_explicit.rb", <<~RUBY)
+          #!/usr/bin/env ruby
+          puts "{}"
+        RUBY
+
+        result = described_class.new.call(step, instance, {
+          "run" => script,
+          "validation" => "lenient",
+          "outputs" => [
+            { "name" => "a", "type" => "string" }
+          ]
+        })
+
+        expect(result[:outputs]).to eq({})
+      end
+
+      it "succeeds in strict mode when every declared output key is present" do
+        script = write_script("strict_ok.rb", <<~RUBY)
+          #!/usr/bin/env ruby
+          require "json"
+          puts JSON.dump({ "a" => 1, "b" => 2 })
+        RUBY
+
+        result = described_class.new.call(step, instance, {
+          "run" => script,
+          "validation" => "strict",
+          "outputs" => [
+            { "name" => "a", "type" => "number" },
+            { "name" => "b", "type" => "number" }
+          ]
+        })
+
+        expect(result[:outputs]).to eq({ "a" => 1, "b" => 2 })
+      end
+
+      it "raises in strict mode when a declared output key is missing" do
+        script = write_script("strict_missing.rb", <<~RUBY)
+          #!/usr/bin/env ruby
+          require "json"
+          puts JSON.dump({ "a" => 1 })
+        RUBY
+
+        expect {
+          described_class.new.call(step, instance, {
+            "run" => script,
+            "validation" => "strict",
+            "outputs" => [
+              { "name" => "a", "type" => "number" },
+              { "name" => "b", "type" => "number" }
+            ]
+          })
+        }.to raise_error(
+          described_class::StepFailure,
+          /missing declared output\(s\): b/
+        )
+      end
+
+      it "lists every missing field in the error message and surfaces actual keys" do
+        script = write_script("strict_multi_missing.rb", <<~RUBY)
+          #!/usr/bin/env ruby
+          require "json"
+          puts JSON.dump({ "x" => "noise" })
+        RUBY
+
+        expect {
+          described_class.new.call(step, instance, {
+            "run" => script,
+            "validation" => "strict",
+            "outputs" => [
+              { "name" => "a", "type" => "string" },
+              { "name" => "b", "type" => "string" }
+            ]
+          })
+        }.to raise_error(described_class::StepFailure) { |err|
+          expect(err.message).to match(/missing declared output\(s\): a, b/)
+          expect(err.message).to include('"x"')
+        }
+      end
+
+      it "allows extra keys not declared in outputs: even in strict mode" do
+        script = write_script("strict_extras.rb", <<~RUBY)
+          #!/usr/bin/env ruby
+          require "json"
+          puts JSON.dump({ "a" => 1, "debug" => "trace info", "extra" => [ 1, 2, 3 ] })
+        RUBY
+
+        result = described_class.new.call(step, instance, {
+          "run" => script,
+          "validation" => "strict",
+          "outputs" => [
+            { "name" => "a", "type" => "number" }
+          ]
+        })
+
+        expect(result[:outputs]).to include("a" => 1, "debug" => "trace info")
+      end
+    end
   end
 end

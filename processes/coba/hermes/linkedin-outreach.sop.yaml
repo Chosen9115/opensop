@@ -1,0 +1,44 @@
+opensop: "0.2"
+
+# B-mode (audit layer) — macOS launchd cron drives execution.
+# OpenSOP records each tick via form-step submission from the host script.
+# `run:` is intentionally absent. Real schedule is in the launchd plist
+# at ~/Library/LaunchAgents/com.hermes.linkedin-outreach.plist
+# (10:07, 13:07, 16:07 America/Chicago).
+
+process:
+  name: linkedin-outreach
+  version: "3.0"
+  description: "LinkedIn outreach cron — host script drives, OpenSOP audits"
+  owner: hermes-os-host
+
+  trigger:
+    type: api  # host launchd cron POSTs /sop/linkedin-outreach/start
+
+  inputs:
+    - { name: hermes_invocation_id, type: string, required: false }
+
+  outputs:
+    - { name: status, from: steps.outreach.outputs.status }
+    - { name: sent, from: steps.outreach.outputs.sent }
+
+  steps:
+    - id: outreach
+      name: "Pick candidate, search company if needed, send connect"
+      type: form
+      outputs:
+        - { name: status, type: enum, values: [ok, skipped, error] }
+        - { name: elapsed_seconds, type: number }
+        - { name: sent, type: number, description: "0 or 1 — single-send-per-tick contract" }
+        - { name: skip_reason, type: string, description: "outside_business_hours | cap_daily | cap_weekly | no_candidate | linkedin_dead | no_employees | no_confident_match | profile_lock_held | empty" }
+        - { name: mode, type: string, description: "direct | enrichment_needed | empty" }
+        - { name: candidate_name, type: string }
+        - { name: candidate_url, type: string }
+        - { name: candidate_score, type: number }
+        - { name: used_note, type: boolean }
+        - { name: counters_today, type: number }
+        - { name: counters_week, type: number }
+        - { name: notes_used_30d, type: number }
+        - { name: error, type: string, description: "exception summary if status=error" }
+        - { name: summary_payload, type: object, description: "Full _write_summary() dict — every field the host script would have logged" }
+      timeout: 6m

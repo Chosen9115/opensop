@@ -58,6 +58,16 @@ Format: `#GAP-N | severity | description | discovered while | fix scope`
 
 ---
 
+### GAP-8 | 🟡 medium | Engine should fail closed in production when `OPENSOP_API_TOKEN` is unset
+
+**Symptom:** today the engine logs a warning and serves `/sop/*` as fully open when the token env var isn't set. Safe for dev; catastrophic if a production deploy ships without setting it — any internet caller can start/cancel instances, read all PII, etc.
+
+**Discovered while:** inspecting Coba's first Fly deploy. Token was unset; anyone could start instances against the public URL.
+
+**Fix scope:** in `Sop::ApplicationController#authenticate_sop_token!`, refuse to serve any request in `Rails.env.production?` when `ENV["OPENSOP_API_TOKEN"]` is blank. Return 503 with a clear error message pointing at the config. Keep the current log-warn + open-mode behavior in development/test. Tiny change, ~1 hour including specs. Surfaces the class of "oops forgot to set the secret" incident at boot rather than at first-attack.
+
+---
+
 ### GAP-6 | 🟢 low | `wait` step with `seconds:` doesn't actually wait
 
 **Symptom:** `wait` steps with a `seconds:` duration return immediately instead of pausing. `wait` with `until:` pauses forever (no polling).
@@ -73,6 +83,10 @@ Format: `#GAP-N | severity | description | discovered while | fix scope`
 ### GAP-7 | 🟡 medium | `trigger: type: webhook` — **closed 2026-04-21** (commit `25aad1b`)
 
 Third-party SaaS webhooks can now start process instances directly via `POST /sop/triggers/<process-name>` with HMAC signature verification. Documented in [SPEC §2.2](./SPEC.md), [docs/API.md](./docs/API.md), and Playbook D in [docs/AGENT_GUIDE.md](./docs/AGENT_GUIDE.md). Closed GAP-4 use case partially — still no built-in dedup by payload key, but providers that retry will create duplicate instances carrying the provider ID in metadata, so `automated` steps can dedupe downstream.
+
+### GAP-9 | 🟡 medium | Admin UI had no authentication — **closed 2026-04-21**
+
+`Ui::ApplicationController` now has optional HTTP Basic auth gated on the `OPENSOP_UI_USER` + `OPENSOP_UI_PASSWORD` env vars. When either is unset, auth is skipped (dev/test friendly). When both are set, every `/ui` route is challenged. `/sop/*` API endpoints are unaffected — they still use `X-SOP-Token`. Future work: session-based login with multi-user roles (track as a new gap when someone actually needs it).
 
 ---
 
