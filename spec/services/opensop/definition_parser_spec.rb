@@ -408,6 +408,46 @@ RSpec.describe Opensop::DefinitionParser do
         expect { described_class.call(hash) }
           .to raise_error(described_class::InvalidDefinition, /process\.post_review/)
       end
+
+      describe "automated validation: mode (SPEC-v0.2.md §2.14)" do
+        def automated_step(extra = {})
+          {
+            "id" => "sync", "name" => "Sync", "type" => "automated",
+            "run" => "scripts/sync.rb",
+            "outputs" => [ { "name" => "status", "type" => "string" } ]
+          }.merge(extra)
+        end
+
+        it "defaults to 'lenient' when no validation: key is set" do
+          result = described_class.call(v02_process(steps: [ automated_step ]))
+          expect(result.ok?).to be true
+          expect(result.value["process"]["steps"].first["validation"]).to eq("lenient")
+        end
+
+        it "accepts validation: 'strict'" do
+          result = described_class.call(v02_process(steps: [ automated_step("validation" => "strict") ]))
+          expect(result.ok?).to be true
+          expect(result.value["process"]["steps"].first["validation"]).to eq("strict")
+        end
+
+        it "accepts validation: 'lenient' explicitly" do
+          result = described_class.call(v02_process(steps: [ automated_step("validation" => "lenient") ]))
+          expect(result.ok?).to be true
+          expect(result.value["process"]["steps"].first["validation"]).to eq("lenient")
+        end
+
+        it "rejects an unknown validation mode" do
+          expect {
+            described_class.call(v02_process(steps: [ automated_step("validation" => "garbage") ]))
+          }.to raise_error(described_class::InvalidDefinition, /validation.*lenient.*strict.*garbage/)
+        end
+
+        it "rejects a non-string validation value" do
+          expect {
+            described_class.call(v02_process(steps: [ automated_step("validation" => true) ]))
+          }.to raise_error(described_class::InvalidDefinition, /validation/)
+        end
+      end
     end
 
     describe "v0.2 loop step" do

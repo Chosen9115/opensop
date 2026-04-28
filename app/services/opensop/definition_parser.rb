@@ -11,6 +11,7 @@ module Opensop
     SPEC_VERSION = "0.1"
     SUPPORTED_SPEC_VERSIONS = %w[0.1 0.2].freeze
     STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait llm loop].freeze
+    AUTOMATED_VALIDATION_MODES = %w[lenient strict].freeze
     TRIGGER_TYPES = %w[api webhook schedule manual interval].freeze
     INTERVAL_FORMAT = /\A(\d+)([smhd])\z/
     INTERVAL_UNIT_SECONDS = { "s" => 1, "m" => 60, "h" => 3600, "d" => 86_400 }.freeze
@@ -171,6 +172,7 @@ module Opensop
       when "automated"
         fail_at!("#{path}.run", "automated step requires a `run` path") unless step["run"].is_a?(String) && !step["run"].strip.empty?
         validate_tools!(step, path)
+        validate_automated_validation!(step, path)
       when "webhook"
         validate_webhook!(step, path)
       when "subprocess"
@@ -282,6 +284,24 @@ module Opensop
         body_path = "#{path}.body[#{i}]"
         fail_at!(body_path, "must be a mapping") unless body_step.is_a?(Hash)
         validate_step!(body_step, body_path, ids, allow_loop: false)
+      end
+    end
+
+    # `validation:` on `automated` steps (v0.2 §2.14) — opt-in strict mode for
+    # presence-checking declared output names against the script's stdout JSON.
+    # Default is "lenient" (current behavior: missing keys silently become nil).
+    # When "strict", the executor raises StepFailure if any declared output
+    # `name` is absent from the parsed Hash. Extra keys are still permitted in
+    # both modes.
+    def validate_automated_validation!(step, path)
+      if step.key?("validation")
+        mode = step["validation"]
+        unless mode.is_a?(String) && AUTOMATED_VALIDATION_MODES.include?(mode)
+          fail_at!("#{path}.validation",
+                   "must be one of #{AUTOMATED_VALIDATION_MODES.join(" | ")} (got #{mode.inspect})")
+        end
+      else
+        step["validation"] = "lenient"
       end
     end
 
