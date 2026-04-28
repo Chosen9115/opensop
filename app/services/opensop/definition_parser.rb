@@ -3,13 +3,14 @@
 require "yaml"
 
 module Opensop
-  # Parses and validates an OpenSOP process definition (version 0.1).
+  # Parses and validates an OpenSOP process definition (version 0.1 or 0.2).
   #
   # Does NOT persist anything — it simply returns a validated hash
   # ready to be stored in Sop::Process#definition.
   class DefinitionParser
     SPEC_VERSION = "0.1"
-    STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait].freeze
+    SUPPORTED_SPEC_VERSIONS = %w[0.1 0.2].freeze
+    STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait llm].freeze
     TRIGGER_TYPES = %w[api webhook schedule manual].freeze
     TRIGGER_AUTH_SCHEMES = %w[hmac-sha256].freeze
     TRIGGER_AUTH_ENCODINGS = %w[hex base64].freeze
@@ -74,8 +75,9 @@ module Opensop
 
     def validate_top_level!(hash)
       fail_at!("opensop", "missing spec version key") unless hash.key?("opensop")
-      if hash["opensop"].to_s != SPEC_VERSION
-        fail_at!("opensop", "unsupported version #{hash["opensop"].inspect} (expected #{SPEC_VERSION.inspect})")
+      version = hash["opensop"].to_s
+      unless SUPPORTED_SPEC_VERSIONS.include?(version)
+        fail_at!("opensop", "unsupported version #{hash["opensop"].inspect} (expected one of #{SUPPORTED_SPEC_VERSIONS.inspect})")
       end
       fail_at!("process", "missing process block") unless hash["process"].is_a?(Hash)
     end
@@ -92,6 +94,20 @@ module Opensop
 
       if process["tags"] && !process["tags"].is_a?(Array)
         fail_at!("process.tags", "must be an array of strings")
+      end
+
+      # v0.2 process-level passthrough fields. We don't enforce inner shape yet;
+      # we just confirm the gross types so unknown-key checks (when added later)
+      # don't reject them, and so obvious typos like `post_review: "foo"` fail.
+      if process.key?("post_review") && !process["post_review"].is_a?(Hash)
+        fail_at!("process.post_review", "must be a mapping")
+      end
+
+      if process.key?("shared_state_writes")
+        sws = process["shared_state_writes"]
+        unless sws.is_a?(Array) && sws.all? { |k| k.is_a?(String) && !k.strip.empty? }
+          fail_at!("process.shared_state_writes", "must be an array of non-empty strings")
+        end
       end
 
       steps = process["steps"]
@@ -139,13 +155,77 @@ module Opensop
       case step["type"]
       when "automated"
         fail_at!("#{path}.run", "automated step requires a `run` path") unless step["run"].is_a?(String) && !step["run"].strip.empty?
+        validate_tools!(step, path)
       when "webhook"
         validate_webhook!(step, path)
       when "subprocess"
         fail_at!("#{path}.process", "subprocess step requires a `process` name") unless step["process"].is_a?(String) && !step["process"].strip.empty?
       when "judgment"
         validate_judgment!(step, path)
+      when "llm"
+        validate_llm!(step, path)
       end
+    end
+
+    # `tools:` (v0.2 §2.6) — array of capability names. The runtime enforces
+    # them at execution time; here we only check shape and surface the value
+    # back unchanged.
+    def validate_tools!(step, path)
+      return unless step.key?("tools")
+      tools = step["tools"]
+      unless tools.is_a?(Array) && tools.all? { |t| t.is_a?(String) && !t.strip.empty? }
+        fail_at!("#{path}.tools", "must be an array of non-empty strings")
+      end
+    end
+
+    # `llm` step (v0.2 §2.5).
+    def validate_llm!(step, path)
+      require_string!(step, "model", "#{path}.model")
+      fail_at!("#{path}.model", "must be non-empty") if step["model"].to_s.strip.empty?
+
+      has_prompt = step.key?("prompt")
+      has_prompt_file = step.key?("prompt_file")
+      if has_prompt && has_prompt_file
+        fail_at!(path, "llm step '#{step["id"]}' requires either prompt: or prompt_file:, not both")
+      elsif !has_prompt && !has_prompt_file
+        fail_at!(path, "llm step '#{step["id"]}' requires either prompt: or prompt_file:, not both")
+      end
+
+      if has_prompt
+        unless step["prompt"].is_a?(String) && !step["prompt"].strip.empty?
+          fail_at!("#{path}.prompt", "must be a non-empty string")
+        end
+      end
+      if has_prompt_file
+        unless step["prompt_file"].is_a?(String) && !step["prompt_file"].strip.empty?
+          fail_at!("#{path}.prompt_file", "must be a non-empty string path")
+        end
+      end
+
+      schema = step["expected_output_schema"]
+      unless schema.is_a?(Hash) && !schema.empty?
+        fail_at!("#{path}.expected_output_schema", "required and must be a non-empty mapping")
+      end
+
+      validate_tools!(step, path)
+
+      if step.key?("retry_on_incomplete")
+        unless [true, false].include?(step["retry_on_incomplete"])
+          fail_at!("#{path}.retry_on_incomplete", "must be a boolean")
+        end
+      end
+
+      if step.key?("max_retries")
+        mr = step["max_retries"]
+        unless mr.is_a?(Integer) && mr >= 0
+          fail_at!("#{path}.max_retries", "must be a non-negative integer")
+        end
+      end
+
+      # Apply defaults so downstream consumers don't repeat the logic.
+      step["tools"] = [] unless step.key?("tools")
+      step["retry_on_incomplete"] = true unless step.key?("retry_on_incomplete")
+      step["max_retries"] = 2 unless step.key?("max_retries")
     end
 
     def validate_trigger!(process)
@@ -252,6 +332,23 @@ module Opensop
 
       if field["values"]
         fail_at!("#{path}.values", "must be an array") unless field["values"].is_a?(Array)
+      end
+
+      # v0.2 §2.7 — collection outputs. Accepted on any field; in practice only
+      # meaningful on outputs, but the parser doesn't restrict by location.
+      if field.key?("collection")
+        unless [true, false].include?(field["collection"])
+          fail_at!("#{path}.collection", "must be a boolean")
+        end
+      end
+
+      if field["collection"] == true
+        unless field["item_schema"].is_a?(Hash) && !field["item_schema"].empty?
+          fail_at!(path, "output '#{field["name"]}' has collection: true but no item_schema")
+        end
+      elsif field.key?("item_schema") && !field["item_schema"].is_a?(Hash)
+        # If someone supplies item_schema without collection: true, still type-check it.
+        fail_at!("#{path}.item_schema", "must be a mapping")
       end
     end
 

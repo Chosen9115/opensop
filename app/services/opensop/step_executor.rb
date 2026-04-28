@@ -13,7 +13,8 @@ module Opensop
       "webhook"      => "Opensop::StepExecutors::Webhook",
       "subprocess"   => "Opensop::StepExecutors::Subprocess",
       "notification" => "Opensop::StepExecutors::Notification",
-      "wait"         => "Opensop::StepExecutors::Wait"
+      "wait"         => "Opensop::StepExecutors::Wait",
+      "llm"          => "Opensop::StepExecutors::Llm"
     }.freeze
 
     module_function
