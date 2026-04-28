@@ -51,6 +51,11 @@ COPY . .
 # -j 1 disable parallel compilation to avoid a QEMU bug: https://github.com/rails/bootsnap/issues/495
 RUN bundle exec bootsnap precompile -j 1 app/ lib/
 
+# Precompile assets (Tailwind CSS via tailwindcss-rails hook into assets:precompile,
+# plus Propshaft fingerprinting). SECRET_KEY_BASE_DUMMY satisfies Rails 8's
+# eager-load secret check during precompile — the real key is injected at runtime.
+RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
+
 
 
 
