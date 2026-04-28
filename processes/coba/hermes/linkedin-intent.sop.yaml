@@ -1,0 +1,41 @@
+opensop: "0.2"
+
+# B-mode (audit layer) — macOS launchd cron drives execution.
+# OpenSOP records each tick via form-step submission from the host script.
+# Real schedule is in the launchd plist
+# at ~/Library/LaunchAgents/com.hermes.linkedin-intent.plist
+# (every 30 min at :15/:45 during business hours, America/Chicago).
+
+process:
+  name: linkedin-intent
+  version: "3.0"
+  description: "LinkedIn profile-views classifier — host drives, OpenSOP audits"
+  owner: hermes-os-host
+
+  trigger:
+    type: api
+
+  inputs:
+    - { name: hermes_invocation_id, type: string, required: false }
+
+  outputs:
+    - { name: status, from: steps.intent.outputs.status }
+    - { name: high_signal_count, from: steps.intent.outputs.high_signal_count }
+
+  steps:
+    - id: intent
+      name: "Pull profile views, classify against CSV prospects"
+      type: form
+      outputs:
+        - { name: status, type: enum, values: [ok, skipped, error] }
+        - { name: elapsed_seconds, type: number }
+        - { name: skip_reason, type: string, description: "outside_business_hours | profile_lock_held | empty" }
+        - { name: total_viewers_90d, type: number }
+        - { name: identifiable_viewers, type: number }
+        - { name: high_signal_count, type: number }
+        - { name: medium_signal_count, type: number }
+        - { name: high_signals, type: object, description: "Array of signal dicts: profile_url, name, title, status, recent_hours, viewer_lines" }
+        - { name: medium_signals, type: object, description: "Same shape, lower-priority" }
+        - { name: error, type: string }
+        - { name: summary_payload, type: object, description: "Full _last_run.json contents" }
+      timeout: 4m

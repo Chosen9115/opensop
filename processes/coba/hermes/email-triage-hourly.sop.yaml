@@ -1,0 +1,28 @@
+opensop: "0.2"
+
+process:
+  name: email-triage-hourly
+  version: "3.0"
+  description: "Hourly email triage — Hermes orchestrator drives, OpenSOP records aggregated result"
+  owner: hermes-os
+
+  trigger:
+    type: api
+
+  inputs:
+    - { name: hermes_invocation_id, type: string, required: false }
+
+  outputs:
+    - { name: status, from: steps.run.outputs.status }
+
+  steps:
+    - id: run
+      name: "Full triage run (gather + classify + deliver + notify)"
+      type: form
+      outputs:
+        - { name: status, type: enum, values: [ok, error] }
+        - { name: elapsed_seconds, type: number }
+        - { name: returncode, type: number }
+        - { name: summary, type: object, description: "Full last_run.json — seen, keep, maybe_spam, spam, replied, cross_sent, etc" }
+        - { name: stderr_tail, type: string }
+      timeout: 35m

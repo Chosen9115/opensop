@@ -1,0 +1,35 @@
+opensop: "0.2"
+
+# B-mode (audit layer) — Hermes scheduler drives execution.
+# OpenSOP records each fire via form-step submission from Hermes.
+# Real schedule is in Hermes APScheduler (04:45 + 13:45 America/Chicago).
+
+process:
+  name: circleback-sync
+  version: "3.0"
+  description: "Pull meeting notes + action items from Circleback — Hermes drives, OpenSOP audits"
+  owner: hermes-os
+
+  trigger:
+    type: api  # Hermes calls /sop/circleback-sync/start at scheduler tick
+
+  inputs:
+    - { name: hermes_invocation_id, type: string, required: false }
+    - { name: lookback_days, type: number, required: false }
+
+  outputs:
+    - { name: status, from: steps.sync.outputs.status }
+    - { name: meetings_count, from: steps.sync.outputs.meetings_count }
+
+  steps:
+    - id: sync
+      name: "Run circleback CLI sync"
+      type: form
+      outputs:
+        - { name: status, type: enum, values: [ok, error] }
+        - { name: elapsed_seconds, type: number }
+        - { name: meetings_count, type: number }
+        - { name: action_items_count, type: number }
+        - { name: errors, type: object, description: "Array of error strings" }
+        - { name: raw_payload, type: object, description: "summary + stdout_tail + stderr_tail + returncode" }
+      timeout: 5m

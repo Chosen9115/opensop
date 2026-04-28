@@ -1,0 +1,27 @@
+opensop: "0.2"
+
+process:
+  name: consolidation
+  version: "3.0"
+  description: "Nightly memory synthesis — Hermes drives, OpenSOP records"
+  owner: hermes-os
+
+  trigger:
+    type: api
+
+  inputs:
+    - { name: hermes_invocation_id, type: string, required: false }
+
+  outputs:
+    - { name: status, from: steps.consolidate.outputs.status }
+
+  steps:
+    - id: consolidate
+      name: "Opus reads episodes + writes synthesized memory"
+      type: form
+      outputs:
+        - { name: status, type: enum, values: [ok, skipped, error] }
+        - { name: elapsed_seconds, type: number }
+        - { name: result, type: object, description: "Full consolidation output" }
+        - { name: error, type: string }
+      timeout: 30m
