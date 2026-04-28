@@ -35,13 +35,17 @@ module Opensop
     class Loop
       class StepFailure < StandardError; end
 
+      # Mirrors DefinitionParser::LOOP_MAX_ITERATIONS_TEMPLATE_FORMAT — kept
+      # local so this executor doesn't depend on the parser at runtime.
+      MAX_ITERATIONS_TEMPLATE_FORMAT = /\A\{\{\s*process\.inputs\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}\z/
+
       def call(step, instance, definition)
         loop_block = definition["loop"] || {}
         body_defs  = Array(definition["body"])
         outputs_decl = Array(definition["outputs"])
         aggregate_rules = loop_block["aggregate"].is_a?(Hash) ? loop_block["aggregate"] : {}
         as_name        = loop_block["as"] || "item"
-        max_iterations = loop_block["max_iterations"].to_i
+        max_iterations = resolve_max_iterations(loop_block["max_iterations"], instance)
         max_iterations = 1000 if max_iterations <= 0
 
         variant, variant_value = detect_variant(loop_block)
@@ -131,6 +135,53 @@ module Opensop
       end
 
       private
+
+      # Resolves `max_iterations:` which may be either a literal positive
+      # Integer or a `{{ process.inputs.<name> }}` template string. The parser
+      # already enforces shape; here we resolve and type-check the resolved
+      # value at instance-start time.
+      def resolve_max_iterations(raw, instance)
+        return raw.to_i if raw.is_a?(Integer)
+        return raw.to_i unless raw.is_a?(String)
+
+        m = raw.match(MAX_ITERATIONS_TEMPLATE_FORMAT)
+        # If the parser let it through as a String it must match this pattern,
+        # but be defensive in case this executor is invoked directly.
+        unless m
+          raise StepFailure,
+                "loop max_iterations template #{raw.inspect} is malformed (expected `{{ process.inputs.<name> }}`)"
+        end
+
+        input_name = m[1]
+        inputs = instance.inputs || {}
+        unless inputs.key?(input_name) || inputs.key?(input_name.to_sym)
+          raise StepFailure,
+                "loop max_iterations references missing process input #{input_name.inspect}"
+        end
+
+        value = inputs[input_name] || inputs[input_name.to_sym]
+        # Accept Integer or numeric String that parses cleanly to a positive int.
+        coerced =
+          case value
+          when Integer then value
+          when String
+            if value.match?(/\A\d+\z/)
+              value.to_i
+            else
+              raise StepFailure,
+                    "loop max_iterations input #{input_name.inspect} must resolve to a positive integer (got #{value.inspect})"
+            end
+          else
+            raise StepFailure,
+                  "loop max_iterations input #{input_name.inspect} must resolve to a positive integer (got #{value.class})"
+          end
+
+        unless coerced > 0
+          raise StepFailure,
+                "loop max_iterations input #{input_name.inspect} must resolve to a positive integer (got #{coerced})"
+        end
+        coerced
+      end
 
       def detect_variant(loop_block)
         %w[for_each repeat_until while].each do |key|
