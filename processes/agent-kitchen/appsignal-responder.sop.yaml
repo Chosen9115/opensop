@@ -1,0 +1,91 @@
+opensop: "0.1"
+
+process:
+  name: appsignal-responder
+  version: "1.0"
+  description: "Fetch open AppSignal incidents, filter known work, and output a prioritized list for fix dispatch."
+  owner: agent-kitchen
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: projects
+      type: string[]
+      required: true
+      description: "List of project names to scan (e.g. [\"coba\", \"pouch\"])"
+    - name: phase
+      type: enum
+      values: ["1", "2", "3", "4"]
+      required: true
+      description: "Dispatch phase: 1=classify-only, 2=dispatch-no-push, 3=full-PR, 4=regression-check"
+    - name: run_id
+      type: string
+      required: true
+      description: "Unique run identifier for dedup and receipts"
+
+  outputs:
+    - name: incidents_to_process
+      type: object
+      from: steps.apply-budget-caps.outputs.incidents_to_process
+    - name: known_work
+      type: object
+      from: steps.build-known-work.outputs.known_work
+    - name: total_fetched
+      type: number
+      from: steps.fetch-incidents.outputs.total_fetched
+    - name: deferred_count
+      type: number
+      from: steps.apply-budget-caps.outputs.deferred_count
+    - name: run_id
+      type: string
+      from: process.inputs.run_id
+
+  steps:
+    - id: fetch-incidents
+      name: "Fetch open incidents from AppSignal"
+      type: automated
+      inputs:
+        - name: projects
+          from: process.inputs.projects
+        - name: run_id
+          from: process.inputs.run_id
+      outputs:
+        - name: incidents
+          type: object
+        - name: total_fetched
+          type: number
+
+    - id: build-known-work
+      name: "Build known-work dedup set"
+      type: automated
+      inputs:
+        - name: projects
+          from: process.inputs.projects
+        - name: incidents
+          from: steps.fetch-incidents.outputs.incidents
+      outputs:
+        - name: known_work
+          type: object
+        - name: known_work_count
+          type: number
+
+    - id: apply-budget-caps
+      name: "Apply budget and rate caps"
+      type: automated
+      inputs:
+        - name: incidents
+          from: steps.fetch-incidents.outputs.incidents
+        - name: projects
+          from: process.inputs.projects
+        - name: run_id
+          from: process.inputs.run_id
+      outputs:
+        - name: incidents_to_process
+          type: object
+        - name: deferred_count
+          type: number
+        - name: run_blocked
+          type: boolean
+
+  tags: [agent-kitchen, appsignal, incident-management]

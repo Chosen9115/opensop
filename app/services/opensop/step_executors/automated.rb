@@ -18,7 +18,7 @@ module Opensop
 
       def call(step, instance, definition)
         run_path = definition["run"]
-        raise StepFailure, "automated step is missing `run:` path" if run_path.blank?
+        return { waiting: "waiting_for_worker" } if run_path.blank?
 
         resolved = resolve_script_path(run_path)
         unless File.exist?(resolved)

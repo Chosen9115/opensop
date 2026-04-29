@@ -25,6 +25,10 @@ module Sop
       render json: { error: "invalid_definition", message: ex.message }, status: :unprocessable_entity
     end
 
+    rescue_from Psych::SyntaxError do |ex|
+      render json: { error: "invalid_definition", message: "YAML syntax error: #{ex.message}" }, status: :unprocessable_entity
+    end
+
     rescue_from Opensop::InputResolver::UnresolvedReference do |ex|
       render json: { error: "unresolved_reference", message: ex.message }, status: :unprocessable_entity
     end
