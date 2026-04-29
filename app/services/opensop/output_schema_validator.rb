@@ -70,7 +70,7 @@ module Opensop
     def validate(value)
       errors = []
       coerced = walk_object(@schema, value, "", errors)
-      [errors.empty?, errors, coerced]
+      [ errors.empty?, errors, coerced ]
     end
 
     private
@@ -116,15 +116,15 @@ module Opensop
       raise SchemaError, "schema at #{display_path(path)}: empty type expression" if stripped.empty?
 
       if SCALAR_TYPES.include?(stripped)
-        [:scalar, stripped]
+        [ :scalar, stripped ]
       elsif (m = stripped.match(ENUM_RE))
         values = m[1].split(",").map(&:strip).reject(&:empty?)
         if values.empty?
           raise SchemaError, "schema at #{display_path(path)}: enum must list at least one value"
         end
-        [:enum, values]
+        [ :enum, values ]
       elsif (m = stripped.match(ARRAY_RE))
-        [:array, parse_type_expr!(m[1].strip, "#{path}[]")]
+        [ :array, parse_type_expr!(m[1].strip, "#{path}[]") ]
       else
         raise SchemaError, "schema at #{display_path(path)}: unknown type expression #{expr.inspect}"
       end

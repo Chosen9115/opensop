@@ -10,6 +10,31 @@ en:
       instances: "Instances"
       metrics: "Metrics"
       new_process: "+ New Process"
+      schedule: "Schedule"
+      agents: "Agents"
+      costs: "Costs"
+      templates: "Templates"
+      webhooks: "Webhooks"
+      api: "API & SDK"
+      workspace: "Workspace"
+      library: "Library"
+      jump_to_anything: "Jump to anything…"
+
+    sidebar:
+      api_authenticated: "api · authenticated"
+      api_no_token: "api · no token"
+      workspace_label: "workspace · %{name}"
+      schedule: "Schedule"
+
+    activity:
+      title: "Activity"
+      live: "live"
+      tabs:
+        feed: "Feed"
+        agents: "Agents"
+        up_next: "Up next"
+      empty: "No activity yet."
+      no_actor: "system"
 
     common:
       "yes": "Yes"
@@ -75,6 +100,23 @@ en:
         required_tag: "required"
         optional_tag: "optional"
       summary_line: "%{in_flight} in flight • %{completed} completed • %{failed} failed"
+      tree:
+        all: "All processes"
+        pinned: "Pinned"
+        smart_views: "Smart views"
+        filter_placeholder: "Filter…"
+        breadcrumb_root: "workspace"
+        ungrouped: "Ungrouped"
+      summary:
+        count_processes:
+          one:   "1 process"
+          other: "%{count} processes"
+        runs_24h: "%{count} runs / 24h"
+        in_flight_count: "%{count} in flight"
+      list:
+        runs_label: "runs"
+        mtd_label: "mtd"
+        owner_label: "owner"
 
     instances:
       title: "Instances"
@@ -196,3 +238,177 @@ en:
       invalid_definition: "Invalid process definition: %{message}"
       step_not_submittable: "This step cannot be submitted in its current state."
       unauthorized: "Unauthorized."
+
+    webhooks:
+      title: "Webhooks"
+      subtitle: "Inbound callback receipts for webhook steps awaiting external systems."
+      recent: "Recent callbacks"
+      empty_title: "No webhook callbacks yet"
+      empty_description: "Callbacks appear here once a webhook step issues an inbound URL and the external system responds."
+      stats:
+        pending: "Pending"
+        received: "Received"
+        expired: "Expired"
+        total: "Total"
+        pending_hint: "Awaiting an inbound callback."
+        received_hint: "Callback delivered successfully."
+        expired_hint: "Callback window closed without a response."
+        total_hint: "All callbacks ever recorded."
+      table:
+        callback_id: "Callback ID"
+        instance: "Instance"
+        step: "Step"
+        status: "Status"
+        received: "Received"
+        expires: "Expires"
+
+    costs:
+      title: "Costs"
+      subtitle: "LLM token spend across processes — last 30 days"
+      empty: "No LLM calls in the last 30 days."
+      tiles:
+        spend: "Total spend"
+        calls: "Calls"
+        tokens_in: "Tokens in"
+        tokens_out: "Tokens out"
+        window: "last 30 days"
+      daily:
+        title: "Daily spend"
+        peak: "peak"
+      top_steps:
+        title: "Top 10 most expensive steps"
+        step: "Step"
+        instance: "Instance"
+        model: "Model"
+        cost: "Cost"
+        calls: "Calls"
+        empty: "No step-level cost data available yet."
+
+    templates:
+      title: "Templates"
+      subtitle: "Starter process definitions you can copy and customize."
+      count_label: "Available"
+      already_imported: "imported"
+      use_as_base: "Use as base"
+      view_yaml: "View YAML"
+      empty_title: "No templates available"
+      empty_description: "Drop a .sop.yaml file in /processes to start a new template."
+
+    api_docs:
+      title: "API & SDK"
+      subtitle: "Define a process, get an API. Agents and humans interact through the same /sop/* endpoints."
+      auth:
+        heading: "Authentication"
+        header_intro_html: "Every request to <code class=\"font-mono text-[12px] bg-bg-pill px-1 py-0.5 rounded-[3px]\">/sop/*</code> must include the <code class=\"font-mono text-[12px] bg-bg-pill px-1 py-0.5 rounded-[3px]\">X-SOP-Token</code> header."
+        env_intro_html: "The expected token is read from the <code class=\"font-mono text-[12px] bg-bg-pill px-1 py-0.5 rounded-[3px]\">OPENSOP_API_TOKEN</code> environment variable."
+        fallback: "If OPENSOP_API_TOKEN is unset, the engine falls back to no-auth (intended for local development and tests). Set the variable in any deployment that should be locked down."
+      endpoints:
+        heading: "Endpoints"
+        intro: "All public endpoints exposed by the engine. JSON request/response bodies."
+        col_method: "Method"
+        col_path: "Path"
+        col_description: "Description"
+        descriptions:
+          discovery: "List all published processes (discovery)."
+          instances_index: "List all instances across processes."
+          webhook_receive: "Receive an inbound webhook callback for a waiting step."
+          trigger_receive: "Fire a trigger to start a new instance of a process."
+          process_schema: "Return the full process definition (schema)."
+          process_start: "Start a new instance with the given inputs."
+          instance_show: "Read the current state of an instance."
+          instance_cancel: "Cancel a running instance."
+          steps_index: "List the state of every step in an instance."
+          step_submit: "Advance a step by submitting its outputs."
+      snippets:
+        heading: "Snippet library"
+        intro: "Copy-paste examples for the two most common flows."
+        start:
+          heading: "Start an instance"
+        submit:
+          heading: "Submit a step"
+
+    metrics:
+      title: "Metrics"
+      subtitle: "Process throughput and success — last 24h"
+      tiles:
+        started: "Started"
+        completed: "Completed"
+        failed: "Failed"
+        completion_rate: "Completion rate"
+        started_hint: "Instances created in window."
+        completed_hint: "Reached the completed state."
+        failed_hint: "Reached the failed state."
+        completion_rate_hint: "Completed / (completed + failed)."
+      duration:
+        title: "Instance duration"
+        avg: "Average"
+        p95: "P95"
+        avg_hint: "Mean of completed instances in window."
+        p95_hint: "95th percentile — long-tail check."
+      per_process:
+        title: "Per-process throughput"
+        process: "Process"
+        version: "Version"
+        started: "Started"
+        completed: "Completed"
+        failed: "Failed"
+        in_flight: "In flight"
+        empty_title: "No process activity in the last 24h"
+        empty_description: "Process throughput appears here once instances are started."
+      step_health:
+        title: "Step health (current)"
+        pending: "Pending"
+        active: "Active"
+        completed: "Completed"
+        failed: "Failed"
+        skipped: "Skipped"
+
+    agents:
+      title: "Agents"
+      subtitle: "Models doing work for you — last 30 days"
+      empty_title: "No agent activity yet"
+      empty_description: "Once your processes start making LLM calls, each model will appear here with its usage stats."
+      tiles:
+        models: "Models in use"
+        calls: "Total calls"
+        spend: "Total spend"
+        window: "last 30 days"
+      card:
+        last_used: "last used"
+        calls: "Calls"
+        success_rate: "Success"
+        cost: "Cost"
+        avg_confidence: "Confidence"
+        tokens_in: "in"
+        tokens_out: "out"
+        errored: "errored"
+
+    schedule:
+      title: "Schedule"
+      subtitle: "Recurring process invocations driven by cron expressions."
+      empty:
+        title: "No schedules yet"
+        body: "Create a schedule to automatically start processes on a recurring cadence."
+      tiles:
+        active: "Active schedules"
+        due_now: "Due now"
+        failures_24h: "Failures (24h)"
+      table:
+        name: "Schedule"
+        process: "Process"
+        cron: "Cron"
+        timezone: "TZ"
+        next_run: "Next run"
+        last_run: "Last run"
+        status: "Last status"
+        state: "State"
+      states:
+        enabled: "enabled"
+        disabled: "disabled"
+      status:
+        success: "success"
+        failed: "failed"
+        none: "—"
+      unavailable:
+        title: "Schedules table not yet migrated"
+        body: "Run db:migrate to enable scheduled process invocations."

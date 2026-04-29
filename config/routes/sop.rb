@@ -5,6 +5,7 @@
 scope :sop, as: :sop, module: :sop, defaults: { format: :json } do
   get "/", to: "discovery#index", as: :discovery
   get "/instances", to: "instances#index", as: :instances
+  get "/metrics", to: "metrics#index", as: :metrics
   post "/webhooks/:callback_id", to: "webhooks#receive", as: :webhook
   post "/triggers/:process_name", to: "triggers#receive", as: :trigger
 
