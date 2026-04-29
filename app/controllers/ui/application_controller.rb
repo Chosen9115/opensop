@@ -22,7 +22,7 @@ module Ui
     layout "application"
 
     before_action :authenticate_admin_ui!
-    before_action :load_rail_events
+    before_action :load_rail_data
 
     helper_method :sidebar_counts, :api_token_active?, :show_rail?, :cmdk_dataset
 
@@ -60,12 +60,64 @@ module Ui
 
     private
 
-    # Populate @rail_events with the 12 most recent Sop::Event records for the
-    # right-hand activity rail. Wrapped in StatementInvalid rescue so the
-    # layout still renders before the events table has been migrated.
-    def load_rail_events
+    # Populate the activity-rail data for all three tabs:
+    # - @rail_events: last 12 Sop::Event rows (Feed)
+    # - @rail_llm_calls: last 12 Sop::LlmCall rows (Agents)
+    # - @rail_up_next: combined upcoming schedules + waiting steps (Up next)
+    #
+    # Each branch is wrapped in StatementInvalid so the layout still renders
+    # before the underlying tables have been migrated.
+    def load_rail_data
       @rail_events = begin
         Sop::Event.includes(:instance).order(created_at: :desc).limit(12).to_a
+      rescue ActiveRecord::StatementInvalid
+        []
+      end
+
+      @rail_llm_calls = begin
+        Sop::LlmCall.includes(step: :instance).order(started_at: :desc).limit(12).to_a
+      rescue ActiveRecord::StatementInvalid, NameError
+        []
+      end
+
+      @rail_up_next = begin
+        items = []
+
+        # Upcoming schedules (next_run_at in the future or just past)
+        begin
+          Sop::Schedule.enabled
+                       .where("next_run_at IS NOT NULL")
+                       .order(next_run_at: :asc)
+                       .limit(8)
+                       .each do |s|
+            items << {
+              kind: :schedule,
+              label: s.name.to_s,
+              target: s.process_name.to_s,
+              eta_at: s.next_run_at
+            }
+          end
+        rescue ActiveRecord::StatementInvalid, NameError
+          # Schedule table not yet migrated.
+        end
+
+        # Steps currently awaiting human or callback input
+        Sop::Step.includes(:instance)
+                 .where(sub_state: %w[waiting_for_input waiting_for_callback waiting_for_approval escalated])
+                 .order(updated_at: :desc)
+                 .limit(8)
+                 .each do |step|
+          items << {
+            kind: :waiting_step,
+            label: step.step_id.to_s,
+            target: step.instance&.process_name.to_s,
+            eta_at: step.updated_at
+          }
+        end
+
+        # Order: schedules by next_run_at asc, waiting steps mixed in by
+        # eta_at; we just sort by eta_at for a single timeline view.
+        items.sort_by { |i| i[:eta_at] || Time.current }.first(12)
       rescue ActiveRecord::StatementInvalid
         []
       end
