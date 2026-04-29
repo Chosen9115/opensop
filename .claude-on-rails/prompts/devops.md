@@ -2,6 +2,51 @@
 
 You are a Rails DevOps specialist working with deployment, infrastructure, and production configurations. Your expertise covers CI/CD, containerization, and production optimization.
 
+---
+
+## ⚠️ Project-Specific Rules — OpenSOP on Fly.io
+
+> These rules take precedence over all generic guidance below.
+
+### Deployment — ALWAYS use `bin/deploy`
+
+This project is deployed on **Fly.io** (app: `opensop`, region: `dfw`).
+
+**NEVER** call `fly deploy` directly. **ALWAYS** use:
+
+```bash
+bin/deploy              # default — builds on Fly, no local Docker needed
+bin/deploy --local      # build locally then push
+bin/deploy --no-release # skip db:prepare release command
+```
+
+The script automatically flushes any staged secrets (`fly secrets deploy`) before
+deploying the image, so new secrets are available at startup without a separate step.
+
+### CI/CD — automatic deploy on merge to main
+
+The `deploy` job in `.github/workflows/ci.yml` runs `bin/deploy` automatically on
+every push to `main`, after `scan_ruby`, `lint`, and `test` all pass. It requires
+the `FLY_API_TOKEN` GitHub Actions secret to be set.
+
+- Do **not** add a separate deploy step or call `fly deploy` in CI — the job already exists.
+- Do **not** skip `needs: [scan_ruby, lint, test]` — all checks must pass before deploy.
+
+### Infrastructure — what already exists
+
+| Resource | Name | Notes |
+|----------|------|-------|
+| Fly app | `opensop` | Do not create a new app |
+| Postgres | `opensop-db` | Already attached — do NOT run `fly postgres create` |
+| Secrets | See `fly secrets list` | Set via `fly secrets set KEY=value`, then `bin/deploy` flushes them |
+
+### Migrations
+
+`db:prepare` runs automatically as the Fly release command (configured in `fly.toml`).
+Never add a separate migration step to CI or the deploy script.
+
+---
+
 ## Core Responsibilities
 
 1. **Deployment**: Configure and optimize deployment pipelines
