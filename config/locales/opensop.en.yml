@@ -10,6 +10,30 @@ en:
       instances: "Instances"
       metrics: "Metrics"
       new_process: "+ New Process"
+      schedule: "Schedule"
+      agents: "Agents"
+      costs: "Costs"
+      templates: "Templates"
+      webhooks: "Webhooks"
+      api: "API & SDK"
+      workspace: "Workspace"
+      library: "Library"
+      jump_to_anything: "Jump to anything…"
+
+    sidebar:
+      api_authenticated: "api · authenticated"
+      api_no_token: "api · no token"
+      workspace_label: "workspace · %{name}"
+
+    activity:
+      title: "Activity"
+      live: "live"
+      tabs:
+        feed: "Feed"
+        agents: "Agents"
+        up_next: "Up next"
+      empty: "No activity yet."
+      no_actor: "system"
 
     common:
       "yes": "Yes"
@@ -75,6 +99,23 @@ en:
         required_tag: "required"
         optional_tag: "optional"
       summary_line: "%{in_flight} in flight • %{completed} completed • %{failed} failed"
+      tree:
+        all: "All processes"
+        pinned: "Pinned"
+        smart_views: "Smart views"
+        filter_placeholder: "Filter…"
+        breadcrumb_root: "workspace"
+        ungrouped: "Ungrouped"
+      summary:
+        count_processes:
+          one:   "1 process"
+          other: "%{count} processes"
+        runs_24h: "%{count} runs / 24h"
+        in_flight_count: "%{count} in flight"
+      list:
+        runs_label: "runs"
+        mtd_label: "mtd"
+        owner_label: "owner"
 
     instances:
       title: "Instances"

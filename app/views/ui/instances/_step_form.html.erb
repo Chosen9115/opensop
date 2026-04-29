@@ -4,45 +4,44 @@
 <% mode ||= :inputs %>
 <% outputs_schema ||= (step_definition && step_definition["outputs"]) || [] %>
 
-<% heading_key, heading_pill_class =
-     case mode
-     when :approval  then [t('opensop.steps.form.approval_heading'),  "bg-emerald-100 text-emerald-800 border-emerald-200"]
-     when :escalated then [t('opensop.steps.form.escalated_heading'), "bg-amber-100 text-amber-900 border-amber-300"]
-     else                 [t('opensop.steps.form.waiting_heading'),   "bg-indigo-100 text-indigo-800 border-indigo-200"]
-     end
+<%
+  heading_label, heading_pill_state =
+    case mode
+    when :approval  then [t('opensop.steps.form.approval_heading'),  :ok]
+    when :escalated then [t('opensop.steps.form.escalated_heading'), :warn]
+    else                 [t('opensop.steps.form.waiting_heading'),   :info]
+    end
 %>
 
 <%= form_with url: ui_instance_submit_step_path(instance_id: instance.id, step_id: step.step_id),
               method: :post,
               local: true,
               data: { turbo: false },
-              class: "mt-4 space-y-4 rounded-md border border-slate-200 bg-slate-50 p-4" do |f| %>
+              class: "mt-4 space-y-4 rounded-[3px] border border-border bg-bg-sunken p-4" do |f| %>
 
   <div>
-    <span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold <%= heading_pill_class %>">
-      <%= heading_key %>
-    </span>
+    <%= render PillComponent.new(state: heading_pill_state, label: heading_label) %>
   </div>
 
   <% case mode %>
   <% when :approval %>
-    <p class="text-sm text-slate-700"><%= t('opensop.steps.form.fill_outputs') %></p>
+    <p class="text-[12px] text-fg-muted"><%= t('opensop.steps.form.fill_outputs') %></p>
     <div class="flex items-center gap-2">
       <button type="submit"
               name="outputs[approved]"
               value="true"
-              class="inline-flex items-center rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 cursor-pointer">
+              class="btn-pp btn-pp-primary btn-pp-sm">
         <%= t('opensop.steps.form.approve_button') %>
       </button>
       <button type="submit"
               name="outputs[approved]"
               value="false"
-              class="inline-flex items-center rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-rose-700 cursor-pointer">
+              class="btn-pp btn-pp-ghost btn-pp-sm text-err border-err hover:bg-err-bg">
         <%= t('opensop.steps.form.reject_button') %>
       </button>
     </div>
   <% else %>
-    <p class="text-sm text-slate-700"><%= t('opensop.steps.form.fill_outputs') %></p>
+    <p class="text-[12px] text-fg-muted"><%= t('opensop.steps.form.fill_outputs') %></p>
 
     <% outputs_schema.each do |out| %>
       <% field_name = out["name"] %>
@@ -50,9 +49,9 @@
       <% input_id   = "outputs_#{field_name}" %>
 
       <div>
-        <label for="<%= input_id %>" class="block text-xs font-medium text-slate-700 mb-1">
+        <label for="<%= input_id %>" class="text-[11px] font-medium mb-1 block text-fg">
           <%= field_name %>
-          <span class="ml-1 font-mono text-slate-500 text-[10px]">(<%= field_type %>)</span>
+          <span class="ml-1 font-mono text-fg-faint text-[10px]">(<%= field_type %>)</span>
         </label>
 
         <% case field_type.to_s %>
@@ -63,19 +62,19 @@
                    id="<%= input_id %>"
                    name="outputs[<%= field_name %>]"
                    value="true"
-                   class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 border" />
-            <span class="text-xs text-slate-500"><%= t('opensop.common.yes') %>/<%= t('opensop.common.no') %></span>
+                   class="h-4 w-4 rounded-[3px] border border-border bg-bg text-info focus:border-border-focus focus:outline-none" />
+            <span class="text-[11px] text-fg-muted"><%= t('opensop.common.yes') %>/<%= t('opensop.common.no') %></span>
           </div>
         <% when "number", "integer" %>
           <input type="number"
                  step="any"
                  id="<%= input_id %>"
                  name="outputs[<%= field_name %>]"
-                 class="block w-full rounded-md border-slate-300 border text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 px-2 py-1.5" />
+                 class="w-full rounded-[3px] border border-border bg-bg px-2 py-1 text-[12px] focus:border-border-focus focus:outline-none" />
         <% when "enum" %>
           <select id="<%= input_id %>"
                   name="outputs[<%= field_name %>]"
-                  class="block w-full rounded-md border-slate-300 border text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 px-2 py-1.5">
+                  class="w-full rounded-[3px] border border-border bg-bg px-2 py-1 text-[12px] focus:border-border-focus focus:outline-none">
             <option value=""></option>
             <% Array(out["values"]).each do |v| %>
               <option value="<%= v %>"><%= v %></option>
@@ -86,24 +85,24 @@
                     name="outputs[<%= field_name %>]"
                     rows="4"
                     placeholder='{"key": "value"}'
-                    class="block w-full rounded-md border-slate-300 border text-sm font-mono shadow-sm focus:border-indigo-500 focus:ring-indigo-500 px-2 py-1.5"></textarea>
-          <p class="mt-1 text-[11px] text-slate-500">JSON</p>
+                    class="w-full rounded-[3px] border border-border bg-bg px-2 py-1 text-[12px] font-mono focus:border-border-focus focus:outline-none"></textarea>
+          <p class="mt-1 text-fg-faint text-[10px]">JSON</p>
         <% else %>
           <input type="text"
                  id="<%= input_id %>"
                  name="outputs[<%= field_name %>]"
-                 class="block w-full rounded-md border-slate-300 border text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 px-2 py-1.5" />
+                 class="w-full rounded-[3px] border border-border bg-bg px-2 py-1 text-[12px] focus:border-border-focus focus:outline-none" />
         <% end %>
 
         <% if out["description"].present? %>
-          <p class="mt-1 text-[11px] text-slate-500"><%= out["description"] %></p>
+          <p class="mt-1 text-fg-faint text-[10px]"><%= out["description"] %></p>
         <% end %>
       </div>
     <% end %>
 
     <div class="flex items-center gap-2 pt-2">
       <%= f.submit t('opensop.steps.form.submit_button'),
-                   class: "inline-flex items-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 cursor-pointer" %>
+                   class: "btn-pp btn-pp-primary btn-pp-sm cursor-pointer" %>
     </div>
   <% end %>
 <% end %>

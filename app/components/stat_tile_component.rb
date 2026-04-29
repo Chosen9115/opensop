@@ -8,25 +8,19 @@ class StatTileComponent < ViewComponent::Base
     @hint = hint
   end
 
-  attr_reader :label, :value, :hint
+  attr_reader :label, :value, :hint, :tone
 
-  def top_border_class
-    case @tone
-    when :running then "border-t-indigo-500"
-    when :waiting then "border-t-amber-500"
-    when :completed then "border-t-emerald-500"
-    when :failed then "border-t-rose-500"
-    else "border-t-slate-300"
-    end
+  def show_dot?
+    @tone != :default
   end
 
-  def value_class
+  def tone_dot_class
     case @tone
-    when :running then "text-indigo-700"
-    when :waiting then "text-amber-700"
-    when :completed then "text-emerald-700"
-    when :failed then "text-rose-700"
-    else "text-slate-900"
+    when :running then "bg-info"
+    when :waiting then "bg-warn"
+    when :completed then "bg-ok"
+    when :failed then "bg-err"
+    else "bg-neutral"
     end
   end
 end
