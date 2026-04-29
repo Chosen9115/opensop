@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Deploy OpenSOP to Fly.io.
+#
+# Usage:
+#   bin/deploy              — build on Fly (no local Docker needed)
+#   bin/deploy --local      — build locally then push
+#   bin/deploy --no-release — skip db:prepare release command
+#
+# Secrets staged via `fly secrets set` but not yet deployed are pushed
+# automatically before the image deploy so they're live at startup.
+
+APP="opensop"
+REMOTE_ONLY=true
+RELEASE=true
+
+for arg in "$@"; do
+  case $arg in
+    --local)      REMOTE_ONLY=false ;;
+    --no-release) RELEASE=false ;;
+    *) echo "Unknown option: $arg"; exit 1 ;;
+  esac
+done
+
+echo "==> Deploying $APP to Fly.io"
+echo ""
+
+# Push any secrets that are staged but not yet deployed.
+STAGED=$(fly secrets list --app "$APP" 2>/dev/null | grep -c "Staged" || true)
+if [ "$STAGED" -gt 0 ]; then
+  echo "==> Flushing $STAGED staged secret(s)"
+  fly secrets deploy --app "$APP"
+  echo ""
+fi
+
+# Build flags.
+FLAGS=(--app "$APP")
+$REMOTE_ONLY && FLAGS+=(--remote-only)
+$RELEASE     || FLAGS+=(--no-release-command)
+
+echo "==> Running fly deploy ${FLAGS[*]}"
+fly deploy "${FLAGS[@]}"
+
+echo ""
+echo "==> Done. App status:"
+fly status --app "$APP"
