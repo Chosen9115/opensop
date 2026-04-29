@@ -185,7 +185,7 @@ module Opensop
 
       def detect_variant(loop_block)
         %w[for_each repeat_until while].each do |key|
-          return [key, loop_block[key]] if loop_block.key?(key)
+          return [ key, loop_block[key] ] if loop_block.key?(key)
         end
         # Parser already enforces this — defensive only.
         raise StepFailure, "loop step missing for_each / repeat_until / while"
@@ -349,7 +349,7 @@ module Opensop
             acc[name] = value
           else
             # Build a single-field schema slice and ask the resolver.
-            single = { "inputs" => [field] }
+            single = { "inputs" => [ field ] }
             begin
               resolved = resolver.resolve(single)
               acc[name] = resolved[name]

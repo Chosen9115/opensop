@@ -15,7 +15,7 @@ class CreateSopSchedules < ActiveRecord::Migration[8.1]
       t.integer :failure_count, null: false, default: 0
       t.timestamps
     end
-    add_index :sop_schedules, [:enabled, :next_run_at]
+    add_index :sop_schedules, [ :enabled, :next_run_at ]
     add_index :sop_schedules, :process_name
   end
 end

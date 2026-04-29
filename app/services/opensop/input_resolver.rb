@@ -93,8 +93,8 @@ module Opensop
     #   "steps.x.outputs.y[*].label" -> ["steps.x.outputs.y", "[*].label"]
     def split_selector(ref)
       idx = ref.index("[")
-      return [ref, nil] unless idx
-      [ref[0...idx], ref[idx..]]
+      return [ ref, nil ] unless idx
+      [ ref[0...idx], ref[idx..] ]
     end
 
     # Applies a parsed collection selector to `value`. `original_ref` is used
