@@ -1,16 +1,27 @@
 module Ui
-  # GET /processes       — list all active process definitions
-  # GET /processes/:name — read-only view of a definition (optional ?version=)
+  # GET  /processes            — list all active process definitions (latest version per name)
+  # GET  /processes/:name      — read-only view of a definition (optional ?version=)
+  # POST /processes/:name/runs — start a new instance (Trigger run)
   class ProcessesController < ApplicationController
     UNGROUPED_KEY = "Ungrouped".freeze
     DEFAULT_UNIT_KEY = "General".freeze
 
     def index
-      @processes = Sop::Process.published.order(:name)
+      all_published = Sop::Process.published.order(:name)
 
-      # Precompute counts per process for the view.
+      # Keep only the latest version per process name (Fix #1).
+      # version_key uses Gem::Version for semver-aware comparison.
+      by_name = all_published.group_by(&:name)
+      @processes = by_name.map do |_name, versions|
+        versions.max_by { |p| version_key(p.version) }
+      end.sort_by(&:name)
+
+      # Build a lookup for prior-version counts (Fix #1 affordance).
+      @prior_version_counts = by_name.transform_values { |versions| versions.size - 1 }
+
+      # Precompute counts per process for the view (Fix #2 — add :total bucket).
       counts = Sop::Instance.group(:process_name, :state).count
-      @counts = Hash.new { |h, k| h[k] = { in_flight: 0, completed: 0, failed: 0 } }
+      @counts = Hash.new { |h, k| h[k] = { in_flight: 0, completed: 0, failed: 0, total: 0 } }
       counts.each do |(name, state), count|
         bucket =
           case state
@@ -20,6 +31,7 @@ module Ui
           else next
           end
         @counts[name][bucket] += count
+        @counts[name][:total] += count
       end
 
       # Decorate each process with its derived dept/unit so the view stays clean.
@@ -79,6 +91,30 @@ module Ui
       @definition = @process.definition || {}
       @process_block = @definition["process"] || {}
       @versions = Sop::Process.where(name: params[:name]).order(:version).pluck(:version)
+    end
+
+    def start_run
+      scope = Sop::Process.published.where(name: params[:name])
+      process = scope.to_a.max_by { |p| version_key(p.version) }
+      raise ActiveRecord::RecordNotFound, "process #{params[:name].inspect} not found" unless process
+
+      raw_inputs = params[:inputs] || {}
+      inputs =
+        if raw_inputs.respond_to?(:to_unsafe_h)
+          raw_inputs.to_unsafe_h.deep_stringify_keys
+        else
+          raw_inputs.to_h.deep_stringify_keys
+        end
+
+      instance = Opensop::InstanceExecutor.start(
+        process: process,
+        inputs: inputs,
+        metadata: { actor: "ui" }
+      )
+      redirect_to ui_instance_path(instance), notice: t("opensop.flash.run_started")
+    rescue Opensop::InstanceExecutor::InvalidInputs => e
+      redirect_to ui_process_path(name: params[:name]),
+                  alert: t("opensop.errors.invalid_inputs", message: e.message)
     end
 
     private
