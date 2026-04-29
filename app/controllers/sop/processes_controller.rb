@@ -16,6 +16,7 @@ module Sop
       end
 
       process = Opensop::Registry.load_yaml(raw.to_s, source: "api:#{current_actor}")
+      status_code = process.saved_changes? ? :created : :ok
 
       render json: {
         name:        process.name,
@@ -24,7 +25,7 @@ module Sop
         owner:       process.owner,
         steps:       process.definition.dig("process", "steps")&.map { |s| s["id"] },
         status:      process.status
-      }, status: :created
+      }, status: status_code
     end
 
     private

@@ -8,8 +8,10 @@ module Sop
       steps = Sop::Step
                 .active
                 .where(sub_state: "waiting_for_worker")
-                .includes(:instance)
+                .eager_load(:instance)
                 .order(:created_at)
+
+      steps = steps.where(sop_instances: { process_name: params[:process_name] }) if params[:process_name].present?
 
       render json: {
         steps: steps.map { |step|

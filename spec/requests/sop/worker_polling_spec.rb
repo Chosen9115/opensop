@@ -45,6 +45,26 @@ RSpec.describe "GET /sop/steps/pending", type: :request do
     end
   end
 
+  context "with ?process_name= filter" do
+    before do
+      Opensop::InstanceExecutor.start(process: process, inputs: valid_inputs)
+    end
+
+    it "returns only steps for the specified process" do
+      get "/sop/steps/pending", params: { process_name: "appsignal-responder" }
+
+      expect(response).to have_http_status(:ok)
+      expect(json[:steps]).to all(include(process_name: "appsignal-responder"))
+    end
+
+    it "returns empty list when process_name does not match" do
+      get "/sop/steps/pending", params: { process_name: "nonexistent-process" }
+
+      expect(response).to have_http_status(:ok)
+      expect(json[:steps]).to eq([])
+    end
+  end
+
   context "after a worker submits a step" do
     it "step is no longer returned by the pending endpoint" do
       instance = Opensop::InstanceExecutor.start(process: process, inputs: valid_inputs)

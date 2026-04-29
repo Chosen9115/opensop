@@ -48,11 +48,11 @@ RSpec.describe "POST /sop/processes/register", type: :request do
       expect(json[:status]).to eq("active")
     end
 
-    it "is idempotent — re-registering the same YAML returns 201" do
+    it "is idempotent — re-registering the same YAML returns 200" do
       post "/sop/processes/register", params: { yaml: valid_yaml }
       post "/sop/processes/register", params: { yaml: valid_yaml }
 
-      expect(response).to have_http_status(:created)
+      expect(response).to have_http_status(:ok)
       expect(Sop::Process.where(name: "smoke-register").count).to eq(1)
     end
 
