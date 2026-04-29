@@ -1,0 +1,123 @@
+opensop: "0.2"
+
+# PRIVATE — Coba fork only. Never pushed to Chosen9115/opensop.
+#
+# Post-meeting workflow for consult bookings. Started AFTER a Cal.com
+# meeting has actually happened (manually for now; a Hermes routine
+# polling Circleback for matched-but-not-yet-processed meetings can
+# automate the trigger later).
+#
+# Mixed-driver design (Carlos, 2026-04-28): step 1 runs server-side via
+# the existing DenchClaw bridge webhook — no LLM key needed there. Steps
+# 2 and 3 are form-steps that Hermes submits to (B-mode audit). Hermes
+# is the only place the Anthropic key lives, so the LLM call happens
+# there; OpenSOP records the result. This avoids needing ANTHROPIC_API_KEY
+# in the OpenSOP Fly deploy.
+#
+# Flow:
+#   1. enrich  (webhook → DenchClaw bridge → CLI; server-side)
+#   2. propose-outcome (form; Hermes calls Sonnet then submits)
+#   3. route   (form; Hermes computes deterministic mapping, submits)
+
+process:
+  name: consult-meeting-outcome
+  version: "1.1"
+  description: "Post-meeting outcome — Circleback enrichment + LLM proposal + auto-route. No forms."
+  owner: growth-team
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: attendee_email
+      type: string
+      format: email
+      required: true
+    - name: attendee_name
+      type: string
+    - name: meeting_time
+      type: string
+      required: true
+      description: "ISO 8601 — used to find the matching Circleback record"
+    - name: parent_consult_request_id
+      type: string
+      description: "Optional cross-link to the consult-request instance that created this lead"
+    - name: hermes_invocation_id
+      type: string
+
+  outputs:
+    - name: matched
+      from: steps.enrich.outputs.matched
+    - name: attended
+      from: steps.propose-outcome.outputs.attended
+    - name: qualified
+      from: steps.propose-outcome.outputs.qualified
+    - name: routed_to
+      from: steps.route.outputs.routed_to
+
+  steps:
+    # ─── 1. Pull the matched Circleback meeting via the bridge ──────
+    - id: enrich
+      name: "Find Circleback meeting matching attendee_email + meeting_time"
+      type: webhook
+      description: "POST to DenchClaw bridge /circleback/match. Bridge shells the circleback CLI on Carlos's laptop (where the OAuth token lives), returns the full meeting record."
+      inputs:
+        - name: attendee_email
+          from: process.inputs.attendee_email
+        - name: meeting_time
+          from: process.inputs.meeting_time
+      webhook:
+        method: POST
+        url: "${env.DENCHCLAW_BRIDGE_URL}/circleback/match"
+        headers:
+          Authorization: "Bearer ${env.DENCHCLAW_BRIDGE_TOKEN}"
+          Content-Type: "application/json"
+        response_mode: sync
+      outputs:
+        - { name: matched, type: boolean }
+        - { name: meeting_id, type: string }
+        - { name: name, type: string }
+        - { name: created_at, type: string }
+        - { name: duration_seconds, type: number }
+        - { name: url, type: string }
+        - { name: ical_uid, type: string }
+        - { name: attendees, type: object, description: "Array of {name, email}" }
+        - { name: notes, type: string }
+        - { name: action_items, type: object, description: "Array of {assignee, text, status, ...}" }
+        - { name: insights, type: object }
+      timeout: 30s
+
+    # ─── 2. LLM extracts the outcome fields (Hermes-driven form step) ─
+    - id: propose-outcome
+      name: "Sonnet judges meeting outcome from Circleback bundle"
+      type: form
+      description: "Hermes calls Sonnet with the Circleback bundle + Cal.com context, parses the JSON response, then submits the structured outcome here. Form step (not llm) because the Anthropic key lives in Hermes, not OpenSOP."
+      outputs:
+        - { name: attended, type: boolean }
+        - { name: qualified, type: enum, values: [yes-hot, yes-nurture, no-fit, no-show] }
+        - { name: decision_volume, type: enum, values: ["<50k", "50k-250k", "250k-1m", "1m-5m", ">5m", "unknown"] }
+        - { name: notes, type: string }
+        - { name: next_step, type: enum, values: [start-onboarding, schedule-follow-up, send-proposal, dead, nurture] }
+        - { name: rationale, type: string }
+        - { name: confidence, type: number }
+        - { name: prompt_used, type: string, description: "Verbatim prompt sent to Sonnet — frozen at fire time" }
+        - { name: model, type: string }
+        - { name: usage, type: object, description: "input_tokens, output_tokens, cost_usd" }
+        - { name: raw_response, type: string, description: "Sonnet's full text response, pre-parse" }
+      timeout: 5m
+
+    # ─── 3. Auto-route based on the proposed outcome (Hermes-driven) ─
+    - id: route
+      name: "Map outcome to routing stage"
+      type: form
+      description: "Deterministic mapping from propose-outcome.next_step → routed_to label, computed and submitted by Hermes. Kept as a discrete step so the audit trail shows the routing decision separately from the LLM's proposal."
+      outputs:
+        - { name: routed_to, type: enum, values: [onboarding, nurture, follow-up, proposal, dead], required: true }
+        - { name: rationale, type: string }
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#growth-alerts"
+
+  tags: [growth, consult, post-meeting, circleback, llm]
