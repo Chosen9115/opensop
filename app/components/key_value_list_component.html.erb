@@ -1,12 +1,18 @@
 <% if empty? %>
-  <p class="text-sm text-slate-500 italic"><%= empty_label %></p>
+  <div class="rounded-[3px] border border-border bg-bg-sunken p-4 text-center text-[12px] text-fg-muted"><%= empty_label %></div>
 <% else %>
-  <dl class="divide-y divide-slate-100 rounded-md border border-slate-200 overflow-hidden text-sm">
-    <% entries.each_with_index do |(key, value), i| %>
-      <div class="grid grid-cols-3 gap-2 px-4 py-2 <%= i.odd? ? 'bg-slate-50' : 'bg-white' %>">
-        <dt class="col-span-1 font-medium text-slate-600 break-words"><%= key %></dt>
-        <dd class="col-span-2 text-slate-900 font-mono text-xs break-words whitespace-pre-wrap"><%= format_value(value) %></dd>
+  <div class="rounded-[3px] border border-border bg-bg overflow-hidden">
+    <% entries.each do |key, value| %>
+      <div class="grid grid-cols-[180px_1fr] gap-3 px-4 py-2 border-b border-border last:border-b-0 hover:bg-bg-hover">
+        <div class="font-mono text-[11px] text-fg-muted break-all"><%= key %></div>
+        <div class="min-w-0">
+          <% if complex?(value) %>
+            <pre class="font-mono text-[11px] text-fg bg-bg-sunken border border-border rounded-[3px] p-2 overflow-x-auto whitespace-pre"><%= format_value(value) %></pre>
+          <% else %>
+            <div class="text-[12px] text-fg break-all"><%= format_value(value) %></div>
+          <% end %>
+        </div>
       </div>
     <% end %>
-  </dl>
+  </div>
 <% end %>

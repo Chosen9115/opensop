@@ -22,13 +22,13 @@ class StepStateIconComponent < ViewComponent::Base
 
   def color_class
     case variant
-    when :completed then "text-emerald-500"
-    when :failed then "text-rose-500"
-    when :skipped then "text-slate-400"
-    when :waiting then "text-amber-500"
-    when :warning then "text-amber-600"
-    when :running then "text-indigo-500"
-    else "text-slate-300"
+    when :completed then "text-ok"
+    when :failed then "text-err"
+    when :skipped then "text-fg-faint"
+    when :waiting then "text-warn"
+    when :warning then "text-warn"
+    when :running then "text-info animate-pp-pulse"
+    else "text-fg-faint"
     end
   end
 end

@@ -25,12 +25,12 @@ documents = payload["documents"]
 
 result =
   if business_record.nil? || (business_record.respond_to?(:empty?) && business_record.empty?)
-    { "verification_result" => "invalid", "missing_documents" => ["business_record"] }
+    { "verification_result" => "invalid", "missing_documents" => [ "business_record" ] }
   else
     missing = []
     if documents.is_a?(Array) && documents.empty?
       # Documents key was present but empty — treat as incomplete rather than invalid.
-      { "verification_result" => "incomplete", "missing_documents" => ["supporting_documents"] }
+      { "verification_result" => "incomplete", "missing_documents" => [ "supporting_documents" ] }
     else
       { "verification_result" => "complete", "missing_documents" => missing }
     end

@@ -3,7 +3,7 @@ class Sop::Step < ApplicationRecord
 
   STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait llm loop].freeze
   STATES = %w[pending active completed failed skipped].freeze
-  SUB_STATES = %w[running waiting_for_input waiting_for_callback waiting_for_approval escalated].freeze
+  SUB_STATES = %w[running waiting_for_input waiting_for_callback waiting_for_approval escalated waiting_for_worker].freeze
 
   belongs_to :instance,
              class_name: "Sop::Instance",
@@ -43,6 +43,6 @@ class Sop::Step < ApplicationRecord
   scope :ordered, -> { order(:position) }
   scope :active, -> { where(state: "active") }
   scope :waiting, -> {
-    where(sub_state: %w[waiting_for_input waiting_for_callback waiting_for_approval escalated])
+    where(sub_state: %w[waiting_for_input waiting_for_callback waiting_for_approval escalated waiting_for_worker])
   }
 end

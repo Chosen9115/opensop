@@ -101,10 +101,9 @@ RSpec.describe Opensop::DefinitionParser do
           .to raise_error(described_class::InvalidDefinition, /unknown step type/)
       end
 
-      it "rejects an automated step without `run:`" do
+      it "accepts an automated step without `run:` (parks at waiting_for_worker)" do
         hash = minimal_process("steps" => [ { "id" => "a", "name" => "A", "type" => "automated" } ])
-        expect { described_class.call(hash) }
-          .to raise_error(described_class::InvalidDefinition, /requires a `run` path/)
+        expect { described_class.call(hash) }.not_to raise_error
       end
 
       it "rejects a webhook step missing the webhook block" do
@@ -303,7 +302,7 @@ RSpec.describe Opensop::DefinitionParser do
       end
 
       it "accepts a valid llm step and applies defaults" do
-        result = described_class.call(v02_process(steps: [valid_llm_step]))
+        result = described_class.call(v02_process(steps: [ valid_llm_step ]))
         expect(result.ok?).to be true
         step = result.value["process"]["steps"].first
         expect(step["tools"]).to eq([])
@@ -315,13 +314,13 @@ RSpec.describe Opensop::DefinitionParser do
         step = valid_llm_step
         step.delete("prompt")
         step["prompt_file"] = "prompts/classify.md"
-        result = described_class.call(v02_process(steps: [step]))
+        result = described_class.call(v02_process(steps: [ step ]))
         expect(result.ok?).to be true
       end
 
       it "rejects an llm step with both prompt and prompt_file" do
         step = valid_llm_step("prompt_file" => "prompts/classify.md")
-        expect { described_class.call(v02_process(steps: [step])) }
+        expect { described_class.call(v02_process(steps: [ step ])) }
           .to raise_error(
             described_class::InvalidDefinition,
             /llm step 'classify' requires either prompt: or prompt_file:, not both/
@@ -331,7 +330,7 @@ RSpec.describe Opensop::DefinitionParser do
       it "rejects an llm step with neither prompt nor prompt_file" do
         step = valid_llm_step
         step.delete("prompt")
-        expect { described_class.call(v02_process(steps: [step])) }
+        expect { described_class.call(v02_process(steps: [ step ])) }
           .to raise_error(
             described_class::InvalidDefinition,
             /llm step 'classify' requires either prompt: or prompt_file:, not both/
@@ -341,7 +340,7 @@ RSpec.describe Opensop::DefinitionParser do
       it "rejects an llm step missing expected_output_schema" do
         step = valid_llm_step
         step.delete("expected_output_schema")
-        expect { described_class.call(v02_process(steps: [step])) }
+        expect { described_class.call(v02_process(steps: [ step ])) }
           .to raise_error(described_class::InvalidDefinition, /expected_output_schema/)
       end
 

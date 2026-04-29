@@ -1,11 +1,13 @@
-<div class="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
-  <div class="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-    <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l2.25 6a1.5 1.5 0 001.4 1h9.2a1.5 1.5 0 001.4-1l2.25-6M3.75 13.5V9a2.25 2.25 0 012.25-2.25h12A2.25 2.25 0 0120.25 9v4.5M3.75 13.5h4.5l1.125 2.25h4.5l1.125-2.25h4.5" />
-    </svg>
-  </div>
-  <h3 class="text-sm font-semibold text-slate-900"><%= title %></h3>
+<div class="rounded-[3px] border border-border bg-bg-sunken p-8 text-center">
+  <% if icon %>
+    <div class="mb-3 flex justify-center text-fg-faint">
+      <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M2 9l1.5 4a1 1 0 00.94.67h7.12A1 1 0 0012.5 13L14 9M2 9V6a1.5 1.5 0 011.5-1.5h9A1.5 1.5 0 0114 6v3M2 9h3l.75 1.5h4.5L11 9h3" />
+      </svg>
+    </div>
+  <% end %>
+  <h3 class="text-[13px] font-semibold text-fg"><%= title %></h3>
   <% if description.present? %>
-    <p class="mt-1 text-sm text-slate-500"><%= description %></p>
+    <p class="mt-1 text-[12px] text-fg-muted"><%= description %></p>
   <% end %>
 </div>

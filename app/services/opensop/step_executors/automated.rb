@@ -18,7 +18,7 @@ module Opensop
 
       def call(step, instance, definition)
         run_path = definition["run"]
-        raise StepFailure, "automated step is missing `run:` path" if run_path.blank?
+        return { waiting: "waiting_for_worker" } if run_path.blank?
 
         resolved = resolve_script_path(run_path)
         unless File.exist?(resolved)
@@ -91,11 +91,11 @@ module Opensop
       def build_command(path)
         ext = File.extname(path).downcase
         case ext
-        when ".rb"  then ["ruby", path]
-        when ".py"  then ["python3", path]
-        when ".js"  then ["node", path]
-        when ".sh"  then ["bash", path]
-        else [path]
+        when ".rb"  then [ "ruby", path ]
+        when ".py"  then [ "python3", path ]
+        when ".js"  then [ "node", path ]
+        when ".sh"  then [ "bash", path ]
+        else [ path ]
         end
       end
 

@@ -55,7 +55,6 @@ RUN bundle exec bootsnap precompile -j 1 app/ lib/
 # lets the app boot during build without a real secret.
 RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
 
-
 # Final stage for app image
 FROM base
 
