@@ -325,3 +325,59 @@ en:
           heading: "Start an instance"
         submit:
           heading: "Submit a step"
+
+    metrics:
+      title: "Metrics"
+      subtitle: "Process throughput and success — last 24h"
+      tiles:
+        started: "Started"
+        completed: "Completed"
+        failed: "Failed"
+        completion_rate: "Completion rate"
+        started_hint: "Instances created in window."
+        completed_hint: "Reached the completed state."
+        failed_hint: "Reached the failed state."
+        completion_rate_hint: "Completed / (completed + failed)."
+      duration:
+        title: "Instance duration"
+        avg: "Average"
+        p95: "P95"
+        avg_hint: "Mean of completed instances in window."
+        p95_hint: "95th percentile — long-tail check."
+      per_process:
+        title: "Per-process throughput"
+        process: "Process"
+        version: "Version"
+        started: "Started"
+        completed: "Completed"
+        failed: "Failed"
+        in_flight: "In flight"
+        empty_title: "No process activity in the last 24h"
+        empty_description: "Process throughput appears here once instances are started."
+      step_health:
+        title: "Step health (current)"
+        pending: "Pending"
+        active: "Active"
+        completed: "Completed"
+        failed: "Failed"
+        skipped: "Skipped"
+
+    agents:
+      title: "Agents"
+      subtitle: "Models doing work for you — last 30 days"
+      empty_title: "No agent activity yet"
+      empty_description: "Once your processes start making LLM calls, each model will appear here with its usage stats."
+      tiles:
+        models: "Models in use"
+        calls: "Total calls"
+        spend: "Total spend"
+        window: "last 30 days"
+      card:
+        last_used: "last used"
+        calls: "Calls"
+        success_rate: "Success"
+        cost: "Cost"
+        avg_confidence: "Confidence"
+        tokens_in: "in"
+        tokens_out: "out"
+        errored: "errored"
