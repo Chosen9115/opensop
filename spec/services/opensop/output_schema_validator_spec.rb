@@ -97,10 +97,10 @@ RSpec.describe Opensop::OutputSchemaValidator do
           {
             "intent" => "question",
             "confidence" => 0.92,
-            "nested" => { "flag" => true, "tags" => ["foo", "bar"] }
+            "nested" => { "flag" => true, "tags" => [ "foo", "bar" ] }
           }
         )
-        expect(coerced["nested"]).to eq("flag" => true, "tags" => ["foo", "bar"])
+        expect(coerced["nested"]).to eq("flag" => true, "tags" => [ "foo", "bar" ])
       end
 
       it "produces dotted paths for nested errors" do
@@ -109,7 +109,7 @@ RSpec.describe Opensop::OutputSchemaValidator do
           {
             "intent" => "question",
             "confidence" => 0.92,
-            "nested" => { "flag" => "yes", "tags" => ["foo", 42] }
+            "nested" => { "flag" => "yes", "tags" => [ "foo", 42 ] }
           }
         )
         expect(ok).to be false
@@ -130,15 +130,15 @@ RSpec.describe Opensop::OutputSchemaValidator do
     context "arrays" do
       it "validates an array of strings" do
         validator = described_class.new("tags" => "array[string]")
-        coerced = validator.validate!("tags" => ["a", "b", "c"])
-        expect(coerced).to eq("tags" => ["a", "b", "c"])
+        coerced = validator.validate!("tags" => [ "a", "b", "c" ])
+        expect(coerced).to eq("tags" => [ "a", "b", "c" ])
       end
 
       it "errors on the offending index for a bad element" do
         validator = described_class.new("tags" => "array[string]")
-        ok, errors, _ = validator.validate("tags" => ["a", 42, "c"])
+        ok, errors, _ = validator.validate("tags" => [ "a", 42, "c" ])
         expect(ok).to be false
-        expect(errors).to eq(["tags[1]: expected string, got 42"])
+        expect(errors).to eq([ "tags[1]: expected string, got 42" ])
       end
 
       it "validates an array of nested objects via the [<hash>] form" do
@@ -162,7 +162,7 @@ RSpec.describe Opensop::OutputSchemaValidator do
       end
 
       it "reports per-item errors with bracketed paths in arrays of objects" do
-        schema = { "items" => [{ "label" => "string", "score" => "number" }] }
+        schema = { "items" => [ { "label" => "string", "score" => "number" } ] }
         validator = described_class.new(schema)
         ok, errors, _ = validator.validate(
           "items" => [
@@ -196,7 +196,7 @@ RSpec.describe Opensop::OutputSchemaValidator do
         validator = described_class.new("a" => "string")
         expect { validator.validate!({}) }
           .to raise_error(described_class::Invalid) do |e|
-            expect(e.errors).to eq(["a: missing required key"])
+            expect(e.errors).to eq([ "a: missing required key" ])
           end
       end
     end
@@ -246,7 +246,7 @@ RSpec.describe Opensop::OutputSchemaValidator do
       it "raises SchemaError when an array literal has more than one element" do
         expect {
           described_class.new(
-            "items" => [{ "a" => "string" }, { "b" => "string" }]
+            "items" => [ { "a" => "string" }, { "b" => "string" } ]
           )
         }.to raise_error(described_class::SchemaError, /array literal must have exactly one element/)
       end

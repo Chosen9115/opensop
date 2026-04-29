@@ -1,0 +1,122 @@
+<aside class="flex flex-col overflow-hidden border-l border-border bg-bg-sunken"
+       data-controller="activity-rail">
+  <%# Head %>
+  <div class="flex items-center justify-between border-b border-border px-4 py-3.5 text-[12px] font-medium">
+    <span><%= I18n.t("opensop.activity.title", default: "Activity") %></span>
+    <span class="pp-pill bg-ok-bg text-ok">
+      <span class="pp-pill-dot bg-ok animate-pp-pulse"></span><%= I18n.t("opensop.activity.live", default: "live") %>
+    </span>
+  </div>
+
+  <%# Tab strip %>
+  <div class="flex gap-0 border-b border-border bg-bg-sunken px-3" role="tablist">
+    <button type="button"
+            data-activity-rail-target="tab"
+            data-activity-rail-key-param="feed"
+            data-action="click->activity-rail#switch"
+            role="tab" aria-selected="true"
+            class="cursor-pointer border-b-2 border-fg px-2.5 py-2 font-mono text-[11px] text-fg hover:text-fg">
+      <%= I18n.t("opensop.activity.tabs.feed", default: "Feed") %>
+    </button>
+    <button type="button"
+            data-activity-rail-target="tab"
+            data-activity-rail-key-param="agents"
+            data-action="click->activity-rail#switch"
+            role="tab" aria-selected="false"
+            class="cursor-pointer border-b-2 border-transparent px-2.5 py-2 font-mono text-[11px] text-fg-muted hover:text-fg">
+      <%= I18n.t("opensop.activity.tabs.agents", default: "Agents") %>
+    </button>
+    <button type="button"
+            data-activity-rail-target="tab"
+            data-activity-rail-key-param="up_next"
+            data-action="click->activity-rail#switch"
+            role="tab" aria-selected="false"
+            class="cursor-pointer border-b-2 border-transparent px-2.5 py-2 font-mono text-[11px] text-fg-muted hover:text-fg">
+      <%= I18n.t("opensop.activity.tabs.up_next", default: "Up next") %>
+    </button>
+  </div>
+
+  <%# Feed panel ─ Sop::Event %>
+  <section data-activity-rail-target="panel" data-key="feed" role="tabpanel"
+           class="flex-1 overflow-y-auto">
+    <% if feed_empty? %>
+      <div class="flex h-full items-center justify-center px-6 py-12 text-center">
+        <p class="font-mono text-[11px] text-fg-faint">
+          <%= I18n.t("opensop.activity.empty", default: "No activity yet.") %>
+        </p>
+      </div>
+    <% else %>
+      <div class="px-4">
+        <% events.each do |event| %>
+          <div class="grid grid-cols-[8px_1fr] gap-2 items-start text-[11px] py-1.5 border-b border-border last:border-b-0">
+            <div class="mt-1 h-2 w-2 rounded-full <%= dot_class_for(event) %> <%= dot_pulse_class(event) %>"></div>
+            <div class="min-w-0">
+              <div class="truncate">
+                <span class="font-mono text-fg"><%= actor_for(event) %></span>
+                <span class="text-fg-muted"> <%= verb_for(event) %> </span>
+                <span class="font-mono text-fg"><%= target_for(event) %></span>
+              </div>
+              <div class="text-fg-faint text-[10px] font-mono"><%= time_ago_for(event.created_at) %> ago</div>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
+  </section>
+
+  <%# Agents panel ─ Sop::LlmCall %>
+  <section data-activity-rail-target="panel" data-key="agents" role="tabpanel"
+           class="flex-1 overflow-y-auto" hidden>
+    <% if agents_empty? %>
+      <div class="flex h-full items-center justify-center px-6 py-12 text-center">
+        <p class="font-mono text-[11px] text-fg-faint">
+          <%= I18n.t("opensop.activity.empty_agents", default: "No agent calls yet.") %>
+        </p>
+      </div>
+    <% else %>
+      <div class="px-4">
+        <% llm_calls.each do |call| %>
+          <div class="grid grid-cols-[8px_1fr] gap-2 items-start text-[11px] py-1.5 border-b border-border last:border-b-0">
+            <div class="mt-1 h-2 w-2 rounded-full <%= llm_call_dot_class(call) %> <%= llm_call_dot_pulse_class(call) %>"></div>
+            <div class="min-w-0">
+              <div class="truncate">
+                <span class="font-mono text-fg"><%= call.model %></span>
+                <span class="text-fg-muted"> <%= call.status %> </span>
+                <span class="font-mono text-fg"><%= llm_call_target_for(call) %></span>
+              </div>
+              <div class="text-fg-faint text-[10px] font-mono"><%= time_ago_for(llm_call_time_for(call)) %> ago</div>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
+  </section>
+
+  <%# Up next panel ─ schedules + waiting steps %>
+  <section data-activity-rail-target="panel" data-key="up_next" role="tabpanel"
+           class="flex-1 overflow-y-auto" hidden>
+    <% if up_next_empty? %>
+      <div class="flex h-full items-center justify-center px-6 py-12 text-center">
+        <p class="font-mono text-[11px] text-fg-faint">
+          <%= I18n.t("opensop.activity.empty_up_next", default: "Nothing queued.") %>
+        </p>
+      </div>
+    <% else %>
+      <div class="px-4">
+        <% up_next.each do |item| %>
+          <div class="grid grid-cols-[8px_1fr] gap-2 items-start text-[11px] py-1.5 border-b border-border last:border-b-0">
+            <div class="mt-1 h-2 w-2 rounded-full <%= up_next_dot_class(item) %>"></div>
+            <div class="min-w-0">
+              <div class="truncate">
+                <span class="font-mono text-fg"><%= item[:label] %></span>
+                <span class="text-fg-muted"> <%= item[:kind] == :schedule ? "due" : "waiting" %> </span>
+                <span class="font-mono text-fg"><%= item[:target] %></span>
+              </div>
+              <div class="text-fg-faint text-[10px] font-mono"><%= up_next_eta_for(item) %></div>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
+  </section>
+</aside>

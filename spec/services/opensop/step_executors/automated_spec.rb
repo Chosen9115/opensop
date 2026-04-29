@@ -61,10 +61,9 @@ RSpec.describe Opensop::StepExecutors::Automated do
       }.to raise_error(described_class::StepFailure, /JSON object/)
     end
 
-    it "raises when `run:` is blank" do
-      expect {
-        described_class.new.call(step, instance, { "run" => "" })
-      }.to raise_error(described_class::StepFailure, /missing `run:` path/)
+    it "returns a waiting result when `run:` is blank (external worker pattern)" do
+      result = described_class.new.call(step, instance, { "run" => "" })
+      expect(result).to eq({ waiting: "waiting_for_worker" })
     end
 
     describe "v0.2 validation: mode (SPEC-v0.2.md §2.14)" do

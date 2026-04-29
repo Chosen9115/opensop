@@ -1,0 +1,145 @@
+<%
+  format_dollars = ->(cents) { format("$%.2f", cents.to_i / 100.0) }
+  format_cost = ->(cents) { format("$%.3f", cents.to_i / 100.0) }
+  format_pct = ->(rate) { "#{(rate.to_f * 100).round(1)}%" }
+  format_conf = ->(conf) { format("%.2f", conf.to_f) }
+
+  pill_state_for = ->(rate) {
+    r = rate.to_f
+    if r >= 0.95 then :ok
+    elsif r >= 0.80 then :info
+    elsif r >= 0.50 then :warn
+    else :err
+    end
+  }
+%>
+
+<section class="mb-8">
+  <h1 class="text-[20px] font-semibold tracking-tight text-fg">
+    <%= t('opensop.agents.title', default: 'Agents') %>
+  </h1>
+  <p class="mt-1 text-sm text-fg-muted">
+    <%= t('opensop.agents.subtitle', default: 'Models doing work for you — last 30 days') %>
+  </p>
+</section>
+
+<section class="grid grid-cols-3 gap-4 mb-10">
+  <div class="rounded-[3px] border border-border bg-bg p-4">
+    <div class="text-xs uppercase tracking-wide text-fg-muted">
+      <%= t('opensop.agents.tiles.models', default: 'Models in use') %>
+    </div>
+    <div class="mt-2 text-[28px] font-mono tabular-nums text-fg leading-none">
+      <%= number_with_delimiter(@totals[:models_count]) %>
+    </div>
+    <div class="mt-1 text-xs text-fg-muted">
+      <%= t('opensop.agents.tiles.window', default: 'last 30 days') %>
+    </div>
+  </div>
+
+  <div class="rounded-[3px] border border-border bg-bg p-4">
+    <div class="text-xs uppercase tracking-wide text-fg-muted">
+      <%= t('opensop.agents.tiles.calls', default: 'Total calls') %>
+    </div>
+    <div class="mt-2 text-[28px] font-mono tabular-nums text-fg leading-none">
+      <%= number_with_delimiter(@totals[:total_calls]) %>
+    </div>
+    <div class="mt-1 text-xs text-fg-muted">
+      <%= t('opensop.agents.tiles.window', default: 'last 30 days') %>
+    </div>
+  </div>
+
+  <div class="rounded-[3px] border border-border bg-bg p-4">
+    <div class="text-xs uppercase tracking-wide text-fg-muted">
+      <%= t('opensop.agents.tiles.spend', default: 'Total spend') %>
+    </div>
+    <div class="mt-2 text-[28px] font-mono tabular-nums text-fg leading-none">
+      <%= format_dollars.call(@totals[:total_cost_cents]) %>
+    </div>
+    <div class="mt-1 text-xs text-fg-muted">
+      <%= t('opensop.agents.tiles.window', default: 'last 30 days') %>
+    </div>
+  </div>
+</section>
+
+<% if @has_activity %>
+  <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <% @agents.each do |agent| %>
+      <%
+        pill_state = pill_state_for.call(agent[:success_rate])
+        pill_label = format_pct.call(agent[:success_rate])
+      %>
+      <article class="border border-border rounded-[3px] bg-bg p-4 hover:border-border-strong transition-colors">
+        <header class="flex items-start justify-between gap-3 mb-4">
+          <div class="min-w-0 flex-1">
+            <h2 class="text-[15px] font-semibold font-mono text-fg truncate" title="<%= agent[:model] %>">
+              <%= agent[:model].presence || t('opensop.common.unknown', default: 'unknown') %>
+            </h2>
+            <div class="mt-1 text-xs text-fg-muted">
+              <%= t('opensop.agents.card.last_used', default: 'last used') %>
+              <%= render TimestampComponent.new(time: agent[:last_used_at]) %>
+            </div>
+          </div>
+          <div class="flex-shrink-0">
+            <%= render PillComponent.new(state: pill_state, label: pill_label) %>
+          </div>
+        </header>
+
+        <dl class="grid grid-cols-4 gap-3">
+          <div>
+            <dt class="text-[10px] uppercase tracking-wide text-fg-muted">
+              <%= t('opensop.agents.card.calls', default: 'Calls') %>
+            </dt>
+            <dd class="mt-1 font-mono tabular-nums text-fg text-sm">
+              <%= number_with_delimiter(agent[:total_calls]) %>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-[10px] uppercase tracking-wide text-fg-muted">
+              <%= t('opensop.agents.card.success_rate', default: 'Success') %>
+            </dt>
+            <dd class="mt-1 font-mono tabular-nums text-fg text-sm">
+              <%= format_pct.call(agent[:success_rate]) %>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-[10px] uppercase tracking-wide text-fg-muted">
+              <%= t('opensop.agents.card.cost', default: 'Cost') %>
+            </dt>
+            <dd class="mt-1 font-mono tabular-nums text-fg text-sm">
+              <%= format_cost.call(agent[:cost_cents]) %>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-[10px] uppercase tracking-wide text-fg-muted">
+              <%= t('opensop.agents.card.avg_confidence', default: 'Confidence') %>
+            </dt>
+            <dd class="mt-1 font-mono tabular-nums text-fg text-sm">
+              <%= format_conf.call(agent[:avg_confidence]) %>
+            </dd>
+          </div>
+        </dl>
+
+        <footer class="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs">
+          <span class="font-mono tabular-nums text-fg-muted">
+            <%= t('opensop.agents.card.tokens_in', default: 'in') %>:
+            <span class="text-fg"><%= number_with_delimiter(agent[:tokens_in]) %></span>
+            <span class="text-fg-faint mx-1">·</span>
+            <%= t('opensop.agents.card.tokens_out', default: 'out') %>:
+            <span class="text-fg"><%= number_with_delimiter(agent[:tokens_out]) %></span>
+          </span>
+          <% if agent[:errored].positive? %>
+            <span class="font-mono tabular-nums text-err">
+              <%= number_with_delimiter(agent[:errored]) %>
+              <%= t('opensop.agents.card.errored', default: 'errored') %>
+            </span>
+          <% end %>
+        </footer>
+      </article>
+    <% end %>
+  </section>
+<% else %>
+  <%= render EmptyStateComponent.new(
+        title: t('opensop.agents.empty_title', default: 'No agent activity yet'),
+        description: t('opensop.agents.empty_description', default: 'Once your processes start making LLM calls, each model will appear here with its usage stats.')
+      ) %>
+<% end %>

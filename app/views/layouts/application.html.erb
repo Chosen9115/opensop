@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="<%= I18n.locale %>" class="h-full bg-slate-50">
+<html lang="<%= I18n.locale %>" class="h-full">
   <head>
     <title><%= t('opensop.app.name') %></title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,32 +7,46 @@
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
 
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
     <%= stylesheet_link_tag "tailwind", "data-turbo-track": "reload" %>
     <%= javascript_importmap_tags %>
   </head>
 
-  <body class="h-full min-h-screen flex flex-col bg-slate-50 text-slate-900 antialiased font-sans">
-    <header class="sticky top-0 z-30 border-b border-slate-200 bg-white">
-      <%= render NavbarComponent.new(current_path: request.path) %>
-    </header>
+  <body class="h-full bg-bg text-fg antialiased font-sans text-[13px] leading-[1.5]"
+        data-controller="cmdk"
+        data-cmdk-data-value="<%= cmdk_dataset.to_json %>">
+    <% show_rail = controller.respond_to?(:show_rail?) ? controller.show_rail? : true %>
+    <% rail_events = (defined?(@rail_events) && @rail_events) || nil %>
+    <% rail_llm_calls = (defined?(@rail_llm_calls) && @rail_llm_calls) || nil %>
+    <% rail_up_next = (defined?(@rail_up_next) && @rail_up_next) || nil %>
 
-    <main class="flex-1 w-full">
-      <% if flash[:notice].present? || flash[:alert].present? %>
-        <div class="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 pt-4">
-          <%= render "shared/flash" %>
+    <div class="grid h-screen w-full bg-bg <%= show_rail ? 'grid-cols-[220px_1fr_320px]' : 'grid-cols-[220px_1fr]' %>">
+      <%= render SidebarComponent.new(current_path: request.path, counts: sidebar_counts) %>
+
+      <main class="flex flex-col overflow-auto">
+        <% if flash[:notice].present? || flash[:alert].present? %>
+          <div class="mx-auto w-full max-w-[1200px] px-10 pt-6">
+            <%= render "shared/flash" %>
+          </div>
+        <% end %>
+
+        <div class="mx-auto w-full max-w-[1200px] px-10 pt-8 pb-16">
+          <%= yield %>
         </div>
+      </main>
+
+      <% if show_rail %>
+        <%= render ActivityRailComponent.new(
+              events: rail_events,
+              llm_calls: rail_llm_calls,
+              up_next: rail_up_next
+            ) %>
       <% end %>
+    </div>
 
-      <div class="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-        <%= yield %>
-      </div>
-    </main>
-
-    <footer class="border-t border-slate-200 bg-white">
-      <div class="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between text-xs text-slate-500">
-        <span><%= t('opensop.app.name') %> &middot; <%= t('opensop.app.tagline') %></span>
-        <span class="font-mono">v0.1</span>
-      </div>
-    </footer>
+    <%= render "shared/cmdk" %>
   </body>
 </html>

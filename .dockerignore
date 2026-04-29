@@ -37,3 +37,6 @@
 # Ignore Docker-related files
 /.dockerignore
 /Dockerfile*
+
+# Ignore Syncthing conflict files
+*.sync-conflict*

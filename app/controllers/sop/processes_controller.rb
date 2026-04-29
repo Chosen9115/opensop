@@ -1,10 +1,31 @@
 module Sop
-  # GET /sop/:name/schema — returns the full YAML-derived process definition
-  # as JSON. Clients use this to understand inputs, outputs, and step shapes.
+  # GET  /sop/:name/schema       — returns the full process definition as JSON
+  # POST /sop/processes/register — upsert a process from raw YAML
   class ProcessesController < ApplicationController
     def schema
       process = find_process!
       render json: process.definition
+    end
+
+    def register
+      raw = params[:yaml].presence || request.raw_post
+      if raw.blank?
+        render json: { error: "missing_yaml", message: "provide YAML in the `yaml` param or as the raw request body" },
+               status: :unprocessable_entity
+        return
+      end
+
+      process = Opensop::Registry.load_yaml(raw.to_s, source: "api:#{current_actor}")
+      status_code = process.saved_changes? ? :created : :ok
+
+      render json: {
+        name:        process.name,
+        version:     process.version,
+        description: process.description,
+        owner:       process.owner,
+        steps:       process.definition.dig("process", "steps")&.map { |s| s["id"] },
+        status:      process.status
+      }, status: status_code
     end
 
     private
