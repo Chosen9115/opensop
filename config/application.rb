@@ -44,7 +44,7 @@ module Opensop
 
     # I18n configuration. OpenSOP keys live in config/locales/opensop.<locale>.yml.
     config.i18n.default_locale = :en
-    config.i18n.available_locales = [:en]
+    config.i18n.available_locales = [ :en ]
     config.i18n.fallbacks = true
   end
 end

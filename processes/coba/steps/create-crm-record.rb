@@ -9,7 +9,7 @@
 # doesn't depend on who invoked us (Fly engine vs. launchd-spawned bridge).
 Encoding.default_external = Encoding::UTF_8
 Encoding.default_internal = Encoding::UTF_8
-[STDIN, STDOUT, STDERR].each { |io| io.set_encoding(Encoding::UTF_8) rescue nil }
+[ STDIN, STDOUT, STDERR ].each { |io| io.set_encoding(Encoding::UTF_8) rescue nil }
 
 # PRIVATE — Coba fork only. Contains DenchClaw-specific IDs and defaults.
 #

@@ -94,31 +94,31 @@ module Ui
     def derive_dept(process)
       defn_dept = process.definition&.dig("process", "dept")
       if defn_dept.present?
-        return [humanize_token(defn_dept), humanize_token(defn_dept)]
+        return [ humanize_token(defn_dept), humanize_token(defn_dept) ]
       end
 
       parts = split_name(process.name)
       if parts.size >= 2
-        return [humanize_token(parts[0]), humanize_token(parts[0])]
+        return [ humanize_token(parts[0]), humanize_token(parts[0]) ]
       end
 
       owner = process.owner.to_s.strip
       label = owner.present? ? humanize_token(owner) : UNGROUPED_KEY
-      [label, label]
+      [ label, label ]
     end
 
     def derive_unit(process)
       defn_unit = process.definition&.dig("process", "unit")
       if defn_unit.present?
-        return [humanize_token(defn_unit), humanize_token(defn_unit)]
+        return [ humanize_token(defn_unit), humanize_token(defn_unit) ]
       end
 
       parts = split_name(process.name)
       if parts.size >= 2
-        return [humanize_token(parts[1]), humanize_token(parts[1])]
+        return [ humanize_token(parts[1]), humanize_token(parts[1]) ]
       end
 
-      [DEFAULT_UNIT_KEY, DEFAULT_UNIT_KEY]
+      [ DEFAULT_UNIT_KEY, DEFAULT_UNIT_KEY ]
     end
 
     def split_name(name)

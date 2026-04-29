@@ -29,7 +29,7 @@ RSpec.describe Opensop::LlmProviders::Anthropic do
           "type" => "message",
           "role" => "assistant",
           "model" => "claude-sonnet-4-7",
-          "content" => [{ "type" => "text", "text" => json_text }],
+          "content" => [ { "type" => "text", "text" => json_text } ],
           "stop_reason" => "end_turn",
           "usage" => { "input_tokens" => 42, "output_tokens" => 17 }
         }
@@ -83,7 +83,7 @@ RSpec.describe Opensop::LlmProviders::Anthropic do
       let(:api_body) do
         {
           "model" => "claude-sonnet-4-7",
-          "content" => [{ "type" => "text", "text" => fenced_text }],
+          "content" => [ { "type" => "text", "text" => fenced_text } ],
           "usage" => { "input_tokens" => 5, "output_tokens" => 6 }
         }
       end
@@ -116,7 +116,7 @@ RSpec.describe Opensop::LlmProviders::Anthropic do
       let(:api_body) do
         {
           "model" => "claude-sonnet-4-7",
-          "content" => [{ "type" => "text", "text" => "this is not json at all" }],
+          "content" => [ { "type" => "text", "text" => "this is not json at all" } ],
           "usage" => { "input_tokens" => 1, "output_tokens" => 1 }
         }
       end
