@@ -65,7 +65,7 @@ module Opensop
     def coerce_to_hash(input)
       case input
       when String
-        parsed = YAML.safe_load(input, permitted_classes: [Date, Time, Symbol], aliases: true)
+        parsed = YAML.safe_load(input, permitted_classes: [ Date, Time, Symbol ], aliases: true)
         raise InvalidDefinition, "definition is empty or not a YAML mapping" unless parsed.is_a?(Hash)
         parsed
       when Hash
@@ -348,7 +348,7 @@ module Opensop
       validate_tools!(step, path)
 
       if step.key?("retry_on_incomplete")
-        unless [true, false].include?(step["retry_on_incomplete"])
+        unless [ true, false ].include?(step["retry_on_incomplete"])
           fail_at!("#{path}.retry_on_incomplete", "must be a boolean")
         end
       end
@@ -419,7 +419,7 @@ module Opensop
         end
         # Values can be literals (strings, numbers, booleans) or ${...}
         # expressions. No further validation beyond type checks.
-        unless value.is_a?(String) || value.is_a?(Numeric) || [true, false].include?(value)
+        unless value.is_a?(String) || value.is_a?(Numeric) || [ true, false ].include?(value)
           fail_at!("process.trigger.input_mapping.#{key}",
                    "must be a string, number, or boolean literal (got #{value.class})")
         end
@@ -510,7 +510,7 @@ module Opensop
       # v0.2 §2.7 — collection outputs. Accepted on any field; in practice only
       # meaningful on outputs, but the parser doesn't restrict by location.
       if field.key?("collection")
-        unless [true, false].include?(field["collection"])
+        unless [ true, false ].include?(field["collection"])
           fail_at!("#{path}.collection", "must be a boolean")
         end
       end

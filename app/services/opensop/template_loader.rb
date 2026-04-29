@@ -56,7 +56,7 @@ module Opensop
 
     def load_template(path)
       raw = File.read(path)
-      parsed = YAML.safe_load(raw, permitted_classes: [Symbol])
+      parsed = YAML.safe_load(raw, permitted_classes: [ Symbol ])
 
       unless parsed.is_a?(Hash)
         @logger&.warn("[TemplateLoader] skipping #{path}: not a YAML mapping")

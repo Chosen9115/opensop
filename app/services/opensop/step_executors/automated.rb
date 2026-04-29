@@ -91,11 +91,11 @@ module Opensop
       def build_command(path)
         ext = File.extname(path).downcase
         case ext
-        when ".rb"  then ["ruby", path]
-        when ".py"  then ["python3", path]
-        when ".js"  then ["node", path]
-        when ".sh"  then ["bash", path]
-        else [path]
+        when ".rb"  then [ "ruby", path ]
+        when ".py"  then [ "python3", path ]
+        when ".js"  then [ "node", path ]
+        when ".sh"  then [ "bash", path ]
+        else [ path ]
         end
       end
 

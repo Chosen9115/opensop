@@ -303,7 +303,7 @@ RSpec.describe Opensop::DefinitionParser do
       end
 
       it "accepts a valid llm step and applies defaults" do
-        result = described_class.call(v02_process(steps: [valid_llm_step]))
+        result = described_class.call(v02_process(steps: [ valid_llm_step ]))
         expect(result.ok?).to be true
         step = result.value["process"]["steps"].first
         expect(step["tools"]).to eq([])
@@ -315,13 +315,13 @@ RSpec.describe Opensop::DefinitionParser do
         step = valid_llm_step
         step.delete("prompt")
         step["prompt_file"] = "prompts/classify.md"
-        result = described_class.call(v02_process(steps: [step]))
+        result = described_class.call(v02_process(steps: [ step ]))
         expect(result.ok?).to be true
       end
 
       it "rejects an llm step with both prompt and prompt_file" do
         step = valid_llm_step("prompt_file" => "prompts/classify.md")
-        expect { described_class.call(v02_process(steps: [step])) }
+        expect { described_class.call(v02_process(steps: [ step ])) }
           .to raise_error(
             described_class::InvalidDefinition,
             /llm step 'classify' requires either prompt: or prompt_file:, not both/
@@ -331,7 +331,7 @@ RSpec.describe Opensop::DefinitionParser do
       it "rejects an llm step with neither prompt nor prompt_file" do
         step = valid_llm_step
         step.delete("prompt")
-        expect { described_class.call(v02_process(steps: [step])) }
+        expect { described_class.call(v02_process(steps: [ step ])) }
           .to raise_error(
             described_class::InvalidDefinition,
             /llm step 'classify' requires either prompt: or prompt_file:, not both/
@@ -341,7 +341,7 @@ RSpec.describe Opensop::DefinitionParser do
       it "rejects an llm step missing expected_output_schema" do
         step = valid_llm_step
         step.delete("expected_output_schema")
-        expect { described_class.call(v02_process(steps: [step])) }
+        expect { described_class.call(v02_process(steps: [ step ])) }
           .to raise_error(described_class::InvalidDefinition, /expected_output_schema/)
       end
 
