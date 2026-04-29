@@ -20,4 +20,8 @@ scope module: :ui, as: :ui do
   get "/costs",     to: "costs#index",     as: :costs
   get "/templates", to: "templates#index", as: :templates
   get "/api-docs",  to: "api_docs#index",  as: :api_docs
+
+  # Tier 2 informational pages.
+  get "/metrics", to: "metrics#index", as: :metrics
+  get "/agents",  to: "agents#index",  as: :agents
 end
