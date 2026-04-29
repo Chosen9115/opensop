@@ -84,6 +84,9 @@ jobs:
       - name: Set up database
         run: bin/rails db:schema:load
 
+      - name: Build assets
+        run: SECRET_KEY_BASE_DUMMY=1 bin/rails assets:precompile
+
       - name: Run tests
         run: bundle exec rspec --format progress
 
