@@ -98,6 +98,10 @@ en:
         view_instances: "View instances"
         view_metrics: "View metrics"
         raw_definition: "Raw definition"
+        other_versions: "Other versions"
+        trigger_run: "Trigger run"
+        trigger_run_heading: "Start a new run"
+        start_run_button: "Start run"
       field:
         required_tag: "required"
         optional_tag: "optional"
@@ -117,8 +121,16 @@ en:
         in_flight_count: "%{count} in flight"
       list:
         runs_label: "runs"
+        total_runs_label: "runs"
+        in_flight_label: "in flight"
         mtd_label: "mtd"
         owner_label: "owner"
+        prior_versions:
+          one: "1 prior version"
+          other: "%{count} prior versions"
+        prior_versions_title:
+          one: "1 prior version available"
+          other: "%{count} prior versions available"
 
     instances:
       title: "Instances"
@@ -233,6 +245,7 @@ en:
       instance_cancel_failed: "Could not cancel instance: %{error}"
       process_not_found: "Process not found."
       instance_not_found: "Instance not found."
+      run_started: "Run started."
 
     errors:
       generic: "Something went wrong."
