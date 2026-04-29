@@ -26,5 +26,5 @@ class TimestampComponent < ViewComponent::Base
     @time.strftime("%Y-%m-%d %H:%M UTC")
   end
 
-  attr_reader :placeholder
+  attr_reader :placeholder, :time
 end

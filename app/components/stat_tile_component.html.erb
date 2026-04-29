@@ -1,4 +1,10 @@
-<div class="rounded-lg bg-white border border-slate-200 border-t-4 <%= top_border_class %> shadow-sm px-5 py-4" <% if hint.present? %>title="<%= hint %>"<% end %>>
-  <p class="text-xs font-medium uppercase tracking-wide text-slate-500"><%= label %></p>
-  <p class="mt-2 text-3xl font-semibold tabular-nums <%= value_class %>"><%= value %></p>
+<div class="relative rounded-[3px] border border-border bg-bg p-4" <% if hint.present? %>title="<%= hint %>"<% end %>>
+  <div class="pp-section-title"><%= label %></div>
+  <div class="mt-2 text-[28px] font-semibold tabular-nums text-fg leading-none"><%= value %></div>
+  <% if hint.present? %>
+    <p class="mt-2 text-[11px] text-fg-faint"><%= hint %></p>
+  <% end %>
+  <% if show_dot? %>
+    <span class="absolute top-3 right-3 h-1.5 w-1.5 rounded-full <%= tone_dot_class %>"></span>
+  <% end %>
 </div>
