@@ -14,4 +14,10 @@ scope module: :ui, as: :ui do
     end
     post "steps/:step_id/submit", to: "steps#submit", as: :submit_step
   end
+
+  # Tier 1 informational pages — read-only, no DB writes.
+  get "/webhooks",  to: "webhooks#index",  as: :webhooks
+  get "/costs",     to: "costs#index",     as: :costs
+  get "/templates", to: "templates#index", as: :templates
+  get "/api-docs",  to: "api_docs#index",  as: :api_docs
 end

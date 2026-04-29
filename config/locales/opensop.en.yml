@@ -237,3 +237,91 @@ en:
       invalid_definition: "Invalid process definition: %{message}"
       step_not_submittable: "This step cannot be submitted in its current state."
       unauthorized: "Unauthorized."
+
+    webhooks:
+      title: "Webhooks"
+      subtitle: "Inbound callback receipts for webhook steps awaiting external systems."
+      recent: "Recent callbacks"
+      empty_title: "No webhook callbacks yet"
+      empty_description: "Callbacks appear here once a webhook step issues an inbound URL and the external system responds."
+      stats:
+        pending: "Pending"
+        received: "Received"
+        expired: "Expired"
+        total: "Total"
+        pending_hint: "Awaiting an inbound callback."
+        received_hint: "Callback delivered successfully."
+        expired_hint: "Callback window closed without a response."
+        total_hint: "All callbacks ever recorded."
+      table:
+        callback_id: "Callback ID"
+        instance: "Instance"
+        step: "Step"
+        status: "Status"
+        received: "Received"
+        expires: "Expires"
+
+    costs:
+      title: "Costs"
+      subtitle: "LLM token spend across processes — last 30 days"
+      empty: "No LLM calls in the last 30 days."
+      tiles:
+        spend: "Total spend"
+        calls: "Calls"
+        tokens_in: "Tokens in"
+        tokens_out: "Tokens out"
+        window: "last 30 days"
+      daily:
+        title: "Daily spend"
+        peak: "peak"
+      top_steps:
+        title: "Top 10 most expensive steps"
+        step: "Step"
+        instance: "Instance"
+        model: "Model"
+        cost: "Cost"
+        calls: "Calls"
+        empty: "No step-level cost data available yet."
+
+    templates:
+      title: "Templates"
+      subtitle: "Starter process definitions you can copy and customize."
+      count_label: "Available"
+      already_imported: "imported"
+      use_as_base: "Use as base"
+      view_yaml: "View YAML"
+      empty_title: "No templates available"
+      empty_description: "Drop a .sop.yaml file in /processes to start a new template."
+
+    api_docs:
+      title: "API & SDK"
+      subtitle: "Define a process, get an API. Agents and humans interact through the same /sop/* endpoints."
+      auth:
+        heading: "Authentication"
+        header_intro_html: "Every request to <code class=\"font-mono text-[12px] bg-bg-pill px-1 py-0.5 rounded-[3px]\">/sop/*</code> must include the <code class=\"font-mono text-[12px] bg-bg-pill px-1 py-0.5 rounded-[3px]\">X-SOP-Token</code> header."
+        env_intro_html: "The expected token is read from the <code class=\"font-mono text-[12px] bg-bg-pill px-1 py-0.5 rounded-[3px]\">OPENSOP_API_TOKEN</code> environment variable."
+        fallback: "If OPENSOP_API_TOKEN is unset, the engine falls back to no-auth (intended for local development and tests). Set the variable in any deployment that should be locked down."
+      endpoints:
+        heading: "Endpoints"
+        intro: "All public endpoints exposed by the engine. JSON request/response bodies."
+        col_method: "Method"
+        col_path: "Path"
+        col_description: "Description"
+        descriptions:
+          discovery: "List all published processes (discovery)."
+          instances_index: "List all instances across processes."
+          webhook_receive: "Receive an inbound webhook callback for a waiting step."
+          trigger_receive: "Fire a trigger to start a new instance of a process."
+          process_schema: "Return the full process definition (schema)."
+          process_start: "Start a new instance with the given inputs."
+          instance_show: "Read the current state of an instance."
+          instance_cancel: "Cancel a running instance."
+          steps_index: "List the state of every step in an instance."
+          step_submit: "Advance a step by submitting its outputs."
+      snippets:
+        heading: "Snippet library"
+        intro: "Copy-paste examples for the two most common flows."
+        start:
+          heading: "Start an instance"
+        submit:
+          heading: "Submit a step"
