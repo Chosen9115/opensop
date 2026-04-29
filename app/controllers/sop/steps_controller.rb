@@ -1,8 +1,31 @@
 module Sop
   # Handles step inspection and submission:
+  #   GET  /sop/steps/pending                     list steps waiting for an external worker
   #   GET  /sop/:name/:id/steps                   list steps
   #   POST /sop/:name/:id/steps/:step_id/submit   submit outputs, advance
   class StepsController < ApplicationController
+    def pending
+      steps = Sop::Step
+                .active
+                .where(sub_state: "waiting_for_worker")
+                .eager_load(:instance)
+                .order(:created_at)
+
+      steps = steps.where(sop_instances: { process_name: params[:process_name] }) if params[:process_name].present?
+
+      render json: {
+        steps: steps.map { |step|
+          {
+            instance_id:  step.instance_id,
+            process_name: step.instance.process_name,
+            step_id:      step.step_id,
+            step_name:    step.step_name,
+            inputs:       step.inputs || {}
+          }
+        }
+      }
+    end
+
     def index
       instance = find_instance!
       steps = instance.steps.order(:position).map do |step|

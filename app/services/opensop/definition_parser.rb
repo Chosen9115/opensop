@@ -170,7 +170,7 @@ module Opensop
 
       case step["type"]
       when "automated"
-        fail_at!("#{path}.run", "automated step requires a `run` path") unless step["run"].is_a?(String) && !step["run"].strip.empty?
+        # `run:` is optional — omitting it means the step waits for an external worker.
         validate_tools!(step, path)
         validate_automated_validation!(step, path)
       when "webhook"

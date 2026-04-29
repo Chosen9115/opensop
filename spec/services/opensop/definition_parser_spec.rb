@@ -101,10 +101,9 @@ RSpec.describe Opensop::DefinitionParser do
           .to raise_error(described_class::InvalidDefinition, /unknown step type/)
       end
 
-      it "rejects an automated step without `run:`" do
+      it "accepts an automated step without `run:` (parks at waiting_for_worker)" do
         hash = minimal_process("steps" => [ { "id" => "a", "name" => "A", "type" => "automated" } ])
-        expect { described_class.call(hash) }
-          .to raise_error(described_class::InvalidDefinition, /requires a `run` path/)
+        expect { described_class.call(hash) }.not_to raise_error
       end
 
       it "rejects a webhook step missing the webhook block" do

@@ -4,8 +4,9 @@
 # constrained to avoid clashing with flat endpoints like `/sop/instances`.
 scope :sop, as: :sop, module: :sop, defaults: { format: :json } do
   get "/", to: "discovery#index", as: :discovery
-  get "/instances", to: "instances#index", as: :instances
-  get "/metrics", to: "metrics#index", as: :metrics
+  get  "/instances",         to: "instances#index",      as: :instances
+  get  "/steps/pending",     to: "steps#pending",        as: :steps_pending
+  post "/processes/register", to: "processes#register",  as: :process_register
   post "/webhooks/:callback_id", to: "webhooks#receive", as: :webhook
   post "/triggers/:process_name", to: "triggers#receive", as: :trigger
 
