@@ -56,7 +56,9 @@ class SidebarComponent < ViewComponent::Base
       { key: :costs,
         label: I18n.t("opensop.nav.costs", default: "Costs"),
         icon: :currency_dollar,
-        disabled: true },
+        path: helpers.ui_costs_path,
+        active: path_active?(helpers.ui_costs_path),
+        disabled: false },
       { key: :metrics,
         label: I18n.t("opensop.nav.metrics", default: "Metrics"),
         icon: :chart_bar,
@@ -69,15 +71,21 @@ class SidebarComponent < ViewComponent::Base
       { key: :templates,
         label: I18n.t("opensop.nav.templates", default: "Templates"),
         icon: :document_duplicate,
-        disabled: true },
+        path: helpers.ui_templates_path,
+        active: path_active?(helpers.ui_templates_path),
+        disabled: false },
       { key: :webhooks,
         label: I18n.t("opensop.nav.webhooks", default: "Webhooks"),
         icon: :bolt,
-        disabled: true },
+        path: helpers.ui_webhooks_path,
+        active: path_active?(helpers.ui_webhooks_path),
+        disabled: false },
       { key: :api,
         label: I18n.t("opensop.nav.api", default: "API & SDK"),
         icon: :arrow_top_right_on_square,
-        disabled: true }
+        path: helpers.ui_api_docs_path,
+        active: path_active?(helpers.ui_api_docs_path),
+        disabled: false }
     ]
   end
 
