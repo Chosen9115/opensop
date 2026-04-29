@@ -36,10 +36,10 @@ RSpec.describe "AppSignal Regression Check process", type: :request do
   before do
     allow_any_instance_of(Opensop::StepExecutors::Automated).to receive(:call) do |_executor, step, _instance, _defn|
       outputs = case step.step_id
-                when "fetch-current-state" then fetch_outputs
-                when "evaluate-regression"  then evaluate_outputs
-                else {}
-                end
+      when "fetch-current-state" then fetch_outputs
+      when "evaluate-regression"  then evaluate_outputs
+      else {}
+      end
       { outputs: outputs }
     end
   end

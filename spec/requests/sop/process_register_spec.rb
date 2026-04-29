@@ -44,7 +44,7 @@ RSpec.describe "POST /sop/processes/register", type: :request do
       expect(response).to have_http_status(:created)
       expect(json[:name]).to eq("smoke-register")
       expect(json[:version]).to eq("1.0")
-      expect(json[:steps]).to eq(["echo"])
+      expect(json[:steps]).to eq([ "echo" ])
       expect(json[:status]).to eq("active")
     end
 

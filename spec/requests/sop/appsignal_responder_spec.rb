@@ -7,9 +7,9 @@ RSpec.describe "AppSignal Responder process", type: :request do
 
   let(:stub_outputs) do
     {
-      "fetch-incidents"   => { "incidents" => [incident_stub], "total_fetched" => 1 },
+      "fetch-incidents"   => { "incidents" => [ incident_stub ], "total_fetched" => 1 },
       "build-known-work"  => { "known_work" => [], "known_work_count" => 0 },
-      "apply-budget-caps" => { "incidents_to_process" => [incident_stub], "deferred_count" => 0, "run_blocked" => false }
+      "apply-budget-caps" => { "incidents_to_process" => [ incident_stub ], "deferred_count" => 0, "run_blocked" => false }
     }
   end
 
@@ -30,7 +30,7 @@ RSpec.describe "AppSignal Responder process", type: :request do
   end
 
   let(:valid_inputs) do
-    { "projects" => ["coba"], "phase" => "1", "run_id" => "smoke-#{SecureRandom.hex(4)}" }
+    { "projects" => [ "coba" ], "phase" => "1", "run_id" => "smoke-#{SecureRandom.hex(4)}" }
   end
 
   before do

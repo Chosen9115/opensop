@@ -34,13 +34,13 @@ RSpec.describe "AppSignal Incident Fix process", type: :request do
   before do
     allow_any_instance_of(Opensop::StepExecutors::Automated).to receive(:call) do |_executor, step, _instance, _defn|
       outputs = case step.step_id
-                when "pre-dispatch-gate"  then gate_outputs
-                when "create-fix-worktree" then worktree_outputs
-                when "run-swarm"          then swarm_outputs
-                when "safety-gate"        then safety_outputs
-                when "push-and-create-pr" then push_outputs
-                else {}
-                end
+      when "pre-dispatch-gate"  then gate_outputs
+      when "create-fix-worktree" then worktree_outputs
+      when "run-swarm"          then swarm_outputs
+      when "safety-gate"        then safety_outputs
+      when "push-and-create-pr" then push_outputs
+      else {}
+      end
       { outputs: outputs }
     end
   end
@@ -98,9 +98,9 @@ RSpec.describe "AppSignal Incident Fix process", type: :request do
       # pre-dispatch-gate returns phase_1_only block
       allow_any_instance_of(Opensop::StepExecutors::Automated).to receive(:call) do |_executor, step, _instance, _defn|
         outputs = case step.step_id
-                  when "pre-dispatch-gate" then { "gate_passed" => false, "gate_reason" => "phase_1_only" }
-                  else {}
-                  end
+        when "pre-dispatch-gate" then { "gate_passed" => false, "gate_reason" => "phase_1_only" }
+        else {}
+        end
         { outputs: outputs }
       end
 
