@@ -24,4 +24,7 @@ scope module: :ui, as: :ui do
   # Tier 2 informational pages.
   get "/metrics", to: "metrics#index", as: :metrics
   get "/agents",  to: "agents#index",  as: :agents
+
+  # Tier 3 — Schedule (cron-driven recurring instances).
+  get "/schedule", to: "schedules#index", as: :schedule
 end
