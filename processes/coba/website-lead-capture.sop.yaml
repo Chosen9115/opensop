@@ -21,8 +21,8 @@ opensop: "0.1"
 
 process:
   name: website-lead-capture
-  version: "1.0"
-  description: "Process a lead captured from coba.ai contact form (via Web3Forms + n8n)."
+  version: "2.3"
+  description: "Process a lead captured from coba.ai contact form — enrich, CRM, LLM-triage spam, and email a discovery-call link if legit."
   owner: growth-team
 
   trigger:
@@ -85,6 +85,9 @@ process:
     - name: external_id
       type: string
       description: "n8n-generated stable ID (email + submittedAt-bucket hash). Used for dedup."
+    - name: manual_review_required
+      type: boolean
+      description: "Opt-in gate. When true, the Hermes drive loop stops after triage and waits for a human to submit the act step manually. Default behavior (missing field or false) = normal automated send. Use true for first-fire validation or borderline-case spot-checks."
 
   outputs:
     - name: crm_deal_id
@@ -93,10 +96,14 @@ process:
       from: steps.create-crm-record.outputs.person_id
     - name: was_duplicate
       from: steps.create-crm-record.outputs.was_duplicate
+    - name: spam_verdict
+      from: steps.triage.outputs.spam_verdict
     - name: qualified
-      from: steps.qualify.outputs.qualified
-    - name: routed_to
-      from: steps.qualify.outputs.routed_to
+      from: steps.triage.outputs.qualified
+    - name: action_taken
+      from: steps.act.outputs.action_taken
+    - name: email_sent
+      from: steps.act.outputs.email_sent
 
   steps:
     # ─── 1. Enrich (automated) ─────────────────────────────────────────
@@ -168,55 +175,53 @@ process:
           type: boolean
           description: "True if we appended a new inbound-touch block to the existing deal's Notes (dedup hit + had new inquiry/volume/message data). False if dedup hit with no new touch data, or if the external_id marker was already present (replay)."
 
-    # ─── 3. Send welcome (notification, stubbed) ───────────────────────
-    - id: send-welcome
-      name: "Send welcome + acknowledgment"
-      type: notification
-      description: "Stubbed (GAP-1). Will confirm receipt + set expectation for follow-up within 24h."
-      inputs:
-        - name: to
-          from: process.inputs.lead_email
-        - name: lead_name
-          from: process.inputs.lead_name
+    # ─── 3. Triage — Hermes-driven form step (LLM judges spam vs legit) ─
+    # Replaces v1.0's `qualify` (judgment, allow_agent) + `send-welcome`
+    # (notification, GAP-1 stub). The Anthropic key lives in Hermes via
+    # Claude OAuth, not in the OpenSOP Fly deploy, so the LLM call has
+    # to happen on the Hermes side. A scheduler job in Hermes polls
+    # for instances of this process at sub_state=waiting_for_input on
+    # the triage step (see core/routines.py::run_website_lead_drive_loop)
+    # and submits this step with Sonnet's verdict + rationale.
+    - id: triage
+      name: "Triage spam + qualify"
+      type: form
+      description: "Sonnet evaluates inquiry against spam patterns and qualification signals (inquiry_type, volume, message). Outputs verdict (spam | legit | uncertain), qualification + routing recommendation, and full rationale + prompt for audit."
       outputs:
-        - name: email_sent
-          type: boolean
+        - { name: spam_verdict, type: enum, values: [spam, legit, uncertain] }
+        - { name: qualified, type: boolean }
+        - { name: lead_score, type: number, description: "0..100 — composite of volume bucket + inquiry_type fit + message quality" }
+        - { name: routed_to, type: enum, values: [send-discovery-email, nurture, park, drop_spam] }
+        - { name: rationale, type: string }
+        - { name: confidence, type: number }
+        - { name: email_body, type: string, description: "Sonnet-drafted personalized email body for the discovery-call invite. Empty when routed_to != send-discovery-email. Used directly by `act` step instead of the static template." }
+        - { name: prompt_used, type: string }
+        - { name: model, type: string }
+        - { name: raw_response, type: string }
+      timeout: 5m
 
-    # ─── 4. Qualify (judgment) ─────────────────────────────────────────
-    - id: qualify
-      name: "Qualify and route"
-      type: judgment
-      description: "Score the lead on inquiry_type + volume + enrichment signals; route to consult-request (high), nurture (medium), or park (low). Agent proposes; human can override."
-      inputs:
-        - name: lead_email
-          from: process.inputs.lead_email
-        - name: lead_company
-          from: process.inputs.lead_company
-        - name: lead_inquiry_type
-          from: process.inputs.lead_inquiry_type
-        - name: lead_volume
-          from: process.inputs.lead_volume
-        - name: lead_message
-          from: process.inputs.lead_message
-        - name: source
-          from: process.inputs.source
-        - name: company_size_bucket
-          from: steps.enrich.outputs.company_size_bucket
-        - name: industry
-          from: steps.enrich.outputs.industry
+    # ─── 4. Act — Hermes-driven form step (deterministic action) ───────
+    # Branches on triage outputs:
+    #   legit + qualified  → send discovery-call email via Gmail (carlos@coba.ai)
+    #                        + post Slack summary to #growth-alerts
+    #   uncertain          → send email anyway (cheap false-positive cost),
+    #                        post Slack with [UNCERTAIN] flag for spot-check
+    #   spam               → no email, optional Slack [SPAM] log
+    #   nurture/park       → no email, Slack summary
+    - id: act
+      name: "Send discovery email or drop"
+      type: form
+      description: "Deterministic mapping from triage verdict → action. Hermes computes and submits."
       outputs:
-        - name: qualified
-          type: boolean
-          required: true
-        - name: routed_to
-          type: enum
-          values: [consult-request, nurture, park]
-          required: true
-        - name: rationale
-          type: string
-      judgment:
-        allow_agent: true
-        confidence_threshold: 0.7
+        - { name: action_taken, type: enum, values: [email_sent, dropped_spam, parked, nurture_queued, error] }
+        - { name: email_sent, type: boolean }
+        - { name: email_subject, type: string }
+        - { name: email_message_id, type: string, description: "Gmail message id for traceability" }
+        - { name: cal_link_sent, type: string, description: "Cal.com link embedded in the email — frozen for audit if you change the link later" }
+        - { name: slack_notified, type: boolean }
+        - { name: slack_channel, type: string }
+        - { name: drop_reason, type: string }
+      timeout: 3m
 
   on_error:
     notify:

@@ -2,19 +2,34 @@ opensop: "0.1"
 
 # PRIVATE — Coba fork only. Never pushed to Chosen9115/opensop.
 #
-# One instance per Cal.com booking. Cal.com fires a webhook on
-# BOOKING_CREATED, verified by HMAC signature, mapped into inputs,
-# then the instance creates a DenchClaw CRM record via the bridge
-# (Tailscale Funnel → laptop Sinatra service → DuckDB insert).
+# One instance per Cal.com booking, regardless of which Cal.com event
+# type (cold-prospect 15-min OR website-discovery 15-min) fired the
+# webhook. Cal.com posts BOOKING_CREATED → HMAC-verified → CRM upsert.
 #
-# Downstream steps (confirmation email, wait for meeting time, record
-# outcome, route) are scaffolded but mostly stubbed until GAP-1
-# (notification delivery) ships.
+# CRITICAL DESIGN RULE (Carlos, 2026-04-29): NO EMAIL SEND HERE. The
+# booker has already chosen a meeting time. Sending another "schedule a
+# call" email would be wrong and confusing. The only outbound email in
+# Coba's lead funnel is the discovery-call invite from the
+# website-lead-capture flow (Web3Forms intake → triage → email after
+# 10-min delay). Once a booking happens, this process is just CRM
+# bookkeeping.
+#
+# DenchClaw is idempotent on email, so when a booking comes in for a
+# person already created by website-lead-capture, the existing deal is
+# located and a touch-block is appended instead of a dupe being made.
+#
+# Removed in v1.1 (2026-04-29):
+#   - send-confirmation  (notification stub, would have sent unwanted email)
+#   - wait-for-meeting   (1h fixed delay, then hung at the next step)
+#   - record-outcome     (human form, sat unfilled forever)
+#   - route              (judgment, needed an LLM key we don't have on Fly)
+# Post-meeting work now lives in `consult-meeting-outcome` (separate
+# process, started manually after the call via Hermes).
 
 process:
   name: consult-request
-  version: "1.0"
-  description: "Handle a consultation call booked via Cal.com — CRM, confirmation, outcome, routing"
+  version: "1.1"
+  description: "Cal.com booking → CRM upsert. No email. Post-meeting work lives in consult-meeting-outcome."
   owner: growth-team
 
   trigger:
@@ -71,12 +86,8 @@ process:
       from: steps.create-crm-record.outputs.deal_id
     - name: crm_person_id
       from: steps.create-crm-record.outputs.person_id
-    - name: meeting_attended
-      from: steps.record-outcome.outputs.attended
-    - name: qualified
-      from: steps.record-outcome.outputs.qualified
-    - name: routed_to
-      from: steps.route.outputs.routed_to
+    - name: was_duplicate
+      from: steps.create-crm-record.outputs.was_duplicate
 
   steps:
     # ─── 1. Create CRM record in DenchClaw ──────────────────────────
@@ -110,75 +121,10 @@ process:
         - name: was_duplicate
           type: boolean
 
-    # ─── 2. Send booking confirmation email ─────────────────────────
-    - id: send-confirmation
-      name: "Send booking confirmation to attendee"
-      type: notification
-      description: "Stubbed today (GAP-1). Cal.com already sends its own confirmation — this is Coba's branded follow-up with diagnostic prep notes."
-      inputs:
-        - name: to
-          from: process.inputs.attendee_email
-        - name: attendee_name
-          from: process.inputs.attendee_name
-        - name: meeting_time
-          from: process.inputs.meeting_time
-      outputs:
-        - name: email_sent
-          type: boolean
-
-    # ─── 3. Wait for meeting to happen ──────────────────────────────
-    - id: wait-for-meeting
-      name: "Wait until meeting time has passed"
-      type: wait
-      description: "Pauses until ~1 hour after the scheduled end. GAP-6: currently returns immediately with seconds:, so this is functionally a no-op today — record-outcome becomes active right away. Once GAP-6 ships we'll flip to `until: instance.metadata.meeting_end + 1h`."
-      wait:
-        seconds: 3600
-
-    # ─── 4. Record the outcome (human-submitted after the call) ─────
-    - id: record-outcome
-      name: "Record meeting outcome"
-      type: form
-      description: "Submitted by Carlos after the call. Attended Y/N, qualification, notes."
-      outputs:
-        - name: attended
-          type: boolean
-          required: true
-        - name: qualified
-          type: enum
-          values: [yes-hot, yes-nurture, no-fit, no-show]
-          required: true
-        - name: decision_volume
-          type: enum
-          values: ["<50k", "50k-250k", "250k-1m", "1m-5m", ">5m", "unknown"]
-        - name: notes
-          type: string
-        - name: next_step
-          type: enum
-          values: [start-onboarding, schedule-follow-up, send-proposal, dead, nurture]
-          required: true
-
-    # ─── 5. Route based on outcome ──────────────────────────────────
-    - id: route
-      name: "Route the lead to the next stage"
-      type: judgment
-      description: "Currently an echo of record-outcome.next_step; once agent-proposed routing lands, this becomes a judgment step that suggests routing based on the meeting transcript/notes."
-      inputs:
-        - name: next_step
-          from: steps.record-outcome.outputs.next_step
-        - name: qualified
-          from: steps.record-outcome.outputs.qualified
-        - name: notes
-          from: steps.record-outcome.outputs.notes
-      outputs:
-        - name: routed_to
-          type: enum
-          values: [onboarding, nurture, follow-up, proposal, dead]
-          required: true
-        - name: rationale
-          type: string
-      judgment:
-        allow_agent: true
-        confidence_threshold: 0.7
+  # Process ends after CRM upsert. Post-meeting work — Circleback
+  # enrichment, LLM outcome proposal, routing — lives in the separate
+  # `consult-meeting-outcome` process (started manually after the call
+  # via Hermes; see hermes-os/scripts/run_consult_outcome.py).
 
   on_error:
     notify:
