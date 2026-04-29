@@ -33,7 +33,7 @@ module Sop
       scope = scope.where(process_name: params[:process]) if params[:process].present?
 
       limit = clamp_limit(params[:limit])
-      offset = [params[:offset].to_i, 0].max
+      offset = [ params[:offset].to_i, 0 ].max
       total = scope.count
 
       instances = scope.limit(limit).offset(offset).map do |instance|
@@ -78,7 +78,7 @@ module Sop
     def clamp_limit(raw)
       value = raw.to_i
       value = DEFAULT_LIMIT if value <= 0
-      [value, MAX_LIMIT].min
+      [ value, MAX_LIMIT ].min
     end
 
     # Accepts nested or flat inputs. Returns a plain Hash with string keys.

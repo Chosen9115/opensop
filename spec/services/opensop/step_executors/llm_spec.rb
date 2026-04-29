@@ -127,7 +127,7 @@ RSpec.describe Opensop::StepExecutors::Llm do
 
       calls = step.llm_calls.reload
       expect(calls.size).to eq(3)
-      expect(calls.map(&:status).uniq).to eq(["schema_failed"])
+      expect(calls.map(&:status).uniq).to eq([ "schema_failed" ])
     end
 
     it "respects retry_on_incomplete: false (single attempt)" do
@@ -172,7 +172,7 @@ RSpec.describe Opensop::StepExecutors::Llm do
         Opensop::LlmProviders::TestStub.new(canned_response: {})
       end
 
-      defn = base_definition.merge("tools" => ["NotARealTool"])
+      defn = base_definition.merge("tools" => [ "NotARealTool" ])
 
       expect {
         described_class.new.call(step, instance, defn)
@@ -185,13 +185,13 @@ RSpec.describe Opensop::StepExecutors::Llm do
     it "accepts built-in tool names (Read, Grep)" do
       use_stub({ "summary" => "ok", "confidence" => 0.7 })
 
-      defn = base_definition.merge("tools" => ["Read", "Grep"])
+      defn = base_definition.merge("tools" => [ "Read", "Grep" ])
 
       result = described_class.new.call(step, instance, defn)
       expect(result[:outputs]["summary"]).to eq("ok")
 
       call = step.llm_calls.reload.first
-      expect(call.request_payload["tools"]).to eq(["Read", "Grep"])
+      expect(call.request_payload["tools"]).to eq([ "Read", "Grep" ])
     end
   end
 
