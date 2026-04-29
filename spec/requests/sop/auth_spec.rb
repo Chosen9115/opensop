@@ -39,13 +39,41 @@ RSpec.describe "Sop API auth", type: :request do
   context "when OPENSOP_API_TOKEN is unset" do
     before { ENV.delete("OPENSOP_API_TOKEN") }
 
-    it "allows requests through and logs a warning" do
-      allow(Rails.logger).to receive(:warn)
+    context "in development or test" do
+      it "allows requests through and logs a warning" do
+        allow(Rails.logger).to receive(:warn)
 
-      get "/sop/"
+        get "/sop/"
 
-      expect(response).to have_http_status(:ok)
-      expect(Rails.logger).to have_received(:warn).with(/OPENSOP_API_TOKEN not set/)
+        expect(response).to have_http_status(:ok)
+        expect(Rails.logger).to have_received(:warn).with(/OPENSOP_API_TOKEN not set/)
+      end
+    end
+
+    context "in production" do
+      before { allow(Rails.env).to receive(:production?).and_return(true) }
+
+      it "returns 503 with a clear error for every /sop/* request" do
+        get "/sop/"
+        expect(response).to have_http_status(:service_unavailable)
+        expect(json[:error]).to eq("server_misconfigured")
+        expect(json[:message]).to match(/OPENSOP_API_TOKEN is not set/)
+      end
+
+      it "returns 503 on POST /sop/:name/start too (not just GETs)" do
+        post "/sop/lead-qualification/start",
+             params: { inputs: { lead_name: "X", lead_email: "x@y.z", source: "website" } }.to_json,
+             headers: { "Content-Type" => "application/json" }
+        expect(response).to have_http_status(:service_unavailable)
+      end
+
+      it "does NOT start any instance when the token is missing" do
+        expect {
+          post "/sop/lead-qualification/start",
+               params: { inputs: { lead_name: "X", lead_email: "x@y.z", source: "website" } }.to_json,
+               headers: { "Content-Type" => "application/json" }
+        }.not_to change(Sop::Instance, :count)
+      end
     end
   end
 end
