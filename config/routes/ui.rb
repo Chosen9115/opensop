@@ -4,11 +4,11 @@ scope module: :ui, as: :ui do
   get "dashboard", to: "dashboard#index", as: :dashboard
 
   resources :processes,
-            only: [:index, :show],
+            only: [ :index, :show ],
             param: :name,
             constraints: { name: /[a-z0-9][a-z0-9_-]*/ }
 
-  resources :instances, only: [:index, :show] do
+  resources :instances, only: [ :index, :show ] do
     member do
       post :cancel
     end
