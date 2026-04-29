@@ -34,6 +34,8 @@ en:
         agents: "Agents"
         up_next: "Up next"
       empty: "No activity yet."
+      empty_agents: "No agent calls yet."
+      empty_up_next: "Nothing queued."
       no_actor: "system"
 
     common:
