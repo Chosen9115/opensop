@@ -52,7 +52,9 @@ class SidebarComponent < ViewComponent::Base
       { key: :agents,
         label: I18n.t("opensop.nav.agents", default: "Agents"),
         icon: :users,
-        disabled: true },
+        path: helpers.ui_agents_path,
+        active: path_active?(helpers.ui_agents_path),
+        disabled: false },
       { key: :costs,
         label: I18n.t("opensop.nav.costs", default: "Costs"),
         icon: :currency_dollar,
@@ -62,7 +64,9 @@ class SidebarComponent < ViewComponent::Base
       { key: :metrics,
         label: I18n.t("opensop.nav.metrics", default: "Metrics"),
         icon: :chart_bar,
-        disabled: true }
+        path: helpers.ui_metrics_path,
+        active: path_active?(helpers.ui_metrics_path),
+        disabled: false }
     ]
   end
 
