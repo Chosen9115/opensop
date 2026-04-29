@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_28_000004) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_29_000001) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -96,6 +96,25 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_28_000004) do
     t.index ["name", "version"], name: "index_sop_processes_on_name_and_version", unique: true
     t.index ["status"], name: "index_sop_processes_on_status"
     t.index ["tags"], name: "index_sop_processes_on_tags", using: :gin
+  end
+
+  create_table "sop_schedules", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "cron_expression", null: false
+    t.text "description"
+    t.boolean "enabled", default: true, null: false
+    t.integer "failure_count", default: 0, null: false
+    t.jsonb "inputs", default: {}, null: false
+    t.uuid "last_instance_id"
+    t.datetime "last_run_at"
+    t.string "last_status"
+    t.string "name", null: false
+    t.datetime "next_run_at"
+    t.string "process_name", null: false
+    t.string "timezone", default: "UTC", null: false
+    t.datetime "updated_at", null: false
+    t.index ["enabled", "next_run_at"], name: "index_sop_schedules_on_enabled_and_next_run_at"
+    t.index ["process_name"], name: "index_sop_schedules_on_process_name"
   end
 
   create_table "sop_step_iterations", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|

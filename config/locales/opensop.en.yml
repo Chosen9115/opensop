@@ -24,6 +24,7 @@ en:
       api_authenticated: "api · authenticated"
       api_no_token: "api · no token"
       workspace_label: "workspace · %{name}"
+      schedule: "Schedule"
 
     activity:
       title: "Activity"
@@ -381,3 +382,33 @@ en:
         tokens_in: "in"
         tokens_out: "out"
         errored: "errored"
+
+    schedule:
+      title: "Schedule"
+      subtitle: "Recurring process invocations driven by cron expressions."
+      empty:
+        title: "No schedules yet"
+        body: "Create a schedule to automatically start processes on a recurring cadence."
+      tiles:
+        active: "Active schedules"
+        due_now: "Due now"
+        failures_24h: "Failures (24h)"
+      table:
+        name: "Schedule"
+        process: "Process"
+        cron: "Cron"
+        timezone: "TZ"
+        next_run: "Next run"
+        last_run: "Last run"
+        status: "Last status"
+        state: "State"
+      states:
+        enabled: "enabled"
+        disabled: "disabled"
+      status:
+        success: "success"
+        failed: "failed"
+        none: "—"
+      unavailable:
+        title: "Schedules table not yet migrated"
+        body: "Run db:migrate to enable scheduled process invocations."
