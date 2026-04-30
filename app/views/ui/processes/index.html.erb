@@ -101,16 +101,22 @@
       <% @visible.each do |process| %>
         <% defn = process.definition || {} %>
         <% pblock = defn["process"] || {} %>
-        <% in_flight = (@counts[process.name] || {})[:in_flight] || 0 %>
+        <% counts = @counts[process.name] || {} %>
+        <% total_runs = counts[:total] || 0 %>
+        <% in_flight = counts[:in_flight] || 0 %>
+        <% prior_count = @prior_version_counts[process.name] || 0 %>
         <% tags = ((pblock["tags"] || process.tags || []))[0, 4] %>
         <% dept_label = process._dept %>
         <% unit_label = process._unit %>
         <%= link_to ui_process_path(name: process.name),
               class: "grid grid-cols-[1fr_140px_80px_80px_80px] items-center gap-4 px-4 py-2.5 hover:bg-bg-hover" do %>
           <div class="min-w-0">
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
               <span class="font-mono text-[12px] text-fg truncate"><%= process.name %></span>
               <span class="font-mono text-[10px] text-fg-faint">v<%= process.version %></span>
+              <% if prior_count > 0 %>
+                <span class="font-mono text-[10px] text-fg-faint" title="<%= t('opensop.processes.list.prior_versions_title', count: prior_count) %>">· <%= t('opensop.processes.list.prior_versions', count: prior_count) %></span>
+              <% end %>
             </div>
             <% if pblock["description"].present? %>
               <div class="text-[11px] text-fg-muted truncate mt-0.5"><%= pblock["description"] %></div>
@@ -131,8 +137,13 @@
           </div>
 
           <div class="text-right tabular-nums">
-            <div class="text-[12px] font-medium text-fg"><%= in_flight %></div>
-            <div class="text-[10px] text-fg-faint font-mono"><%= t('opensop.processes.list.runs_label') %></div>
+            <div class="text-[12px] font-medium text-fg">
+              <%= total_runs %>
+              <% if in_flight > 0 %>
+                <span class="text-[9px] text-fg-muted font-normal">· <%= in_flight %> <%= t('opensop.processes.list.in_flight_label') %></span>
+              <% end %>
+            </div>
+            <div class="text-[10px] text-fg-faint font-mono"><%= t('opensop.processes.list.total_runs_label') %></div>
           </div>
 
           <div class="text-right tabular-nums">

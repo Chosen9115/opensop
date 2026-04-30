@@ -31,11 +31,20 @@ The server reads the expected token from the `OPENSOP_API_TOKEN` environment var
 
 ### Dev mode (token unset)
 
-If `OPENSOP_API_TOKEN` is blank or unset, **authentication is skipped** and every request is allowed. The server logs a warning on first request (`OPENSOP_API_TOKEN not set — API is open (dev/test mode)`). Useful for local development and tests. **Never run a production deployment this way.**
+If `OPENSOP_API_TOKEN` is blank or unset **in development or test**, authentication is skipped and every request is allowed. The server logs a warning on first request (`OPENSOP_API_TOKEN not set — API is open (dev/test mode)`). Useful for local development and tests.
 
 ```bash
 curl http://localhost:3000/sop/
 ```
+
+**In production**, the engine refuses to serve `/sop/*` entirely when the token is unset — every request returns:
+
+```json
+{ "error": "server_misconfigured",
+  "message": "OPENSOP_API_TOKEN is not set. Set it via your deployment's secret management before serving traffic." }
+```
+
+with HTTP 503. This is a deliberate fail-closed: a production deploy without a token would otherwise expose every endpoint (including PII from instance inputs) to the open internet. Set the token via your platform's secret manager (e.g. `fly secrets set OPENSOP_API_TOKEN=$(openssl rand -hex 32)`) before directing traffic at the deploy.
 
 ### Strict mode (token set)
 

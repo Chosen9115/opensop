@@ -4,6 +4,10 @@ All notable changes to OpenSOP. Format roughly follows [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Security
+
+- **Engine fails closed in production when `OPENSOP_API_TOKEN` is unset.** Previously logged a warning and served `/sop/*` open — a deploy without the token exposed every endpoint (incl. instance inputs with PII) to the internet. Now returns `503 server_misconfigured` for every `/sop/*` request in `Rails.env.production?` when the token is blank. Dev/test unchanged (warn + open-mode). Closes [GAP-8](./GAPS.md).
+
 ### Added — engine
 
 - **`trigger: type: webhook` — third-party webhooks can start instances directly.** Process YAML declares an HMAC-authenticated trigger endpoint; providers (Cal.com, Stripe, Typeform, HubSpot, DocuSign, GitHub) POST to `/sop/triggers/<process-name>` with the configured signature header and the engine verifies, maps the payload via `input_mapping`, and starts an instance. No host-side adapter required. Closes [GAP-7](./GAPS.md).
