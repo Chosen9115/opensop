@@ -13,7 +13,7 @@ process:
     - name: projects
       type: string[]
       required: true
-      description: "List of project names to scan (e.g. [\"coba\", \"pouch\"])"
+      description: "List of project names to scan (e.g. [\"web-app\", \"api\"])"
     - name: phase
       type: enum
       values: ["1", "2", "3", "4"]

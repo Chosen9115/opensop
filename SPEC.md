@@ -927,10 +927,10 @@ The operations view shows all running and completed process instances.
 │  ┌─────────────────────────────────────────────────────────────┐ │
 │  │ INSTANCE                  PROCESS           STATE    AGE    │ │
 │  ├─────────────────────────────────────────────────────────────┤ │
-│  │ ● Acme Logistics   customer-onboard  WAITING  3d    │ │
+│  │ ● Acme Logistics          customer-onboard  WAITING  3d    │ │
 │  │   → stuck at: Submit to compliance (waiting for callback)   │ │
 │  │                                                             │ │
-│  │ ● Globex Freight     customer-onboard  WAITING  5d    │ │
+│  │ ● Globex Freight          customer-onboard  WAITING  5d    │ │
 │  │   → stuck at: Submit to compliance (waiting for callback)   │ │
 │  │                                                             │ │
 │  │ ◆ Freight Solutions LLC   customer-onboard  RUNNING  1h    │ │
@@ -951,20 +951,20 @@ The operations view shows all running and completed process instances.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  INSTANCE: Acme Logistics — customer-onboarding v1.0      │
+│  INSTANCE: Acme Logistics — customer-onboarding v1.0             │
 │  Started: 2026-04-15  •  State: WAITING  •  ID: inst_abc123      │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  INPUTS                                                           │
-│  company_name: Acme Logistics, Inc.                     │
-│  contact_email: customer@example.com                    │
+│  company_name: Acme Logistics, Inc.                               │
+│  contact_email: customer@example.com                              │
 │  country: MX                                                      │
 │  source_channel: linkedin                                         │
 │  deal_id: dc_9f8a7b6c                                             │
 │                                                                   │
 │  STEPS                                                            │
 │  ✓ 1. Collect business info        completed    2026-04-15 09:30  │
-│       → business_record: {legal_name: "Transportes del...", ...}  │
+│       → business_record: {legal_name: "Acme Logistics, ...", ...} │
 │                                                                   │
 │  ✓ 2. Verify documents             completed    2026-04-15 10:15  │
 │       → verification_result: complete                              │
