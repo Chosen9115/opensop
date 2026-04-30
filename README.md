@@ -18,37 +18,54 @@ OpenSOP turns the process itself into the API contract.
 
 ```yaml
 opensop: "0.1"
-name: customer_onboarding
-version: 1
-inputs:
-  - { name: company_name, type: string }
-steps:
-  - id: collect_details
-    type: form
-    fields:
-      - { name: contact_email, type: email }
-  - id: provision_account
-    type: automated
-    script: scripts/provision.rb
-    inputs:
-      email: { from: collect_details.contact_email }
-  - id: send_welcome
-    type: notification
-    channel: email
-    template: welcome
+process:
+  name: customer-onboarding
+  version: "1.0"
+  trigger:
+    type: api
+  inputs:
+    - name: company_name
+      type: string
+      required: true
+  steps:
+    - id: collect-details
+      name: "Collect contact details"
+      type: form
+      outputs:
+        - name: contact_email
+          type: string
+          format: email
+
+    - id: provision-account
+      name: "Provision account"
+      type: automated
+      run: ./scripts/provision.rb
+      inputs:
+        - name: email
+          from: steps.collect-details.outputs.contact_email
+      outputs:
+        - name: account_id
+          type: string
+
+    - id: send-welcome
+      name: "Send welcome email"
+      type: notification
+      inputs:
+        - name: account_id
+          from: steps.provision-account.outputs.account_id
 ```
 
 **Get the API** (no glue code):
 
 ```bash
-$ curl -X POST localhost:3000/sop/customer_onboarding/start \
+$ curl -X POST localhost:3000/sop/customer-onboarding/start \
     -H "X-SOP-Token: $TOKEN" \
     -d '{"company_name": "Acme"}'
 
-{ "instance_id": "01HX...", "next_step": "collect_details" }
+{ "instance_id": "01HX...", "next_step": "collect-details" }
 ```
 
-**Humans and agents drive it the same way.** A human submits the form via the UI. An agent submits it via `POST /sop/customer_onboarding/:id/steps/collect_details/submit`. Same endpoint. Same state. Same audit log.
+**Humans and agents drive it the same way.** A human submits the form via the UI. An agent submits it via `POST /sop/customer-onboarding/:id/steps/collect-details/submit`. Same endpoint. Same state. Same audit log.
 
 ---
 
