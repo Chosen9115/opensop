@@ -40,28 +40,36 @@ RSpec.describe "Ui::Instances", type: :request do
              })
     end
 
-    it "returns 200" do
+    it "renders all complex inputs/outputs inside <details> collapsed by default" do
       get "/instances/#{instance.id}"
 
       expect(response).to have_http_status(:ok)
-    end
 
-    it "renders complex values inside <details> elements" do
-      get "/instances/#{instance.id}"
-
-      expect(response.body).to include("<details")
-    end
-
-    it "leaves the <details> elements collapsed by default" do
-      get "/instances/#{instance.id}"
-
-      # No <details> wrapper for inputs/outputs should ship with the
-      # `open` attribute — they must be collapsed on first paint.
       doc = Nokogiri::HTML.fragment(response.body)
       details = doc.css("details")
 
       expect(details).not_to be_empty
       expect(details.any? { |d| d.attributes.key?("open") }).to be(false)
+    end
+
+    it "wraps event row JSON data in collapsed <details>" do
+      create(:sop_event,
+             instance: instance,
+             event_type: "step.completed",
+             step_id: "deploy",
+             data: { "exit_code" => 0, "duration_ms" => 1234 })
+
+      get "/instances/#{instance.id}"
+
+      doc = Nokogiri::HTML.fragment(response.body)
+      # The events feed sits in its own <ul>; scope to event-row pre/details
+      # by checking text-[10px] (the event-row size hint) is on the summary.
+      event_summaries = doc.css("details > summary").select { |s| s["class"]&.include?("text-[10px]") }
+
+      expect(event_summaries).not_to be_empty
+      event_summaries.each do |summary|
+        expect(summary.parent.attributes).not_to have_key("open")
+      end
     end
   end
 end
