@@ -4,7 +4,7 @@ process:
   name: appsignal-regression-check
   version: "1.0"
   description: "After a fix PR merges, wait 3 days and check if the error recurred."
-  owner: agent-kitchen
+  owner: opensop-worker
 
   trigger:
     type: api
@@ -103,4 +103,4 @@ process:
         - name: notified
           type: boolean
 
-  tags: [agent-kitchen, appsignal, regression-check]
+  tags: [appsignal, regression-check]

@@ -8,17 +8,17 @@ RSpec.describe "AppSignal Incident Fix process", type: :request do
   let(:base_inputs) do
     {
       "incident"        => {
-        "incident_id"    => "stub-coba-1",
+        "incident_id"    => "stub-incident-1",
         "exception_name" => "NoMethodError",
         "message"        => "undefined method `foo` for nil:NilClass",
         "action_name"    => "SomeController#show"
       },
-      "incident_id"     => "stub-coba-1",
-      "incident_number" => 9_000_001,
-      "app_id"          => "6274502ed2a5e428ee8b9aee",
-      "project"         => "coba",
-      "project_path"    => "/tmp/coba",
-      "repo"            => "coba-ai/coba",
+      "incident_id"     => "stub-incident-1",
+      "incident_number" => 42,
+      "app_id"          => "aabbccdd00112233445566aa",
+      "project"         => "myapp",
+      "project_path"    => "/tmp/myapp",
+      "repo"            => "example-org/example-app",
       "exception_name"  => "NoMethodError",
       "phase"           => "2"
     }
@@ -29,7 +29,7 @@ RSpec.describe "AppSignal Incident Fix process", type: :request do
   let(:worktree_outputs) { { "worktree_path" => "/tmp/wt-fix", "branch_name" => "fix/appsignal-stub001" } }
   let(:swarm_outputs)    { { "swarm_exit_code" => 0, "diff_summary" => "Fixed nil check.", "committed" => true } }
   let(:safety_outputs)   { { "files_changed" => 1, "additions" => 10, "critical_path_hit" => false, "gate_passed" => true, "gate_reason" => "" } }
-  let(:push_outputs)     { { "pr_url" => "https://github.com/coba-ai/coba/pull/99", "pr_number" => 99 } }
+  let(:push_outputs)     { { "pr_url" => "https://github.com/example-org/example-app/pull/99", "pr_number" => 99 } }
 
   before do
     allow_any_instance_of(Opensop::StepExecutors::Automated).to receive(:call) do |_executor, step, _instance, _defn|
@@ -146,7 +146,7 @@ RSpec.describe "AppSignal Incident Fix process", type: :request do
       instance = start_and_classify(decision: "fix", reason: "real bug", inputs: phase3_inputs)
 
       push_step = instance.steps.find_by!(step_id: "push-and-create-pr")
-      expect(push_step.outputs["pr_url"]).to eq("https://github.com/coba-ai/coba/pull/99")
+      expect(push_step.outputs["pr_url"]).to eq("https://github.com/example-org/example-app/pull/99")
     end
   end
 

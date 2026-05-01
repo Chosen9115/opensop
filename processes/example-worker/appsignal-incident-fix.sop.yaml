@@ -4,7 +4,7 @@ process:
   name: appsignal-incident-fix
   version: "1.0"
   description: "Classify an AppSignal incident, optionally spawn a fix worktree and open a PR."
-  owner: agent-kitchen
+  owner: opensop-worker
 
   trigger:
     type: api
@@ -200,4 +200,4 @@ process:
         - name: notified
           type: boolean
 
-  tags: [agent-kitchen, appsignal, incident-management, fix]
+  tags: [appsignal, incident-management, fix]

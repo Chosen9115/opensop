@@ -6,7 +6,7 @@ RSpec.describe "GET /sop/steps/pending", type: :request do
   let(:process) { Sop::Process.find_by!(name: "appsignal-responder") }
 
   let(:valid_inputs) do
-    { "projects" => [ "coba" ], "phase" => "1", "run_id" => "smoke-poll-#{SecureRandom.hex(4)}" }
+    { "projects" => [ "myapp" ], "phase" => "1", "run_id" => "smoke-poll-#{SecureRandom.hex(4)}" }
   end
 
   context "when no steps are waiting for a worker" do
@@ -33,7 +33,7 @@ RSpec.describe "GET /sop/steps/pending", type: :request do
       step = json[:steps].first
       expect(step[:process_name]).to eq("appsignal-responder")
       expect(step[:step_id]).to eq("fetch-incidents")
-      expect(step[:inputs]).to include(projects: [ "coba" ])
+      expect(step[:inputs]).to include(projects: [ "myapp" ])
     end
 
     it "includes instance_id and step_name" do

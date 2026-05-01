@@ -15,12 +15,12 @@ RSpec.describe "AppSignal Responder process", type: :request do
 
   let(:incident_stub) do
     {
-      "incident_id"       => "stub-coba-1",
-      "incident_number"   => 9_000_001,
-      "app_id"            => "6274502ed2a5e428ee8b9aee",
-      "project"           => "coba",
-      "repo"              => "coba-ai/coba",
-      "project_path"      => "/tmp/coba",
+      "incident_id"       => "stub-incident-1",
+      "incident_number"   => 42,
+      "app_id"            => "aabbccdd00112233445566aa",
+      "project"           => "myapp",
+      "repo"              => "example-org/example-app",
+      "project_path"      => "/tmp/myapp",
       "exception_name"    => "NoMethodError",
       "message"           => "undefined method `foo` for nil:NilClass",
       "occurrences_count" => 15,
@@ -30,7 +30,7 @@ RSpec.describe "AppSignal Responder process", type: :request do
   end
 
   let(:valid_inputs) do
-    { "projects" => [ "coba" ], "phase" => "1", "run_id" => "smoke-#{SecureRandom.hex(4)}" }
+    { "projects" => [ "myapp" ], "phase" => "1", "run_id" => "smoke-#{SecureRandom.hex(4)}" }
   end
 
   before do
@@ -72,7 +72,7 @@ RSpec.describe "AppSignal Responder process", type: :request do
 
       expect(instance.state).to eq("completed")
       expect(instance.outputs["incidents_to_process"]).to be_a(Array)
-      expect(instance.outputs["incidents_to_process"].first["incident_id"]).to eq("stub-coba-1")
+      expect(instance.outputs["incidents_to_process"].first["incident_id"]).to eq("stub-incident-1")
       expect(instance.outputs["total_fetched"]).to eq(1)
       expect(instance.outputs["deferred_count"]).to eq(0)
     end

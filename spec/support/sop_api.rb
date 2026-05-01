@@ -10,7 +10,7 @@ module SopApi
   def load_appsignal_processes!
     %w[appsignal-responder appsignal-incident-fix appsignal-regression-check].each do |name|
       Opensop::Registry.load_file(
-        Rails.root.join("processes/agent-kitchen/#{name}.sop.yaml")
+        Rails.root.join("processes/example-worker/#{name}.sop.yaml")
       )
     end
   end

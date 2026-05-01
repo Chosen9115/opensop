@@ -9,11 +9,11 @@ RSpec.describe "AppSignal Regression Check process", type: :request do
 
   let(:base_inputs) do
     {
-      "incident_id"     => "stub-coba-1",
-      "incident_number" => 9_000_001,
-      "app_id"          => "6274502ed2a5e428ee8b9aee",
-      "repo"            => "coba-ai/coba",
-      "project"         => "coba",
+      "incident_id"     => "stub-incident-1",
+      "incident_number" => 42,
+      "app_id"          => "aabbccdd00112233445566aa",
+      "repo"            => "example-org/example-app",
+      "project"         => "myapp",
       "pr_number"       => 88,
       "merged_at"       => merged_at
     }
