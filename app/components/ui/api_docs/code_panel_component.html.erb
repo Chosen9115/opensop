@@ -1,0 +1,79 @@
+<%# CodePanel component — dark code block with optional tabs and copy button %>
+<div
+  class="rounded-[4px] border border-[#2a2f3a] bg-[#0f1115] overflow-hidden"
+  <% if tabs_mode? %>
+    data-controller="api-docs--code-tabs"
+  <% end %>
+>
+  <%# Header bar %>
+  <div class="h-9 flex items-center justify-between border-b border-[#2a2f3a] px-3">
+    <div class="flex items-center gap-1">
+      <% if status.present? %>
+        <%# Response panel header with status pill %>
+        <span class="font-mono text-[10px] font-semibold text-[#a4abb8] mr-2"><%= status[:label] %></span>
+        <%
+          status_colors = case status[:code]
+                          when 200, 201 then "bg-[#e7f6ec] text-[#0f7a3d]"
+                          when 400, 422, 429 then "bg-[#fdf3d6] text-[#946700]"
+                          when 401, 403, 404, 409 then "bg-[#fdf3d6] text-[#946700]"
+                          when 500 then "bg-[#fbe9e9] text-[#b03333]"
+                          else "bg-[#eef0f3] text-[#5d6470]"
+                          end
+        %>
+        <span class="font-mono text-[11px] font-semibold rounded-[3px] px-2 py-px <%= status_colors %>"><%= status[:code] %></span>
+      <% elsif tabs_mode? %>
+        <%# Tab buttons %>
+        <% tabs.each_with_index do |(key, tab_label), idx| %>
+          <button
+            data-api-docs--code-tabs-target="tab"
+            data-tab-key="<%= key %>"
+            data-action="click->api-docs--code-tabs#switch"
+            class="font-mono text-[11px] px-2.5 py-1.5 rounded-[2px] transition-colors <%= idx == 0 ? 'bg-[#1a1d24] text-white border-b border-[#1f4ed8]' : 'text-[#a4abb8] hover:text-white' %>"
+          >
+            <%= tab_label %>
+          </button>
+        <% end %>
+      <% elsif label.present? %>
+        <%# Static label %>
+        <span class="font-mono text-[10px] font-semibold text-[#a4abb8]"><%= label %></span>
+      <% end %>
+    </div>
+
+    <%# Copy button %>
+    <% if copyable %>
+      <button
+        data-controller="api-docs--copy"
+        data-action="click->api-docs--copy#copy"
+        class="flex items-center gap-1 font-mono text-[10px] text-[#a4abb8] hover:text-white transition-colors"
+      >
+        <%# Heroicon: clipboard — 14×14 %>
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+        </svg>
+        <span data-api-docs--copy-target="label">Copy</span>
+      </button>
+    <% end %>
+  </div>
+
+  <%# Body area %>
+  <% if tabs_mode? %>
+    <% panes.each_with_index do |pane, idx| %>
+      <div
+        data-api-docs--code-tabs-target="pane"
+        data-pane-key="<%= pane.key %>"
+        class="<%= idx == 0 ? '' : 'hidden' %>"
+      >
+        <pre
+          data-api-docs--copy-target="source"
+          class="p-4 font-mono text-[12px] leading-[1.6] text-[#a4abb8] overflow-x-auto"
+        ><%= pane.content %></pre>
+      </div>
+    <% end %>
+  <% else %>
+    <pre
+      data-api-docs--copy-target="source"
+      class="p-4 font-mono text-[12px] leading-[1.6] text-[#a4abb8] overflow-x-auto"
+    ><%= body&.to_s %></pre>
+  <% end %>
+</div>

@@ -1,0 +1,65 @@
+<%= render "ui/api_docs/page_header",
+      crumbs: [["api", nil], ["authentication", nil]],
+      title: t('opensop.api_docs.guides.authentication.title'),
+      subtitle: t('opensop.api_docs.guides.authentication.subtitle') %>
+
+<div class="px-10 py-8 max-w-3xl space-y-10">
+
+  <%# 1 · Outbound calls — bearer token %>
+  <section>
+    <h2 class="text-[18px] font-semibold text-[#0f1115] mb-3"><%= t('opensop.api_docs.guides.authentication.outbound.heading') %></h2>
+    <p class="text-[14px] text-[#5d6470] leading-relaxed mb-4"><%= t('opensop.api_docs.guides.authentication.outbound.body_html').html_safe %></p>
+
+    <%
+      curl_auth = "curl https://api.opensop.dev/sop/ \\\n  -H \"X-SOP-Token: sk_workspace_acme_4f9c...\""
+    %>
+    <%= render Ui::ApiDocs::CodePanelComponent.new(tabs: [[:curl, "curl"]]) do |panel| %>
+      <% panel.with_pane(key: :curl).with_content(curl_auth) %>
+    <% end %>
+  </section>
+
+  <%# 2 · Inbound triggers — HMAC %>
+  <section>
+    <h2 class="text-[18px] font-semibold text-[#0f1115] mb-3"><%= t('opensop.api_docs.guides.authentication.inbound.heading') %></h2>
+    <p class="text-[14px] text-[#5d6470] leading-relaxed mb-4"><%= t('opensop.api_docs.guides.authentication.inbound.body_html').html_safe %></p>
+
+    <%= render Ui::ApiDocs::CalloutComponent.new(variant: :warn, label: "IMPORTANT") do |c| %>
+      <% c.with_body do %><%= t('opensop.api_docs.guides.authentication.inbound.callout') %><% end %>
+    <% end %>
+  </section>
+
+  <%# 3 · Webhook callbacks — single-use ID %>
+  <section>
+    <h2 class="text-[18px] font-semibold text-[#0f1115] mb-3"><%= t('opensop.api_docs.guides.authentication.callback.heading') %></h2>
+    <p class="text-[14px] text-[#5d6470] leading-relaxed mb-2"><%= t('opensop.api_docs.guides.authentication.callback.body') %></p>
+    <p class="text-[13px] text-[#9aa0a8]"><%= t('opensop.api_docs.guides.authentication.callback.expiry_html').html_safe %></p>
+  </section>
+
+  <%# Token rotation %>
+  <section>
+    <h2 class="text-[18px] font-semibold text-[#0f1115] mb-3"><%= t('opensop.api_docs.guides.authentication.rotation.heading') %></h2>
+    <table class="w-full text-left border-collapse">
+      <thead>
+        <tr>
+          <th class="font-mono text-[10px] uppercase tracking-[0.06em] text-[#9aa0a8] py-3 px-4 border-b border-[#eaecef]"><%= t('opensop.api_docs.guides.authentication.rotation.col_action') %></th>
+          <th class="font-mono text-[10px] uppercase tracking-[0.06em] text-[#9aa0a8] py-3 px-4 border-b border-[#eaecef]"><%= t('opensop.api_docs.guides.authentication.rotation.col_endpoint') %></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="border-b border-[#eaecef]">
+          <td class="text-[13px] text-[#0f1115] py-3 px-4"><%= t('opensop.api_docs.guides.authentication.rotation.create') %></td>
+          <td class="font-mono text-[12px] text-[#0f1115] py-3 px-4"><%= t('opensop.api_docs.guides.authentication.rotation.create_endpoint') %></td>
+        </tr>
+        <tr class="border-b border-[#eaecef]">
+          <td class="text-[13px] text-[#0f1115] py-3 px-4"><%= t('opensop.api_docs.guides.authentication.rotation.list') %></td>
+          <td class="font-mono text-[12px] text-[#0f1115] py-3 px-4"><%= t('opensop.api_docs.guides.authentication.rotation.list_endpoint') %></td>
+        </tr>
+        <tr>
+          <td class="text-[13px] text-[#0f1115] py-3 px-4"><%= t('opensop.api_docs.guides.authentication.rotation.revoke') %></td>
+          <td class="font-mono text-[12px] text-[#0f1115] py-3 px-4"><%= t('opensop.api_docs.guides.authentication.rotation.revoke_endpoint') %></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+</div>
