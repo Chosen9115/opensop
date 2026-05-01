@@ -33,9 +33,13 @@
 
   <%# === Nav links === %>
   <nav class="flex items-center gap-5 mr-6">
-    <%= link_to t('opensop.api_docs.topbar.nav.dashboard'),
-                ui_dashboard_path,
-                class: "text-[12px] text-[#5d6470] hover:text-[#0f1115] transition-colors" %>
+    <%# Dashboard link is admin-only — hidden from anonymous visitors when the %>
+    <%# UI is gated behind HTTP Basic auth. %>
+    <% if admin_authenticated? %>
+      <%= link_to t('opensop.api_docs.topbar.nav.dashboard'),
+                  ui_dashboard_path,
+                  class: "text-[12px] text-[#5d6470] hover:text-[#0f1115] transition-colors" %>
+    <% end %>
 
     <%= link_to t('opensop.api_docs.topbar.nav.changelog'),
                 "#",
@@ -54,26 +58,23 @@
     <% end %>
   </nav>
 
-  <%# === Search input — ⌘K focuses; submit is a no-op until a search backend lands === %>
-  <div class="relative w-[280px] shrink-0" data-controller="api-docs-search">
+  <%# === Search trigger — click or ⌘K opens the cmdk modal (rendered by the layout) === %>
+  <button type="button"
+          data-action="click->api-docs-cmdk#open"
+          class="relative w-[280px] h-7 pl-8 pr-12 bg-bg border border-border rounded-[3px] text-[12px] text-left text-[#9aa0a8] hover:border-[#d5d8de] transition-colors shrink-0">
     <%# Magnifier icon %>
-    <div class="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#9aa0a8] pointer-events-none">
+    <span class="absolute left-2.5 top-1/2 -translate-y-1/2">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="11" cy="11" r="8"/>
         <path d="m21 21-4.35-4.35"/>
       </svg>
-    </div>
+    </span>
 
-    <input
-      type="text"
-      placeholder="<%= t('opensop.api_docs.topbar.search_placeholder') %>"
-      class="w-full h-7 pl-8 pr-12 bg-bg border border-border rounded-[3px] text-[12px] text-fg placeholder:text-[#9aa0a8] focus:outline-none focus:border-[#0f1115]"
-      data-api-docs-search-target="input"
-    >
+    <%= t('opensop.api_docs.topbar.search_placeholder') %>
 
-    <%# ⌘K hint badge %>
-    <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center pointer-events-none">
+    <%# ⌘K hint %>
+    <span class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
       <kbd class="font-mono text-[10px] text-[#9aa0a8] bg-[#eef0f3] px-1 py-0.5 rounded-[2px] leading-none">⌘K</kbd>
-    </div>
-  </div>
+    </span>
+  </button>
 </header>

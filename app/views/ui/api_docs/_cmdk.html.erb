@@ -1,0 +1,58 @@
+<%# API-docs command palette modal. Hidden by default — opened via the topbar %>
+<%# search trigger or ⌘K. The dataset is built server-side from Ui::ApiDocs::Catalog %>
+<%# and serialized into a data-value for the Stimulus controller. %>
+<div data-controller="api-docs-cmdk"
+     data-api-docs-cmdk-data-value="<%= docs_cmdk_dataset.to_json %>">
+
+  <%# Backdrop %>
+  <div data-api-docs-cmdk-target="backdrop"
+       data-action="click->api-docs-cmdk#close"
+       class="hidden fixed inset-0 z-40 bg-[#0f1115]/30">
+  </div>
+
+  <%# Dialog %>
+  <div data-api-docs-cmdk-target="dialog"
+       class="hidden fixed inset-0 z-50 flex items-start justify-center pt-[12vh] pointer-events-none">
+    <div class="w-[600px] max-w-[calc(100vw-32px)] bg-bg rounded-[6px] shadow-[0_20px_60px_rgba(0,0,0,0.18)] border border-border overflow-hidden pointer-events-auto flex flex-col">
+
+      <%# Search input row %>
+      <div class="flex items-center gap-2 px-4 h-12 border-b border-border">
+        <%# magnifier icon %>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-[#9aa0a8] shrink-0" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"/>
+          <path d="m21 21-4.35-4.35"/>
+        </svg>
+
+        <input type="text"
+               placeholder="<%= t('opensop.api_docs.cmdk.placeholder') %>"
+               data-api-docs-cmdk-target="input"
+               data-action="input->api-docs-cmdk#filter"
+               class="flex-1 bg-transparent border-0 outline-none text-[15px] text-fg placeholder:text-[#9aa0a8]">
+
+        <kbd class="font-mono text-[10px] text-[#5d6470] bg-[#eef0f3] px-1.5 py-0.5 rounded-[3px] leading-none shrink-0">esc</kbd>
+      </div>
+
+      <%# Result list %>
+      <div data-api-docs-cmdk-target="list"
+           class="max-h-[50vh] overflow-y-auto py-1">
+      </div>
+
+      <%# Footer with keyboard hints %>
+      <div class="flex items-center gap-3 px-4 h-9 border-t border-border bg-bg-sunken text-[11px] text-[#5d6470]">
+        <span class="flex items-center gap-1">
+          <kbd class="font-mono text-[10px] bg-bg border border-border px-1 py-px rounded-[2px] leading-none">↑</kbd>
+          <kbd class="font-mono text-[10px] bg-bg border border-border px-1 py-px rounded-[2px] leading-none">↓</kbd>
+          <%= t('opensop.api_docs.cmdk.hint_navigate') %>
+        </span>
+        <span class="flex items-center gap-1">
+          <kbd class="font-mono text-[10px] bg-bg border border-border px-1 py-px rounded-[2px] leading-none">↵</kbd>
+          <%= t('opensop.api_docs.cmdk.hint_open') %>
+        </span>
+        <span class="flex items-center gap-1">
+          <kbd class="font-mono text-[10px] bg-bg border border-border px-1 py-px rounded-[2px] leading-none">esc</kbd>
+          <%= t('opensop.api_docs.cmdk.hint_close') %>
+        </span>
+      </div>
+    </div>
+  </div>
+</div>

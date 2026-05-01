@@ -16,6 +16,8 @@ module Ui
     # workspace-scoped to leak.
     skip_before_action :authenticate_admin_ui!
 
+    helper_method :admin_authenticated?, :docs_cmdk_dataset
+
     # Defensive override — this layout doesn't render the standard rail, but guard
     # against any future layout changes that might check this.
     def show_rail?
@@ -41,6 +43,53 @@ module Ui
       raise ActionController::RoutingError, "Endpoint not found: #{params[:slug]}" unless @endpoint
 
       @section = Ui::ApiDocs::Catalog.section_for_endpoint(params[:slug])
+    end
+
+    private
+
+    # True when the visitor has valid admin credentials (or admin auth is
+    # disabled by missing env vars). Used to conditionally show admin-only
+    # links such as the topbar Dashboard link on this otherwise-public page.
+    # Does NOT challenge the visitor — read-only check.
+    def admin_authenticated?
+      expected_user = ENV["OPENSOP_UI_USER"].to_s
+      expected_pass = ENV["OPENSOP_UI_PASSWORD"].to_s
+      return true if expected_user.empty? || expected_pass.empty?
+
+      result = authenticate_with_http_basic do |u, p|
+        ActiveSupport::SecurityUtils.secure_compare(u.to_s, expected_user) &&
+          ActiveSupport::SecurityUtils.secure_compare(p.to_s, expected_pass)
+      end
+      result == true
+    end
+
+    # Dataset for the ⌘K command palette modal. One row per guide and per
+    # endpoint, ordered the same way the sidebar groups them. Each row carries
+    # a kind ("doc" or HTTP verb), a label, the navigation href, and a meta
+    # string shown on the right side of the row.
+    def docs_cmdk_dataset
+      guides = Ui::ApiDocs::Catalog::GUIDES.map do |guide|
+        href = guide[:slug] == "quickstart" ? ui_api_docs_path : ui_api_docs_guide_path(guide[:slug])
+        {
+          kind:  "doc",
+          label: I18n.t("opensop.api_docs.guides.#{guide[:slug].underscore}.label"),
+          href:  href,
+          meta:  I18n.t("opensop.api_docs.cmdk.section.getting_started")
+        }
+      end
+
+      endpoints = Ui::ApiDocs::Catalog::ENDPOINT_SECTIONS.flat_map do |section|
+        section[:endpoints].map do |ep|
+          {
+            kind:  ep[:method],
+            label: ep[:path],
+            href:  ui_api_docs_endpoint_path(ep[:slug]),
+            meta:  I18n.t("opensop.api_docs.endpoints.#{ep[:slug].underscore}.title", default: ep[:slug].tr("-", " ").capitalize)
+          }
+        end
+      end
+
+      guides + endpoints
     end
   end
 end

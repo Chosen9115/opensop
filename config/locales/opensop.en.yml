@@ -329,6 +329,14 @@ en:
           changelog: "Changelog"
           github: "GitHub"
 
+      cmdk:
+        placeholder: "Search endpoints, guides, parameters…"
+        hint_navigate: "navigate"
+        hint_open: "open"
+        hint_close: "close"
+        section:
+          getting_started: "Getting started"
+
       sidebar:
         sections:
           getting_started: "Getting Started"

@@ -111,5 +111,37 @@ RSpec.describe "Ui::ApiDocs", type: :request do
       get "/dashboard"
       expect(response).to have_http_status(:unauthorized)
     end
+
+    it "hides the topbar Dashboard link from anonymous visitors" do
+      get "/api-docs"
+      expect(response.body).not_to match(%r{<a[^>]+href="/dashboard"})
+    end
+
+    it "shows the Dashboard link when valid Basic credentials are sent" do
+      creds = ActionController::HttpAuthentication::Basic.encode_credentials("admin", "secret")
+      get "/api-docs", headers: { "HTTP_AUTHORIZATION" => creds }
+      expect(response.body).to match(%r{<a[^>]+href="/dashboard"})
+    end
+  end
+
+  context "when admin HTTP Basic auth is NOT configured (open dev mode)" do
+    it "shows the Dashboard link to anonymous visitors" do
+      get "/api-docs"
+      expect(response.body).to match(%r{<a[^>]+href="/dashboard"})
+    end
+  end
+
+  context "command palette modal" do
+    it "renders the cmdk container with the dataset on every page" do
+      get "/api-docs"
+      expect(response.body).to include('data-controller="api-docs-cmdk"')
+      expect(response.body).to include('data-api-docs-cmdk-data-value=')
+      expect(response.body).to include("Search endpoints, guides, parameters")
+    end
+
+    it "includes a search-trigger button wired to open the modal" do
+      get "/api-docs"
+      expect(response.body).to include('data-action="click->api-docs-cmdk#open"')
+    end
   end
 end

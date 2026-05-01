@@ -14,8 +14,8 @@
     <%= javascript_importmap_tags %>
   </head>
 
-  <body class="bg-bg text-fg antialiased font-sans text-[13px] leading-[1.5]">
-    <div class="min-h-screen flex flex-col">
+  <body class="bg-bg text-fg antialiased font-sans text-[13px] leading-[1.5] h-screen overflow-hidden">
+    <div class="h-full flex flex-col">
       <%= render "ui/api_docs/topbar" %>
 
       <div class="flex flex-1 min-h-0">
@@ -26,5 +26,7 @@
         </main>
       </div>
     </div>
+
+    <%= render "ui/api_docs/cmdk" %>
   </body>
 </html>
