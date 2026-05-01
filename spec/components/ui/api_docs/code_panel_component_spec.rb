@@ -40,7 +40,7 @@ RSpec.describe Ui::ApiDocs::CodePanelComponent, type: :component do
 
   describe "tabbed mode" do
     it "renders one button per tab and one pane per pane slot" do
-      tabs = [[:curl, "curl"], [:node, "node"]]
+      tabs = [ [ :curl, "curl" ], [ :node, "node" ] ]
       result = render_inline(described_class.new(tabs: tabs)) do |panel|
         panel.with_pane(key: :curl) { "curl ..." }
         panel.with_pane(key: :node) { "fetch(...)" }
@@ -56,7 +56,7 @@ RSpec.describe Ui::ApiDocs::CodePanelComponent, type: :component do
     end
 
     it "wires the controller attribute on the root element" do
-      tabs = [[:curl, "curl"]]
+      tabs = [ [ :curl, "curl" ] ]
       result = render_inline(described_class.new(tabs: tabs)) do |panel|
         panel.with_pane(key: :curl) { "curl ..." }
       end
@@ -66,7 +66,7 @@ RSpec.describe Ui::ApiDocs::CodePanelComponent, type: :component do
     end
 
     it "marks the first tab active and shows only the first pane by default" do
-      tabs = [[:curl, "curl"], [:node, "node"]]
+      tabs = [ [ :curl, "curl" ], [ :node, "node" ] ]
       result = render_inline(described_class.new(tabs: tabs)) do |panel|
         panel.with_pane(key: :curl) { "curl" }
         panel.with_pane(key: :node) { "node" }
