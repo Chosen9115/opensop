@@ -76,4 +76,40 @@ RSpec.describe "Ui::ApiDocs", type: :request do
       expect(response).to have_http_status(:not_found)
     end
   end
+
+  # The API reference is intentionally public so docs are linkable and
+  # scrapable. Even when the rest of the admin UI is locked behind HTTP
+  # Basic auth (OPENSOP_UI_USER / OPENSOP_UI_PASSWORD), /api-docs and its
+  # sub-pages must NOT challenge the visitor.
+  context "when admin HTTP Basic auth is configured" do
+    before do
+      ENV["OPENSOP_UI_USER"]     = "admin"
+      ENV["OPENSOP_UI_PASSWORD"] = "secret"
+    end
+
+    after do
+      ENV.delete("OPENSOP_UI_USER")
+      ENV.delete("OPENSOP_UI_PASSWORD")
+    end
+
+    it "/api-docs returns 200 without credentials" do
+      get "/api-docs"
+      expect(response).to have_http_status(:ok)
+    end
+
+    it "/api-docs/guides/:slug returns 200 without credentials" do
+      get "/api-docs/guides/quickstart"
+      expect(response).to have_http_status(:ok)
+    end
+
+    it "/api-docs/endpoints/:slug returns 200 without credentials" do
+      get "/api-docs/endpoints/start-instance"
+      expect(response).to have_http_status(:ok)
+    end
+
+    it "the rest of the admin UI is still gated (sanity check)" do
+      get "/dashboard"
+      expect(response).to have_http_status(:unauthorized)
+    end
+  end
 end

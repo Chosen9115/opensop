@@ -10,6 +10,12 @@ module Ui
   class ApiDocsController < ApplicationController
     layout "api_docs"
 
+    # The API reference is intentionally PUBLIC — no admin auth challenge —
+    # so the docs are linkable, scrapable, and indexable. Content is 100%
+    # static (driven by Ui::ApiDocs::Catalog + i18n) so there is nothing
+    # workspace-scoped to leak.
+    skip_before_action :authenticate_admin_ui!
+
     # Defensive override — this layout doesn't render the standard rail, but guard
     # against any future layout changes that might check this.
     def show_rail?
