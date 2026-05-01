@@ -59,6 +59,13 @@ en:
       required: "Required"
       optional: "Optional"
       confirm: "Are you sure?"
+      json_summary:
+        object:
+          one: "JSON object · 1 key"
+          other: "JSON object · %{count} keys"
+        array:
+          one: "JSON array · 1 item"
+          other: "JSON array · %{count} items"
 
     dashboard:
       title: "Dashboard"
