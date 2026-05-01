@@ -6,7 +6,6 @@ module SopApi
       Rails.root.join("processes/examples/customer-onboarding.sop.yaml")
     )
   end
-
 end
 
 RSpec.configure do |config|
