@@ -4,7 +4,7 @@ process:
   name: appsignal-responder
   version: "1.0"
   description: "Fetch open AppSignal incidents, filter known work, and output a prioritized list for fix dispatch."
-  owner: agent-kitchen
+  owner: opensop-worker
 
   trigger:
     type: api
@@ -13,7 +13,7 @@ process:
     - name: projects
       type: string[]
       required: true
-      description: "List of project names to scan (e.g. [\"web-app\", \"api\"])"
+      description: "List of project names to scan (e.g. [\"myapp\", \"backend\"])"
     - name: phase
       type: enum
       values: ["1", "2", "3", "4"]
@@ -88,4 +88,4 @@ process:
         - name: run_blocked
           type: boolean
 
-  tags: [agent-kitchen, appsignal, incident-management]
+  tags: [appsignal, incident-management]
