@@ -59,5 +59,4 @@ RSpec.describe "Instance show — collapsible JSON", type: :system do
     expect(page).to have_no_css("details[open]")
     expect(page).to have_no_text(%r{"tier": "pro"})
   end
-
 end
