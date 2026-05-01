@@ -139,7 +139,7 @@ If you've been doing engine work correctly (upstream-first), this is a fast-forw
 ## Reporting issues
 
 - **Bugs:** open an issue on `Chosen9115/opensop` with repro steps and what you expected to happen.
-- **Security:** please don't open public issues for security reports. Email the maintainer (see GitHub profile).
+- **Security:** please don't open public issues for security reports. See [`SECURITY.md`](SECURITY.md) for the disclosure policy and reporting channels.
 - **Spec proposals:** for changes to the `0.1` format, open a discussion first — the YAML format is a contract.
 
 ---
