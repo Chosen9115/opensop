@@ -26,5 +26,13 @@ class KeyValueListComponent < ViewComponent::Base
     value.is_a?(Hash) || value.is_a?(Array)
   end
 
+  def summary_label(value)
+    if value.is_a?(Array)
+      I18n.t("opensop.common.json_summary.array", count: value.size)
+    else
+      I18n.t("opensop.common.json_summary.object", count: value.size)
+    end
+  end
+
   attr_reader :empty_label
 end

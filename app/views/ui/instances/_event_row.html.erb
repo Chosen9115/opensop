@@ -14,7 +14,10 @@
       </div>
     <% end %>
     <% if event.data.present? %>
-      <pre class="mt-1 text-[10px] font-mono text-fg-muted bg-bg-sunken border border-border rounded-[3px] p-2 overflow-x-auto whitespace-pre"><%= JSON.pretty_generate(event.data) %></pre>
+      <details class="mt-1 rounded-[3px] border border-border bg-bg-sunken overflow-hidden">
+        <summary class="cursor-pointer select-none px-3 py-2 text-[10px] font-mono text-fg-muted hover:bg-bg-hover rounded-[3px]"><%= t('opensop.common.json_summary.object', count: event.data.size) %></summary>
+        <pre class="text-[10px] font-mono text-fg-muted bg-bg-sunken px-3 py-2 border-t border-border overflow-x-auto whitespace-pre"><%= JSON.pretty_generate(event.data) %></pre>
+      </details>
     <% end %>
   </div>
   <div class="text-[10px] font-mono text-fg-faint text-right"><%= time_ago_in_words(event.created_at) %> ago</div>
