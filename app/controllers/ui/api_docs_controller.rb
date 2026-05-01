@@ -47,14 +47,24 @@ module Ui
 
     private
 
-    # True when the visitor has valid admin credentials (or admin auth is
-    # disabled by missing env vars). Used to conditionally show admin-only
-    # links such as the topbar Dashboard link on this otherwise-public page.
-    # Does NOT challenge the visitor — read-only check.
+    # True when the visitor's request carries valid admin credentials. Mirrors
+    # the auth contract in Ui::ApplicationController#authenticate_admin_ui!.
+    # When OPENSOP_UI_USER / OPENSOP_UI_PASSWORD are set the request is checked
+    # against them in every env; when unset, the test env treats the visitor
+    # as authenticated and dev / staging falls back to the 'admin' / 'admin'
+    # development default. Used to conditionally show admin-only links (e.g.
+    # the topbar Dashboard link) on this otherwise-public page. Does NOT
+    # challenge the visitor — read-only check.
     def admin_authenticated?
-      expected_user = ENV["OPENSOP_UI_USER"].to_s
-      expected_pass = ENV["OPENSOP_UI_PASSWORD"].to_s
-      return true if expected_user.empty? || expected_pass.empty?
+      expected_user = ENV["OPENSOP_UI_USER"].presence
+      expected_pass = ENV["OPENSOP_UI_PASSWORD"].presence
+
+      if expected_user.nil? || expected_pass.nil?
+        return true  if Rails.env.test?
+        return false if Rails.env.production?
+        expected_user = "admin"
+        expected_pass = "admin"
+      end
 
       result = authenticate_with_http_basic do |u, p|
         ActiveSupport::SecurityUtils.secure_compare(u.to_s, expected_user) &&
