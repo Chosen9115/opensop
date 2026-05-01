@@ -56,9 +56,6 @@ RUN bundle exec bootsnap precompile -j 1 app/ lib/
 # eager-load secret check during precompile — the real key is injected at runtime.
 RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
 
-
-
-
 # Final stage for app image
 FROM base
 

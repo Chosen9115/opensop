@@ -1,23 +1,43 @@
 class ActivityRailComponent < ViewComponent::Base
   # Renders the 320px right-hand activity rail for the Paper Pro shell.
-  # Shows up to 12 recent Sop::Event records as compact feed rows. When the
-  # event list is blank, shows a centered empty state.
+  # Three tabs (Feed / Agents / Up next) drive separate panels powered by
+  # the same component initializer; tab switching is handled client-side
+  # by the `activity-rail` Stimulus controller.
   #
   # Usage:
-  #   <%= render ActivityRailComponent.new(events: @rail_events) %>
+  #   <%= render ActivityRailComponent.new(
+  #         events: @rail_events,
+  #         llm_calls: @rail_llm_calls,
+  #         up_next: @rail_up_next
+  #       ) %>
   MAX_EVENTS = 12
+  MAX_LLM_CALLS = 12
+  MAX_UP_NEXT = 12
 
-  def initialize(events:)
+  TAB_KEYS = %w[feed agents up_next].freeze
+
+  def initialize(events: nil, llm_calls: nil, up_next: nil)
     @events = (events || []).first(MAX_EVENTS)
+    @llm_calls = (llm_calls || []).first(MAX_LLM_CALLS)
+    @up_next = (up_next || []).first(MAX_UP_NEXT)
   end
 
-  attr_reader :events
+  attr_reader :events, :llm_calls, :up_next
 
-  def empty?
+  def feed_empty?
     events.blank?
   end
 
-  # Tailwind class for the leading dot, derived from the event_type.
+  def agents_empty?
+    llm_calls.blank?
+  end
+
+  def up_next_empty?
+    up_next.blank?
+  end
+
+  # ── Feed (Sop::Event) ─────────────────────────────────────────────────
+
   def dot_class_for(event)
     type = event.event_type.to_s
     return "bg-ok" if type.end_with?(".completed")
@@ -27,7 +47,6 @@ class ActivityRailComponent < ViewComponent::Base
     "bg-fg-faint"
   end
 
-  # Live indicator for in-flight states pulses; finished states sit static.
   def dot_pulse_class(event)
     type = event.event_type.to_s
     if type.end_with?(".started") || type.start_with?("step.waiting_")
@@ -57,8 +76,57 @@ class ActivityRailComponent < ViewComponent::Base
     process_name
   end
 
-  def time_ago_for(event)
-    helpers.time_ago_in_words(event.created_at)
+  def time_ago_for(time)
+    helpers.time_ago_in_words(time)
+  rescue StandardError
+    ""
+  end
+
+  # ── Agents (Sop::LlmCall) ─────────────────────────────────────────────
+
+  def llm_call_dot_class(call)
+    case call.status.to_s
+    when "succeeded" then "bg-ok"
+    when "errored", "schema_failed" then "bg-err"
+    when "requested" then "bg-info"
+    else "bg-fg-faint"
+    end
+  end
+
+  def llm_call_dot_pulse_class(call)
+    call.status.to_s == "requested" ? "animate-pp-pulse" : ""
+  end
+
+  def llm_call_target_for(call)
+    process_name = call.step&.instance&.process_name.presence || "—"
+    step_id = call.step&.step_id.presence
+    step_id.present? ? "#{process_name}/#{step_id}" : process_name
+  end
+
+  def llm_call_time_for(call)
+    call.started_at || call.created_at
+  end
+
+  # ── Up next (mixed: schedules + waiting steps) ────────────────────────
+
+  # Each up_next item is a hash:
+  #   { kind: :schedule|:waiting_step, label:, target:, eta_at:, dot: }
+  def up_next_dot_class(item)
+    case item[:kind]
+    when :schedule then "bg-info"
+    when :waiting_step then "bg-warn"
+    else "bg-fg-faint"
+    end
+  end
+
+  def up_next_eta_for(item)
+    return "" if item[:eta_at].blank?
+    eta = item[:eta_at]
+    if eta > Time.current
+      "in #{helpers.distance_of_time_in_words(Time.current, eta)}"
+    else
+      "#{helpers.time_ago_in_words(eta)} ago"
+    end
   rescue StandardError
     ""
   end

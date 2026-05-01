@@ -6,7 +6,9 @@ scope module: :ui, as: :ui do
   resources :processes,
             only: [ :index, :show ],
             param: :name,
-            constraints: { name: /[a-z0-9][a-z0-9_-]*/ }
+            constraints: { name: /[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)*/ } do
+    post "runs", to: "processes#start_run", on: :member, as: :runs
+  end
 
   resources :instances, only: [ :index, :show ] do
     member do

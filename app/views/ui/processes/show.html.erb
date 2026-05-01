@@ -20,12 +20,63 @@
     <% if description.present? %>
       <p class="mt-1 text-[12px] text-fg-muted max-w-3xl"><%= description %></p>
     <% end %>
+    <% older_versions = @versions.reject { |v| v == @process.version } %>
+    <% if older_versions.any? %>
+      <div class="mt-1 flex items-center gap-1.5 text-[11px] font-mono text-fg-faint">
+        <span><%= t('opensop.processes.show.other_versions') %>:</span>
+        <% older_versions.sort_by { |v| Gem::Version.new(v.to_s) rescue Gem::Version.new("0") }.reverse.each do |v| %>
+          <%= link_to "v#{v}", ui_process_path(name: @process.name, version: v), class: "hover:text-fg underline" %>
+        <% end %>
+      </div>
+    <% end %>
   </div>
   <div class="flex items-center gap-2">
     <%= link_to t('opensop.processes.show.view_instances'), ui_instances_path(process: @process.name), class: "btn-pp btn-pp-sm" %>
-    <a href="#" aria-disabled="true" title="<%= t('opensop.common.coming_soon') %>" class="btn-pp btn-pp-primary btn-pp-sm opacity-60 cursor-not-allowed">Trigger run</a>
+    <button type="button"
+            class="btn-pp btn-pp-primary btn-pp-sm"
+            onclick="document.getElementById('trigger-run-panel').classList.toggle('hidden')">
+      <%= t('opensop.processes.show.trigger_run') %>
+    </button>
   </div>
 </header>
+
+<!-- Trigger run panel -->
+<div id="trigger-run-panel" class="<%= inputs.empty? ? 'hidden' : 'hidden' %> mb-6 rounded-[3px] border border-border bg-bg p-4">
+  <h2 class="pp-section-title mb-3"><%= t('opensop.processes.show.trigger_run_heading') %></h2>
+  <%= form_with url: runs_ui_process_path(name: @process.name), method: :post, local: true do |f| %>
+    <% if inputs.any? %>
+      <div class="space-y-3 mb-4">
+        <% inputs.each do |input| %>
+          <div>
+            <label class="block text-[11px] font-mono text-fg-muted mb-0.5">
+              <%= input["name"] %>
+              <% if input["required"] %>
+                <span class="text-warn">*</span>
+              <% end %>
+              <% if input["description"].present? %>
+                <span class="text-fg-faint ml-1">— <%= input["description"] %></span>
+              <% end %>
+            </label>
+            <% field_type = case input["type"] when "integer", "number" then "number" else "text" end %>
+            <%= f.text_field "inputs[#{input["name"]}]",
+                type: field_type,
+                required: input["required"],
+                placeholder: input["example"]&.to_s,
+                class: "w-full rounded-[3px] border border-border bg-bg px-2 py-1 text-[12px] font-mono focus:border-border-focus focus:outline-none" %>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
+    <div class="flex items-center gap-2">
+      <%= f.submit t('opensop.processes.show.start_run_button'), class: "btn-pp btn-pp-primary btn-pp-sm" %>
+      <button type="button"
+              class="btn-pp btn-pp-sm"
+              onclick="document.getElementById('trigger-run-panel').classList.add('hidden')">
+        <%= t('opensop.common.cancel') %>
+      </button>
+    </div>
+  <% end %>
+</div>
 
 <!-- Meta grid -->
 <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-8">

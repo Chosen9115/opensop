@@ -34,6 +34,8 @@ en:
         agents: "Agents"
         up_next: "Up next"
       empty: "No activity yet."
+      empty_agents: "No agent calls yet."
+      empty_up_next: "Nothing queued."
       no_actor: "system"
 
     common:
@@ -57,6 +59,13 @@ en:
       required: "Required"
       optional: "Optional"
       confirm: "Are you sure?"
+      json_summary:
+        object:
+          one: "JSON object · 1 key"
+          other: "JSON object · %{count} keys"
+        array:
+          one: "JSON array · 1 item"
+          other: "JSON array · %{count} items"
 
     dashboard:
       title: "Dashboard"
@@ -96,6 +105,10 @@ en:
         view_instances: "View instances"
         view_metrics: "View metrics"
         raw_definition: "Raw definition"
+        other_versions: "Other versions"
+        trigger_run: "Trigger run"
+        trigger_run_heading: "Start a new run"
+        start_run_button: "Start run"
       field:
         required_tag: "required"
         optional_tag: "optional"
@@ -115,8 +128,16 @@ en:
         in_flight_count: "%{count} in flight"
       list:
         runs_label: "runs"
+        total_runs_label: "runs"
+        in_flight_label: "in flight"
         mtd_label: "mtd"
         owner_label: "owner"
+        prior_versions:
+          one: "1 prior version"
+          other: "%{count} prior versions"
+        prior_versions_title:
+          one: "1 prior version available"
+          other: "%{count} prior versions available"
 
     instances:
       title: "Instances"
@@ -231,6 +252,7 @@ en:
       instance_cancel_failed: "Could not cancel instance: %{error}"
       process_not_found: "Process not found."
       instance_not_found: "Instance not found."
+      run_started: "Run started."
 
     errors:
       generic: "Something went wrong."

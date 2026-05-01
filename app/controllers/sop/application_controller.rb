@@ -49,6 +49,18 @@ module Sop
       expected = ENV["OPENSOP_API_TOKEN"]
 
       if expected.blank?
+        # Fail-closed in production. An operator who forgets to set the
+        # token during deploy would otherwise expose every /sop/* endpoint
+        # on the public internet. Dev/test deliberately keep the open-mode
+        # so local work doesn't need ceremony. See GAP-8 in GAPS.md.
+        if Rails.env.production?
+          render json: {
+            error: "server_misconfigured",
+            message: "OPENSOP_API_TOKEN is not set. Set it via your deployment's secret management before serving traffic."
+          }, status: :service_unavailable
+          return false
+        end
+
         unless @@unauth_warned
           Rails.logger.warn("[Sop::ApplicationController] OPENSOP_API_TOKEN not set — API is open (dev/test mode)")
           @@unauth_warned = true
