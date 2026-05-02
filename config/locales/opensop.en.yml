@@ -170,6 +170,11 @@ en:
         cancel_button: "Cancel instance"
         cancel_confirm: "Cancel this instance? This will stop execution immediately."
         cancel_reason_label: "Reason (optional)"
+        copy_debug:
+          button_label: "Copy debug prompt"
+          copied_label: "Copied!"
+          error_label: "Copy failed — try again"
+          aria_label: "Copy debugging prompt to clipboard"
 
     steps:
       type:
