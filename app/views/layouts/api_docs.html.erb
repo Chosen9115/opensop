@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="<%= I18n.locale %>" class="h-full">
+  <head>
+    <title>OpenSOP API Reference</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+    <%= stylesheet_link_tag "tailwind", "data-turbo-track": "reload" %>
+    <%= javascript_importmap_tags %>
+  </head>
+
+  <body class="bg-bg text-fg antialiased font-sans text-[13px] leading-[1.5] h-screen overflow-hidden">
+    <div class="h-full flex flex-col">
+      <%= render "ui/api_docs/topbar" %>
+
+      <div class="flex flex-1 min-h-0">
+        <%= render "ui/api_docs/sidebar" %>
+
+        <main class="flex-1 overflow-auto">
+          <%= yield %>
+        </main>
+      </div>
+    </div>
+
+    <%= render "ui/api_docs/cmdk" %>
+  </body>
+</html>

@@ -174,10 +174,40 @@ module Ui
       end
     end
 
+    # Auth contract for the admin UI:
+    #
+    # * test     — bypassed entirely when both env vars are unset (so request
+    #              specs hit admin pages without signing every request). Specs
+    #              that need to assert the auth gate set the env vars in a
+    #              `before` block.
+    # * production — env vars MUST be set. Boot fails in
+    #              config/initializers/admin_ui_auth.rb if they are not.
+    # * dev / staging / anything else — when env vars are unset, fall back to
+    #              development credentials `admin` / `admin` and log a one-time
+    #              warning. Set both env vars to override.
     def authenticate_admin_ui!
       expected_user = ENV["OPENSOP_UI_USER"].to_s
       expected_pass = ENV["OPENSOP_UI_PASSWORD"].to_s
-      return if expected_user.empty? || expected_pass.empty?
+
+      if expected_user.empty? || expected_pass.empty?
+        # In test, missing env vars opt out of auth — preserves the existing
+        # request-spec convention.
+        return if Rails.env.test?
+
+        # Production should never reach here (the initializer raises). Defensive.
+        return if Rails.env.production?
+
+        expected_user = "admin"
+        expected_pass = "admin"
+        unless self.class.instance_variable_get(:@_admin_default_warning_logged)
+          Rails.logger.warn(
+            "[SECURITY] OPENSOP_UI_USER / OPENSOP_UI_PASSWORD are unset — admin UI " \
+            "is using development defaults 'admin' / 'admin'. Set both env vars " \
+            "before exposing this server to anyone else."
+          )
+          self.class.instance_variable_set(:@_admin_default_warning_logged, true)
+        end
+      end
 
       authenticate_or_request_with_http_basic("OpenSOP") do |u, p|
         ActiveSupport::SecurityUtils.secure_compare(u.to_s, expected_user) &&

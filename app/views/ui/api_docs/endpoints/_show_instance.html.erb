@@ -1,0 +1,86 @@
+<%
+  endpoint = Ui::ApiDocs::Catalog.endpoint("show-instance")
+  section  = Ui::ApiDocs::Catalog.section_for_endpoint("show-instance")
+%>
+<%= render "ui/api_docs/page_header",
+      crumbs: [["api", nil], [section[:label], nil], [t('opensop.api_docs.endpoints.show_instance.title'), nil]],
+      title: t('opensop.api_docs.endpoints.show_instance.title'),
+      method: endpoint[:method],
+      path: endpoint[:path] %>
+
+<div class="px-10 py-8">
+  <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,560px)] gap-12">
+
+    <div class="space-y-6">
+      <p class="text-[14px] text-[#5d6470] leading-relaxed"><%= t('opensop.api_docs.endpoints.show_instance.description') %></p>
+
+      <%= render Ui::ApiDocs::CalloutComponent.new(variant: :info, label: "AUTH") do |c| %>
+        <% c.with_body do %><%= t('opensop.api_docs.common.auth_callout_html').html_safe %><% end %>
+      <% end %>
+
+      <div>
+        <h2 class="font-mono text-[11px] uppercase tracking-[0.06em] text-[#9aa0a8] mb-3"><%= t('opensop.api_docs.common.path_params') %></h2>
+        <dl class="space-y-4">
+          <div>
+            <dt class="flex items-center gap-2 mb-1">
+              <span class="font-mono text-[13px] text-[#0f1115]">name</span>
+              <span class="font-mono text-[11px] text-[#5d6470]">string</span>
+              <span class="font-mono text-[9px] font-bold uppercase bg-[#fbe9e9] text-[#b03333] rounded-[3px] px-1.5 py-px">REQUIRED</span>
+            </dt>
+            <dd class="text-[13px] text-[#5d6470]">The process name.</dd>
+          </div>
+          <div>
+            <dt class="flex items-center gap-2 mb-1">
+              <span class="font-mono text-[13px] text-[#0f1115]">id</span>
+              <span class="font-mono text-[11px] text-[#5d6470]">string</span>
+              <span class="font-mono text-[9px] font-bold uppercase bg-[#fbe9e9] text-[#b03333] rounded-[3px] px-1.5 py-px">REQUIRED</span>
+            </dt>
+            <dd class="text-[13px] text-[#5d6470]">The instance ULID returned by <code class="font-mono text-[11px] bg-[#eef0f3] px-1 rounded-[3px]">POST /start</code>.</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div>
+        <h2 class="font-mono text-[11px] uppercase tracking-[0.06em] text-[#9aa0a8] mb-3"><%= t('opensop.api_docs.common.response') %></h2>
+        <div class="flex items-center gap-3 py-3 border-b border-[#eaecef]">
+          <span class="font-mono text-[11px] font-semibold rounded-[3px] px-2 py-px bg-[#e7f6ec] text-[#0f7a3d]">200</span>
+          <span class="text-[13px] text-[#5d6470]">application/json — Instance state with inputs, outputs, and step summary.</span>
+        </div>
+      </div>
+
+      <div>
+        <h2 class="font-mono text-[11px] uppercase tracking-[0.06em] text-[#9aa0a8] mb-3"><%= t('opensop.api_docs.common.errors_heading') %></h2>
+        <div class="flex items-center gap-3 py-3 border-b border-[#eaecef]">
+          <span class="font-mono text-[11px] font-semibold rounded-[3px] px-2 py-px bg-[#fdf3d6] text-[#946700]">404</span>
+          <code class="font-mono text-[12px] text-[#0f1115]">not_found</code>
+          <span class="text-[13px] text-[#5d6470]">No instance with that id under the named process.</span>
+        </div>
+      </div>
+    </div>
+
+    <%
+      curl_req  = "curl https://api.opensop.dev/sop/customer-onboarding/01HXYZ_ACME_001 \\\n  -H \"X-SOP-Token: $OPENSOP_TOKEN\""
+      node_req  = "const res = await fetch(\n  `https://api.opensop.dev/sop/customer-onboarding/${instanceId}`,\n  { headers: { \"X-SOP-Token\": process.env.OPENSOP_TOKEN } }\n);"
+      py_req    = "resp = requests.get(\n  f\"https://api.opensop.dev/sop/customer-onboarding/{instance_id}\",\n  headers={\"X-SOP-Token\": os.environ[\"OPENSOP_TOKEN\"]}\n)"
+      ruby_req  = 'Net::HTTP.start("api.opensop.dev", use_ssl: true) do |h|' + "\n" +
+                  '  req = Net::HTTP::Get.new("/sop/customer-onboarding/#{instance_id}")' + "\n" +
+                  '  req["X-SOP-Token"] = ENV["OPENSOP_TOKEN"]' + "\n" +
+                  '  puts h.request(req).body' + "\n" +
+                  'end'
+      resp_body = "{\n  \"id\":           \"01HXYZ_ACME_001\",\n  \"process\":      \"customer-onboarding\",\n  \"state\":        \"completed\",\n  \"inputs\":       { \"company_name\": \"Acme Corp\", \"country\": \"US\" },\n  \"outputs\":      { \"account_id\": \"ACC-9271\", \"status\": \"approved\" },\n  \"started_at\":   \"2024-01-15T10:30:00Z\",\n  \"completed_at\": \"2024-01-15T11:02:14Z\"\n}"
+    %>
+    <div class="lg:sticky lg:top-16 lg:self-start space-y-4">
+      <%= render Ui::ApiDocs::CodePanelComponent.new(tabs: [[:curl, "curl"], [:node, "node"], [:python, "python"], [:ruby, "ruby"]]) do |panel| %>
+        <% panel.with_pane(key: :curl).with_content(curl_req) %>
+        <% panel.with_pane(key: :node).with_content(node_req) %>
+        <% panel.with_pane(key: :python).with_content(py_req) %>
+        <% panel.with_pane(key: :ruby).with_content(ruby_req) %>
+      <% end %>
+
+      <%= render Ui::ApiDocs::CodePanelComponent.new(status: { code: 200, label: "RESPONSE" }) do |panel| %>
+        <% panel.with_body do %><%= resp_body %><% end %>
+      <% end %>
+    </div>
+
+  </div>
+</div>

@@ -57,6 +57,10 @@
 
   /* Shadow */
   --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.04);
+
+  /* API docs dark code surface */
+  --color-bg-code-dark:   #0f1115;
+  --color-border-code:    #2a2f3a;
 }
 
 /* Webfonts — Inter + JetBrains Mono.
@@ -120,4 +124,12 @@ body {
   .pp-section-title {
     @apply font-mono text-[11px] uppercase tracking-[0.08em] text-fg-muted font-medium;
   }
+
+  /* API docs syntax-highlight token classes — used in code panel bodies */
+  .tk-key   { color: #b6c1d6; }
+  .tk-str   { color: #c5d99a; }
+  .tk-num   { color: #f1c075; }
+  .tk-com   { color: #6b7281; }
+  .tk-typ   { color: #a8c5ff; }
+  .tk-punct { color: #a4abb8; }
 }

@@ -1,0 +1,18 @@
+<% partial_name = "ui/api_docs/endpoints/#{@endpoint[:slug].underscore}" %>
+<% if lookup_context.exists?(partial_name, [], true) %>
+  <%= render partial: partial_name %>
+<% else %>
+  <%= render "ui/api_docs/page_header",
+        crumbs: [
+          ["api", nil],
+          [@section&.dig(:label) || "endpoints", nil],
+          [@endpoint[:slug], nil]
+        ],
+        title: @endpoint[:slug].humanize,
+        method: @endpoint[:method],
+        path: @endpoint[:path] %>
+
+  <div class="px-10 py-8">
+    <p class="text-[#5d6470] text-[14px]">TODO: Content for "<%= @endpoint[:slug] %>" (Phase 2)</p>
+  </div>
+<% end %>

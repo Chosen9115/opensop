@@ -21,7 +21,13 @@ scope module: :ui, as: :ui do
   get "/webhooks",  to: "webhooks#index",  as: :webhooks
   get "/costs",     to: "costs#index",     as: :costs
   get "/templates", to: "templates#index", as: :templates
-  get "/api-docs",  to: "api_docs#index",  as: :api_docs
+  scope "/api-docs", as: :api_docs do
+    get "/",               to: "api_docs#index",   as: ""
+    get "guides/:slug",    to: "api_docs#guide",    as: :guide,
+        constraints: { slug: /[a-z][a-z0-9_-]*/ }
+    get "endpoints/:slug", to: "api_docs#endpoint", as: :endpoint,
+        constraints: { slug: /[a-z][a-z0-9_-]*/ }
+  end
 
   # Tier 2 informational pages.
   get "/metrics", to: "metrics#index", as: :metrics

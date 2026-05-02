@@ -31,13 +31,12 @@ RSpec.describe "Ui::ApiDocs", type: :request do
     expect(response).to have_http_status(:ok)
   end
 
-  it "renders the page heading" do
+  it "renders the Quickstart page heading on the index" do
     get "/api-docs"
-    # Rails escapes "&" to "&amp;" in HTML output.
-    expect(response.body).to include("API &amp; SDK")
+    expect(response.body).to include("Quickstart")
   end
 
-  it "documents every public /sop/* endpoint path" do
+  it "documents every public /sop/* endpoint path via the sidebar" do
     get "/api-docs"
     endpoint_paths.each do |path|
       expect(response.body).to include(path),
@@ -45,9 +44,104 @@ RSpec.describe "Ui::ApiDocs", type: :request do
     end
   end
 
-  it "mentions the X-SOP-Token auth header and OPENSOP_API_TOKEN env var" do
+  it "mentions the X-SOP-Token auth header" do
     get "/api-docs"
     expect(response.body).to include("X-SOP-Token")
-    expect(response.body).to include("OPENSOP_API_TOKEN")
+  end
+
+  context "guide pages" do
+    Ui::ApiDocs::Catalog::GUIDES.each do |guide|
+      it "returns 200 for /api-docs/guides/#{guide[:slug]}" do
+        get "/api-docs/guides/#{guide[:slug]}"
+        expect(response).to have_http_status(:ok)
+      end
+    end
+
+    it "returns 404 for an unknown guide slug" do
+      get "/api-docs/guides/nonexistent-guide"
+      expect(response).to have_http_status(:not_found)
+    end
+  end
+
+  context "endpoint pages" do
+    Ui::ApiDocs::Catalog::ENDPOINT_SECTIONS.flat_map { |s| s[:endpoints] }.each do |ep|
+      it "returns 200 for /api-docs/endpoints/#{ep[:slug]}" do
+        get "/api-docs/endpoints/#{ep[:slug]}"
+        expect(response).to have_http_status(:ok)
+      end
+    end
+
+    it "returns 404 for an unknown endpoint slug" do
+      get "/api-docs/endpoints/nonexistent-endpoint"
+      expect(response).to have_http_status(:not_found)
+    end
+  end
+
+  # The API reference is intentionally public so docs are linkable and
+  # scrapable. Even when the rest of the admin UI is locked behind HTTP
+  # Basic auth (OPENSOP_UI_USER / OPENSOP_UI_PASSWORD), /api-docs and its
+  # sub-pages must NOT challenge the visitor.
+  context "when admin HTTP Basic auth is configured" do
+    before do
+      ENV["OPENSOP_UI_USER"]     = "admin"
+      ENV["OPENSOP_UI_PASSWORD"] = "secret"
+    end
+
+    after do
+      ENV.delete("OPENSOP_UI_USER")
+      ENV.delete("OPENSOP_UI_PASSWORD")
+    end
+
+    it "/api-docs returns 200 without credentials" do
+      get "/api-docs"
+      expect(response).to have_http_status(:ok)
+    end
+
+    it "/api-docs/guides/:slug returns 200 without credentials" do
+      get "/api-docs/guides/quickstart"
+      expect(response).to have_http_status(:ok)
+    end
+
+    it "/api-docs/endpoints/:slug returns 200 without credentials" do
+      get "/api-docs/endpoints/start-instance"
+      expect(response).to have_http_status(:ok)
+    end
+
+    it "the rest of the admin UI is still gated (sanity check)" do
+      get "/dashboard"
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    it "hides the topbar Dashboard link from anonymous visitors" do
+      get "/api-docs"
+      expect(response.body).not_to match(%r{<a[^>]+href="/dashboard"})
+    end
+
+    it "shows the Dashboard link when valid Basic credentials are sent" do
+      creds = ActionController::HttpAuthentication::Basic.encode_credentials("admin", "secret")
+      get "/api-docs", headers: { "HTTP_AUTHORIZATION" => creds }
+      expect(response.body).to match(%r{<a[^>]+href="/dashboard"})
+    end
+  end
+
+  context "when admin HTTP Basic auth is NOT configured (open dev mode)" do
+    it "shows the Dashboard link to anonymous visitors" do
+      get "/api-docs"
+      expect(response.body).to match(%r{<a[^>]+href="/dashboard"})
+    end
+  end
+
+  context "command palette modal" do
+    it "renders the cmdk container with the dataset on every page" do
+      get "/api-docs"
+      expect(response.body).to include('data-controller="api-docs-cmdk"')
+      expect(response.body).to include('data-api-docs-cmdk-data-value=')
+      expect(response.body).to include("Search endpoints, guides, parameters")
+    end
+
+    it "includes a search-trigger button wired to open the modal" do
+      get "/api-docs"
+      expect(response.body).to include('data-action="click->api-docs-cmdk#open"')
+    end
   end
 end
