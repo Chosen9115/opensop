@@ -29,11 +29,11 @@ module Opensop
         exposing them as REST APIs. The process definition IS the API contract.
 
         <instance>
-          <process_name>#{@instance.process_name}</process_name>
-          <process_version>#{@instance.process_version}</process_version>
-          <instance_id>#{@instance.id}</instance_id>
-          <started_at>#{format_field(@instance.started_at&.iso8601)}</started_at>
-          <status>#{@instance.state}</status>
+          <process_name>#{escape_xml(@instance.process_name)}</process_name>
+          <process_version>#{escape_xml(@instance.process_version)}</process_version>
+          <instance_id>#{escape_xml(@instance.id)}</instance_id>
+          <started_at>#{escape_xml(format_field(@instance.started_at&.iso8601))}</started_at>
+          <status>#{escape_xml(@instance.state)}</status>
         </instance>
 
         <process_definition>
@@ -62,6 +62,15 @@ module Opensop
       value.presence || "[unavailable]"
     end
 
+    # Escapes XML special characters for use OUTSIDE CDATA sections —
+    # element text and attribute values. Free-string fields (step_id,
+    # sub_state, state) can in principle contain `<`, `>`, `&`, and quotes;
+    # without escaping, the XML around them would be malformed and Claude
+    # would see corrupted structure. CDATA-wrapped fields don't need this.
+    def escape_xml(str)
+      str.to_s.gsub(/[<>&"']/, "<" => "&lt;", ">" => "&gt;", "&" => "&amp;", '"' => "&quot;", "'" => "&apos;")
+    end
+
     # -------------------------------------------------------------------------
     # Process YAML
     # -------------------------------------------------------------------------
@@ -71,7 +80,7 @@ module Opensop
         "[unavailable: process not found in registry]"
       else
         yaml = YAML.dump(@instance.process.definition)
-        truncate_yaml(yaml)
+        escape_cdata(truncate_yaml(yaml))
       end
     end
 
@@ -101,15 +110,17 @@ module Opensop
       if @step
         [ @step ]
       else
-        @instance.steps.select { |s| s.error.present? }.first(MAX_FAILED_STEPS)
+        # DB-side filter — avoids loading every step from the instance into
+        # memory just to drop the ones without errors.
+        @instance.steps.where.not(error: [ nil, "" ]).limit(MAX_FAILED_STEPS).to_a
       end
     end
 
     def render_step(step)
       <<~STEP.rstrip
-          <step id="#{step.step_id}" type="#{step.step_type}" attempt="#{step.attempt}">
-            <status>#{step.state}</status>
-            <sub_state>#{format_field(step.sub_state)}</sub_state>
+          <step id="#{escape_xml(step.step_id)}" type="#{escape_xml(step.step_type)}" attempt="#{escape_xml(step.attempt)}">
+            <status>#{escape_xml(step.state)}</status>
+            <sub_state>#{escape_xml(format_field(step.sub_state))}</sub_state>
             <error><![CDATA[
         #{truncate_trace(step.error.to_s)}
             ]]></error>

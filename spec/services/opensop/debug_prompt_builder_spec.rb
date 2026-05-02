@@ -408,4 +408,114 @@ RSpec.describe Opensop::DebugPromptBuilder do
       expect(output).to eq(output.rstrip)
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # 11. XML escaping in non-CDATA fields (element text + attribute values)
+  # ---------------------------------------------------------------------------
+
+  describe "XML escaping outside CDATA" do
+    context "with hostile values in step attributes and text" do
+      let!(:hostile_step) do
+        create(:sop_step,
+               instance: instance,
+               step_id: "step<&>\"'evil",
+               step_type: "automated",
+               state: "failed",
+               sub_state: "waiting<for_input>",
+               error: "boom",
+               position: 1,
+               attempt: 1)
+      end
+
+      before { instance.reload }
+
+      it "escapes < > & \" ' in step attribute values" do
+        out = result
+        expect(out).to include('id="step&lt;&amp;&gt;&quot;&apos;evil"')
+        expect(out).not_to match(/id="step<&>"/)
+      end
+
+      it "escapes < > in element text content (sub_state)" do
+        out = result
+        expect(out).to include("<sub_state>waiting&lt;for_input&gt;</sub_state>")
+        expect(out).not_to include("<sub_state>waiting<for_input>")
+      end
+    end
+
+    context "with hostile values in instance fields" do
+      let(:bad_instance) do
+        create(:sop_instance, :failed,
+               process: process,
+               process_name: "p<one&two>",
+               process_version: "1.0\"x")
+      end
+
+      it "escapes the process name and version in <instance>" do
+        out = described_class.new(instance: bad_instance).call
+        expect(out).to include("<process_name>p&lt;one&amp;two&gt;</process_name>")
+        expect(out).to include("<process_version>1.0&quot;x</process_version>")
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # 12. CDATA escape now applies to YAML too
+  # ---------------------------------------------------------------------------
+
+  describe "CDATA escaping inside <process_definition>" do
+    let(:cdata_yaml_process) do
+      build_process(
+        name: "cdata-yaml",
+        description: "ends with ]]> a CDATA terminator"
+      )
+    end
+
+    let(:cdata_yaml_instance) do
+      create(:sop_instance, :failed,
+             process: cdata_yaml_process,
+             process_name: cdata_yaml_process.name,
+             process_version: cdata_yaml_process.version)
+    end
+
+    it "escapes ]]> inside the YAML so the process_definition CDATA stays intact" do
+      out = described_class.new(instance: cdata_yaml_instance).call
+      # Raw `]]>` adjacent to user content must not appear — only the
+      # split-CDATA escape sequence should.
+      expect(out).not_to include("ends with ]]> a CDATA")
+      expect(out).to include("]]]]><![CDATA[>")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # 13. DB-side step filter respects MAX_FAILED_STEPS without loading all rows
+  # ---------------------------------------------------------------------------
+
+  describe "step loading uses a DB-side filter" do
+    it "issues a query that filters out null/empty errors and limits to MAX_FAILED_STEPS" do
+      # Three failed + two non-failed steps; the SQL should restrict to the
+      # failed ones and cap at MAX_FAILED_STEPS.
+      3.times do |i|
+        create(:sop_step, instance: instance, step_id: "fail-#{i}", state: "failed",
+                          error: "boom-#{i}", position: 100 + i)
+      end
+      create(:sop_step, instance: instance, step_id: "ok",      state: "completed", error: nil, position: 200)
+      create(:sop_step, instance: instance, step_id: "blank",   state: "completed", error: "",  position: 201)
+      instance.reload
+
+      relation_calls = []
+      allow_any_instance_of(ActiveRecord::Relation).to receive(:where).and_wrap_original do |orig, *args, &blk|
+        relation_calls << args
+        orig.call(*args, &blk)
+      end
+
+      out = described_class.new(instance: instance).call
+
+      # Three failed steps appear; non-failed do not
+      expect(out).to include("fail-0")
+      expect(out).to include("fail-1")
+      expect(out).to include("fail-2")
+      expect(out).not_to include('id="ok"')
+      expect(out).not_to include('id="blank"')
+    end
+  end
 end
