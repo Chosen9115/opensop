@@ -7,7 +7,12 @@
 #
 # Override path: set OPENSOP_UI_USER and OPENSOP_UI_PASSWORD in the
 # deployment environment.
-if Rails.env.production?
+#
+# `SECRET_KEY_BASE_DUMMY` is set by Rails 8 during `assets:precompile` at
+# image-build time so the app can boot without real secrets. We skip the
+# credential check in that branch — runtime always has a real
+# SECRET_KEY_BASE, so this only fires on the actual production process.
+if Rails.env.production? && ENV["SECRET_KEY_BASE_DUMMY"].to_s.strip.empty?
   if ENV["OPENSOP_UI_USER"].to_s.strip.empty? || ENV["OPENSOP_UI_PASSWORD"].to_s.strip.empty?
     raise(
       "[SECURITY] OPENSOP_UI_USER and OPENSOP_UI_PASSWORD must both be set in " \

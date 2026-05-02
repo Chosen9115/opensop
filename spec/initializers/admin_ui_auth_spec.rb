@@ -10,12 +10,14 @@ RSpec.describe "config/initializers/admin_ui_auth.rb" do
   let(:initializer_path) { Rails.root.join("config/initializers/admin_ui_auth.rb") }
 
   around do |example|
-    saved_user = ENV["OPENSOP_UI_USER"]
-    saved_pass = ENV["OPENSOP_UI_PASSWORD"]
+    saved_user  = ENV["OPENSOP_UI_USER"]
+    saved_pass  = ENV["OPENSOP_UI_PASSWORD"]
+    saved_dummy = ENV["SECRET_KEY_BASE_DUMMY"]
     example.run
   ensure
-    ENV["OPENSOP_UI_USER"]     = saved_user
-    ENV["OPENSOP_UI_PASSWORD"] = saved_pass
+    ENV["OPENSOP_UI_USER"]       = saved_user
+    ENV["OPENSOP_UI_PASSWORD"]   = saved_pass
+    ENV["SECRET_KEY_BASE_DUMMY"] = saved_dummy
   end
 
   context "in production" do
@@ -57,6 +59,23 @@ RSpec.describe "config/initializers/admin_ui_auth.rb" do
       ENV["OPENSOP_UI_PASSWORD"] = "secret"
 
       expect { load initializer_path }.not_to raise_error
+    end
+
+    # Rails 8 sets SECRET_KEY_BASE_DUMMY=1 during `assets:precompile` at
+    # image build time so the app can boot without real secrets. The
+    # credential check must NOT fire in that branch — otherwise the build
+    # fails with the error the live deploy hit:
+    #   `RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile` → raises.
+    context "during assets:precompile (SECRET_KEY_BASE_DUMMY set)" do
+      before do
+        ENV["SECRET_KEY_BASE_DUMMY"] = "1"
+        ENV.delete("OPENSOP_UI_USER")
+        ENV.delete("OPENSOP_UI_PASSWORD")
+      end
+
+      it "does NOT raise even when credentials are missing" do
+        expect { load initializer_path }.not_to raise_error
+      end
     end
   end
 
