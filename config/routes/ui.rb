@@ -49,6 +49,12 @@ scope module: :ui, as: :ui do
   get "/llms.txt", to: "api_docs#llms_txt", as: :llms_txt,
       defaults: { format: :text }
 
+  # XML sitemap — every public docs URL, with xhtml:link alternates so
+  # search-engine and AI crawlers see the .md mirror right next to the
+  # HTML one. Lives at the application root.
+  get "/sitemap.xml", to: "api_docs#sitemap", as: :sitemap,
+      defaults: { format: :xml }
+
   # Tier 2 informational pages.
   get "/metrics", to: "metrics#index", as: :metrics
   get "/agents",  to: "agents#index",  as: :agents

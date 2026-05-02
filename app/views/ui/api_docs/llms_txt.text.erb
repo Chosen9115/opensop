@@ -5,7 +5,19 @@
 
 > Define a process, get an API. Agents and humans interact through the same `/sop/*` endpoints.
 
-The full markdown bundle lives at <%= host %>/api-docs.md.
+OpenSOP is an open standard and runtime for defining business processes (SOPs) as YAML and exposing them as REST APIs. This file points crawlers and AI agents at the machine-readable documentation.
+
+The full markdown bundle of every guide and endpoint lives at <%= host %>/api-docs.md.
+
+## Project
+
+- **Source:** https://github.com/Chosen9115/opensop
+- **Issues:** https://github.com/Chosen9115/opensop/issues
+- **License:** [MIT](https://github.com/Chosen9115/opensop/blob/main/LICENSE)
+- **API spec version:** <%= Opensop::DefinitionParser::SPEC_VERSION rescue "0.1" %>
+<% if defined?(Opensop::VERSION) -%>
+- **Engine version:** v<%= Opensop::VERSION %>
+<% end -%>
 
 ## Docs
 

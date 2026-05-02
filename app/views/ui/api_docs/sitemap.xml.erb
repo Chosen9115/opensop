@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<%# Sitemap with xhtml:link alternates pointing every HTML page at its .md sibling. %>
+<%# https://www.sitemaps.org/protocol.html %>
+<% base = "#{request.protocol}#{request.host_with_port}" -%>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
+
+  <%# Index — /api-docs (HTML) ↔ /api-docs.md (bundled markdown) %>
+  <url>
+    <loc><%= base %>/api-docs</loc>
+    <xhtml:link rel="alternate" type="text/markdown" href="<%= base %>/api-docs.md"/>
+  </url>
+
+  <%# Bundled markdown as its own URL — agents may fetch this directly %>
+  <url>
+    <loc><%= base %>/api-docs.md</loc>
+  </url>
+
+  <%# llms.txt — agent discovery file %>
+  <url>
+    <loc><%= base %>/llms.txt</loc>
+  </url>
+
+  <%# Per-guide HTML + .md alternate %>
+  <% Ui::ApiDocs::Catalog::GUIDES.each do |guide| -%>
+  <url>
+    <loc><%= base %>/api-docs/guides/<%= guide[:slug] %></loc>
+    <xhtml:link rel="alternate" type="text/markdown"
+                href="<%= base %>/api-docs/guides/<%= guide[:slug] %>.md"/>
+  </url>
+  <% end -%>
+
+  <%# Per-endpoint HTML + .md alternate %>
+  <% Ui::ApiDocs::Catalog::ENDPOINT_SECTIONS.each do |section| -%>
+  <% section[:endpoints].each do |ep| -%>
+  <url>
+    <loc><%= base %>/api-docs/endpoints/<%= ep[:slug] %></loc>
+    <xhtml:link rel="alternate" type="text/markdown"
+                href="<%= base %>/api-docs/endpoints/<%= ep[:slug] %>.md"/>
+  </url>
+  <% end -%>
+  <% end -%>
+</urlset>

@@ -23,14 +23,38 @@ module Ui
     # we deploy, so we tag every response with the current commit SHA and
     # the slug + format the request is asking for. Agents that re-fetch
     # against this etag get a 304.
+    # Production: bound to the deploy revision — stable for the life of a
+    # release, bumps when we redeploy.
+    # Non-production: fingerprints the docs source files (catalog +
+    # locale + every .md.erb partial) by mtime, so a local YAML or
+    # partial edit busts the etag without needing a server restart.
     def docs_revision
-      @_docs_revision ||= ENV["OPENSOP_REVISION"].presence ||
-                          ENV["FLY_MACHINE_VERSION"].presence ||
-                          (defined?(Opensop::VERSION) ? Opensop::VERSION : "dev")
+      @_docs_revision ||=
+        if Rails.env.production?
+          ENV["OPENSOP_REVISION"].presence ||
+            ENV["FLY_MACHINE_VERSION"].presence ||
+            (defined?(Opensop::VERSION) ? Opensop::VERSION : "dev")
+        else
+          dev_template_fingerprint
+        end
     end
 
     def docs_etag_for(*parts)
       [ docs_revision, *parts ].compact.join("-")
+    end
+
+    DEV_FINGERPRINT_GLOBS = %w[
+      app/views/ui/api_docs/**/*.md.erb
+      app/views/ui/api_docs/**/*.html.erb
+      app/services/ui/api_docs/**/*.rb
+      config/locales/opensop.en.yml
+    ].freeze
+
+    def dev_template_fingerprint
+      paths = DEV_FINGERPRINT_GLOBS.flat_map { |g| Dir[Rails.root.join(g)] }
+      Digest::MD5.hexdigest(
+        paths.sort.map { |p| "#{p}:#{File.mtime(p).to_i}" }.join("|")
+      )[0, 12]
     end
 
     # Defensive override — this layout doesn't render the standard rail, but guard
@@ -93,6 +117,15 @@ module Ui
     def llms_txt
       fresh_when etag: docs_etag_for(:llms_txt), public: true
       render layout: false, content_type: "text/plain; charset=utf-8" unless performed?
+    end
+
+    # GET /sitemap.xml
+    # XML sitemap listing every HTML doc URL, each with an xhtml:link
+    # alternate pointing at the .md sibling. Crawlers (Googlebot, ClaudeBot,
+    # GPTBot, PerplexityBot, …) discover both formats in one fetch.
+    def sitemap
+      fresh_when etag: docs_etag_for(:sitemap), public: true
+      render layout: false, content_type: "application/xml; charset=utf-8" unless performed?
     end
 
     private

@@ -113,6 +113,15 @@ RSpec.describe "Ui::ApiDocs markdown surface", type: :request do
       expect(response.body).to match(%r{/api-docs\.md})
     end
 
+    it "advertises a Project metadata block with source / issues / license / spec version" do
+      get "/llms.txt"
+      expect(response.body).to include("## Project")
+      expect(response.body).to include("**Source:**")
+      expect(response.body).to include("**Issues:**")
+      expect(response.body).to include("**License:**")
+      expect(response.body).to include("**API spec version:**")
+    end
+
     it "links to every per-guide and per-endpoint markdown URL" do
       get "/llms.txt"
       Ui::ApiDocs::Catalog::GUIDES.each do |g|
@@ -123,6 +132,63 @@ RSpec.describe "Ui::ApiDocs markdown surface", type: :request do
         expect(response.body).to include("/api-docs/endpoints/#{ep[:slug]}.md"),
           "expected llms.txt to link to endpoint #{ep[:slug]}.md"
       end
+    end
+  end
+
+  describe "GET /sitemap.xml" do
+    it "returns 200 with application/xml content type" do
+      get "/sitemap.xml"
+      expect(response).to have_http_status(:ok)
+      expect(response.content_type).to start_with("application/xml")
+    end
+
+    it "is a well-formed urlset declaring the xhtml namespace" do
+      get "/sitemap.xml"
+      expect(response.body).to start_with(%(<?xml version="1.0" encoding="UTF-8"?>))
+      expect(response.body).to include('xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"')
+      expect(response.body).to include('xmlns:xhtml="http://www.w3.org/1999/xhtml"')
+    end
+
+    it "lists every HTML doc URL with a markdown alternate" do
+      get "/sitemap.xml"
+      # Index, bundled, llms.txt, every guide, every endpoint
+      expect(response.body).to include("<loc>")
+      expect(response.body).to match(%r{<loc>[^<]*/api-docs</loc>})
+      expect(response.body).to match(%r{<loc>[^<]*/api-docs\.md</loc>})
+      expect(response.body).to match(%r{<loc>[^<]*/llms\.txt</loc>})
+
+      Ui::ApiDocs::Catalog::GUIDES.each do |g|
+        expect(response.body).to include("/api-docs/guides/#{g[:slug]}</loc>")
+        expect(response.body).to include(%(href="http://www.example.com/api-docs/guides/#{g[:slug]}.md"))
+      end
+      Ui::ApiDocs::Catalog::ENDPOINT_SECTIONS.flat_map { |s| s[:endpoints] }.each do |ep|
+        expect(response.body).to include("/api-docs/endpoints/#{ep[:slug]}</loc>")
+        expect(response.body).to include(%(href="http://www.example.com/api-docs/endpoints/#{ep[:slug]}.md"))
+      end
+    end
+
+    it "supports ETag and 304" do
+      get "/sitemap.xml"
+      etag = response.headers["ETag"]
+      expect(etag).to be_present
+      get "/sitemap.xml", headers: { "If-None-Match" => etag }
+      expect(response).to have_http_status(:not_modified)
+    end
+  end
+
+  describe "dev-mode ETag fingerprint" do
+    # In non-production, the etag is derived from the mtime of the docs
+    # source files. Touching a partial should bust an existing etag so
+    # agents see the new content without restarting the server.
+    let(:partial) { Rails.root.join("app/views/ui/api_docs/guides/_quickstart.md.erb") }
+
+    it "changes when a docs source file is touched" do
+      get "/api-docs/guides/quickstart.md"
+      etag_before = response.headers["ETag"]
+      File.utime(Time.now + 1, Time.now + 1, partial)
+      get "/api-docs/guides/quickstart.md"
+      etag_after = response.headers["ETag"]
+      expect(etag_after).not_to eq(etag_before)
     end
   end
 
