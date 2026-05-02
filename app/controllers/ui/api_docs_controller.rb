@@ -16,7 +16,7 @@ module Ui
     # workspace-scoped to leak.
     skip_before_action :authenticate_admin_ui!
 
-    helper_method :admin_authenticated?, :docs_cmdk_dataset, :docs_etag_for
+    helper_method :admin_authenticated?, :docs_cmdk_dataset, :docs_etag_for, :docs_lastmod
 
     # Cacheable, content-addressable etag for any docs response. The
     # underlying inputs (catalog + i18n + view templates) only change when
@@ -51,10 +51,28 @@ module Ui
     ].freeze
 
     def dev_template_fingerprint
-      paths = DEV_FINGERPRINT_GLOBS.flat_map { |g| Dir[Rails.root.join(g)] }
       Digest::MD5.hexdigest(
-        paths.sort.map { |p| "#{p}:#{File.mtime(p).to_i}" }.join("|")
+        dev_source_paths.map { |p| "#{p}:#{File.mtime(p).to_i}" }.join("|")
       )[0, 12]
+    end
+
+    def dev_source_paths
+      @_dev_source_paths ||= DEV_FINGERPRINT_GLOBS.flat_map { |g| Dir[Rails.root.join(g)] }.sort
+    end
+
+    # Single timestamp used as <lastmod> for every URL in the sitemap. In
+    # production this resolves to today's UTC date — sufficient for sitemap
+    # consumers, which mostly care about day-level freshness. In dev we use
+    # the most recent source-file mtime so a local edit immediately surfaces
+    # in the sitemap output.
+    def docs_lastmod
+      @_docs_lastmod ||= begin
+        if Rails.env.production?
+          Date.current.iso8601
+        else
+          Time.at(dev_source_paths.map { |p| File.mtime(p).to_i }.max).utc.to_date.iso8601
+        end
+      end
     end
 
     # Defensive override — this layout doesn't render the standard rail, but guard

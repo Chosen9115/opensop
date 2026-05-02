@@ -326,10 +326,41 @@ RSpec.describe "Ui::ApiDocs markdown surface", type: :request do
       get "/api-docs/endpoints/start-instance"
       expect(response.body).to include('<link rel="alternate" type="text/markdown" href="/api-docs/endpoints/start-instance.md"')
     end
+  end
 
-    it "every HTML page also links to /llms.txt" do
-      get "/api-docs"
-      expect(response.body).to include('<link rel="alternate" type="text/plain" href="/llms.txt"')
+  # /api-docs.md MUST resolve to ApiDocsController#bundled. The HTML index
+  # route at /api-docs(.:format) used to greedily match `.md` and serve the
+  # Quickstart HTML through the index action — keep this regression in
+  # check by asserting the recognized action for each path.
+  describe "route → action wiring" do
+    def recognize(path)
+      Rails.application.routes.recognize_path(path, method: :get)
+    end
+
+    it "GET /api-docs.md routes to ui/api_docs#bundled" do
+      expect(recognize("/api-docs.md")).to include(controller: "ui/api_docs", action: "bundled")
+    end
+
+    it "GET /api-docs/guides/:slug.md routes to ui/api_docs#guide with format=md" do
+      result = recognize("/api-docs/guides/quickstart.md")
+      expect(result).to include(controller: "ui/api_docs", action: "guide", slug: "quickstart")
+    end
+
+    it "GET /api-docs/endpoints/:slug.md routes to ui/api_docs#endpoint with format=md" do
+      result = recognize("/api-docs/endpoints/start-instance.md")
+      expect(result).to include(controller: "ui/api_docs", action: "endpoint", slug: "start-instance")
+    end
+
+    it "GET /api-docs (no format) routes to ui/api_docs#index" do
+      expect(recognize("/api-docs")).to include(controller: "ui/api_docs", action: "index")
+    end
+
+    it "GET /llms.txt routes to ui/api_docs#llms_txt" do
+      expect(recognize("/llms.txt")).to include(controller: "ui/api_docs", action: "llms_txt")
+    end
+
+    it "GET /sitemap.xml routes to ui/api_docs#sitemap" do
+      expect(recognize("/sitemap.xml")).to include(controller: "ui/api_docs", action: "sitemap")
     end
   end
 

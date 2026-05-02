@@ -163,5 +163,33 @@ RSpec.describe "Ui::ApiDocs markdown partials structure", type: :request do
       second = response.body
       expect(first).to eq(second)
     end
+
+    # Every link in the table-of-contents that targets an in-document
+    # anchor (e.g. `#guide-quickstart`) must have a matching anchor in
+    # the body. Catches a partial that drops or renames its `<a id>`.
+    it "every TOC anchor link resolves to an anchor in the body" do
+      get "/api-docs.md"
+      anchor_links = response.body.scan(/\]\(#([^)\s]+)\)/).flatten.uniq
+      expect(anchor_links).not_to be_empty, "bundled MD has no in-document anchor links"
+
+      anchor_links.each do |anchor|
+        # Markdown TOCs may target anchors via either an HTML `<a id>` or
+        # a heading whose auto-generated slug matches.
+        html_anchor    = response.body.include?(%(id="#{anchor}"))
+        heading_match  = response.body.match(/^#+\s+#{Regexp.escape(anchor.gsub('-', ' '))}\b/i)
+        expect(html_anchor || heading_match).to be_truthy,
+          "expected bundled MD to define anchor ##{anchor} (via <a id> or matching heading)"
+      end
+    end
+
+    it "the contents block lists every guide and endpoint" do
+      get "/api-docs.md"
+      Ui::ApiDocs::Catalog::GUIDES.each do |g|
+        expect(response.body).to include("(#guide-#{g[:slug]})")
+      end
+      Ui::ApiDocs::Catalog::ENDPOINT_SECTIONS.flat_map { |s| s[:endpoints] }.each do |ep|
+        expect(response.body).to include("(#endpoint-#{ep[:slug]})")
+      end
+    end
   end
 end

@@ -14,7 +14,7 @@ The full markdown bundle of every guide and endpoint lives at <%= host %>/api-do
 - **Source:** https://github.com/Chosen9115/opensop
 - **Issues:** https://github.com/Chosen9115/opensop/issues
 - **License:** [MIT](https://github.com/Chosen9115/opensop/blob/main/LICENSE)
-- **API spec version:** <%= Opensop::DefinitionParser::SPEC_VERSION rescue "0.1" %>
+- **API spec version:** <%= defined?(Opensop::DefinitionParser::SPEC_VERSION) ? Opensop::DefinitionParser::SPEC_VERSION : "0.1" %>
 <% if defined?(Opensop::VERSION) -%>
 - **Engine version:** v<%= Opensop::VERSION %>
 <% end -%>
