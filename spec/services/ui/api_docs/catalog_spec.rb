@@ -31,9 +31,9 @@ RSpec.describe Ui::ApiDocs::Catalog do
       end
     end
 
-    it "has every endpoint shaped { slug:, method:, path:, summary_key: }" do
+    it "has every endpoint shaped { slug:, method:, path: }" do
       described_class::ENDPOINT_SECTIONS.flat_map { |s| s[:endpoints] }.each do |ep|
-        expect(ep.keys).to include(:slug, :method, :path, :summary_key)
+        expect(ep.keys).to contain_exactly(:slug, :method, :path)
         expect(ep[:slug]).to match(/\A[a-z][a-z0-9-]*\z/)
         expect(ep[:method]).to be_in(%w[GET POST DELETE PATCH])
         expect(ep[:path]).to start_with("/sop/")

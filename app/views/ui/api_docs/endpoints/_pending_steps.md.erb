@@ -1,0 +1,63 @@
+## `GET /sop/steps/pending`
+
+**<%= t('opensop.api_docs.endpoints.pending_steps.title') %>** — Returns all steps across all instances that are in the `active` state and of type `automated`. External workers poll this endpoint to discover work.
+
+> **Auth:** Requires `X-SOP-Token` header. See [Authentication](/api-docs/guides/authentication.md).
+
+### Response
+
+`200 application/json` — Array of active automated step objects with their instance context.
+
+```json
+[
+  {
+    "step_id":     "send-welcome-email",
+    "instance_id": "01HXYZ_ACME_001",
+    "process":     "customer-onboarding",
+    "inputs":      { "email": "admin@acmecorp.com" }
+  }
+]
+```
+
+### Errors
+
+| Status | Code | Meaning |
+|--------|------|---------|
+| 401 | `unauthorized` | Token missing or revoked. |
+
+### Code examples
+
+#### curl
+
+```bash
+curl https://api.opensop.dev/sop/steps/pending \
+  -H "X-SOP-Token: $OPENSOP_TOKEN"
+```
+
+#### Node
+
+```js
+const pending = await fetch(
+  "https://api.opensop.dev/sop/steps/pending",
+  { headers: { "X-SOP-Token": process.env.OPENSOP_TOKEN } }
+).then(r => r.json());
+```
+
+#### Python
+
+```python
+resp = requests.get(
+  "https://api.opensop.dev/sop/steps/pending",
+  headers={"X-SOP-Token": os.environ["OPENSOP_TOKEN"]}
+)
+```
+
+#### Ruby
+
+```ruby
+Net::HTTP.start("api.opensop.dev", use_ssl: true) do |h|
+  req = Net::HTTP::Get.new("/sop/steps/pending")
+  req["X-SOP-Token"] = ENV["OPENSOP_TOKEN"]
+  puts h.request(req).body
+end
+```

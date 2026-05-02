@@ -12,6 +12,17 @@
 
     <%= stylesheet_link_tag "tailwind", "data-turbo-track": "reload" %>
     <%= javascript_importmap_tags %>
+
+    <%# Tell crawlers + agents where the markdown mirror of THIS page lives. %>
+    <%# llms.txt sits at the application root and is found by convention; %>
+    <%# it isn't an alternate of the page being viewed, so it doesn't go %>
+    <%# in <link rel="alternate"> here. %>
+    <% md_alternate_href =
+         if @endpoint then "/api-docs/endpoints/#{@endpoint[:slug]}.md"
+         elsif @guide then "/api-docs/guides/#{@guide[:slug]}.md"
+         else              "/api-docs.md"
+         end %>
+    <link rel="alternate" type="text/markdown" href="<%= md_alternate_href %>" title="Markdown version">
   </head>
 
   <body class="bg-bg text-fg antialiased font-sans text-[13px] leading-[1.5] h-screen overflow-hidden">

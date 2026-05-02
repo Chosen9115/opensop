@@ -15,31 +15,31 @@ module Ui
 
       ENDPOINT_SECTIONS = [
         { key: :discovery, label: "Discovery", endpoints: [
-            { slug: "list-processes",   method: "GET",  path: "/sop/",                                      summary_key: "list_processes" },
-            { slug: "process-schema",   method: "GET",  path: "/sop/:name/schema",                          summary_key: "process_schema" }
+            { slug: "list-processes",   method: "GET",  path: "/sop/" },
+            { slug: "process-schema",   method: "GET",  path: "/sop/:name/schema" }
           ] },
         { key: :processes, label: "Processes", endpoints: [
-            { slug: "register-process", method: "POST", path: "/sop/processes/register",                    summary_key: "register_process" }
+            { slug: "register-process", method: "POST", path: "/sop/processes/register" }
           ] },
         { key: :instances, label: "Instances", endpoints: [
-            { slug: "list-instances",   method: "GET",  path: "/sop/instances",                             summary_key: "list_instances" },
-            { slug: "start-instance",   method: "POST", path: "/sop/:name/start",                           summary_key: "start_instance" },
-            { slug: "show-instance",    method: "GET",  path: "/sop/:name/:id",                             summary_key: "show_instance" },
-            { slug: "cancel-instance",  method: "POST", path: "/sop/:name/:id/cancel",                      summary_key: "cancel_instance" }
+            { slug: "list-instances",   method: "GET",  path: "/sop/instances" },
+            { slug: "start-instance",   method: "POST", path: "/sop/:name/start" },
+            { slug: "show-instance",    method: "GET",  path: "/sop/:name/:id" },
+            { slug: "cancel-instance",  method: "POST", path: "/sop/:name/:id/cancel" }
           ] },
         { key: :steps, label: "Steps", endpoints: [
-            { slug: "list-steps",       method: "GET",  path: "/sop/:name/:id/steps",                       summary_key: "list_steps" },
-            { slug: "submit-step",      method: "POST", path: "/sop/:name/:id/steps/:step_id/submit",       summary_key: "submit_step" },
-            { slug: "pending-steps",    method: "GET",  path: "/sop/steps/pending",                         summary_key: "pending_steps" }
+            { slug: "list-steps",       method: "GET",  path: "/sop/:name/:id/steps" },
+            { slug: "submit-step",      method: "POST", path: "/sop/:name/:id/steps/:step_id/submit" },
+            { slug: "pending-steps",    method: "GET",  path: "/sop/steps/pending" }
           ] },
         { key: :webhook_triggers, label: "Webhook triggers", endpoints: [
-            { slug: "fire-trigger",     method: "POST", path: "/sop/triggers/:process_name",                summary_key: "fire_trigger" }
+            { slug: "fire-trigger",     method: "POST", path: "/sop/triggers/:process_name" }
           ] },
         { key: :webhook_callbacks, label: "Webhook callbacks", endpoints: [
-            { slug: "deliver-callback", method: "POST", path: "/sop/webhooks/:callback_id",                 summary_key: "deliver_callback" }
+            { slug: "deliver-callback", method: "POST", path: "/sop/webhooks/:callback_id" }
           ] },
         { key: :metrics, label: "Metrics", endpoints: [
-            { slug: "show-metrics",     method: "GET",  path: "/sop/metrics",                               summary_key: "show_metrics" }
+            { slug: "show-metrics",     method: "GET",  path: "/sop/metrics" }
           ] }
       ].freeze
 

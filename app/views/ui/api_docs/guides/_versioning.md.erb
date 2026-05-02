@@ -1,0 +1,18 @@
+## <%= t('opensop.api_docs.guides.versioning.title') %>
+
+<%= t('opensop.api_docs.guides.versioning.subtitle') %>
+
+### API version
+
+The wire format is identified by the top-level `opensop:` field on every process YAML. The engine refuses to register YAML whose major version it does not understand.
+
+| Version | Status | Notes |
+|---------|--------|-------|
+| 0.1 | CURRENT | Initial public release. |
+| 0.2 | PREVIEW | Configurable metrics window, parallel step blocks. |
+
+### Process versions
+
+Every process has its own semver-style `version` string. Re-publishing under a new version does not affect in-flight instances — they continue running against the version they started under.
+
+When you call `GET /sop/:name/schema` without `?version=`, you get the latest published version. To pin, pass it explicitly.
