@@ -146,6 +146,127 @@ RSpec.describe "Ui::ApiDocs markdown surface", type: :request do
     end
   end
 
+  # The bundle and per-page MD must contain only markdown — no Tailwind class
+  # patterns, no ERB residue, no <html>/<body> tags. Catches the easy case
+  # where a partial accidentally embeds chrome from the HTML version.
+  describe "content quality" do
+    let(:md_paths) do
+      [
+        "/api-docs.md",
+        *Ui::ApiDocs::Catalog::GUIDES.map     { |g| "/api-docs/guides/#{g[:slug]}.md" },
+        *Ui::ApiDocs::Catalog::ENDPOINT_SECTIONS.flat_map { |s| s[:endpoints] }.map { |ep| "/api-docs/endpoints/#{ep[:slug]}.md" }
+      ]
+    end
+
+    it "every MD response contains no Tailwind utility class patterns" do
+      md_paths.each do |path|
+        get path
+        # Tailwind utilities show up as class="..." attributes; the markdown
+        # surface should never serve them.
+        expect(response.body).not_to match(/class\s*=\s*["'][^"']*\b(?:bg-|text-|flex|grid|px-|py-|mx-|my-|rounded)/),
+          "expected #{path} to contain no Tailwind class attributes"
+      end
+    end
+
+    it "every MD response contains no ERB residue" do
+      md_paths.each do |path|
+        get path
+        expect(response.body).not_to include("<%"),
+          "expected #{path} to have no leftover ERB tags"
+        expect(response.body).not_to include("%>"),
+          "expected #{path} to have no leftover ERB tags"
+      end
+    end
+
+    it "every MD response is layout-free (no <html>, <body>, <head>)" do
+      md_paths.each do |path|
+        get path
+        expect(response.body).not_to match(/<html[\s>]/i),  "expected #{path} to have no <html> tag"
+        expect(response.body).not_to match(/<body[\s>]/i),  "expected #{path} to have no <body> tag"
+        expect(response.body).not_to match(/<head[\s>]/i),  "expected #{path} to have no <head> tag"
+      end
+    end
+
+    it "the bundle has balanced fenced code blocks" do
+      get "/api-docs.md"
+      fence_count = response.body.scan(/^```/).size
+      expect(fence_count).to be_even,
+        "expected ``` fences to be balanced, found #{fence_count}"
+    end
+  end
+
+  # Agents that re-fetch should get a 304 from the etag — re-rendering a
+  # 50KB bundle on every poll is a waste.
+  describe "HTTP caching" do
+    it "/api-docs.md returns an ETag header" do
+      get "/api-docs.md"
+      expect(response.headers["ETag"]).to be_present
+    end
+
+    it "/api-docs.md returns 304 when If-None-Match matches" do
+      get "/api-docs.md"
+      etag = response.headers["ETag"]
+      get "/api-docs.md", headers: { "If-None-Match" => etag }
+      expect(response).to have_http_status(:not_modified)
+    end
+
+    it "/api-docs/guides/:slug.md returns an ETag and supports 304" do
+      get "/api-docs/guides/quickstart.md"
+      etag = response.headers["ETag"]
+      expect(etag).to be_present
+      get "/api-docs/guides/quickstart.md", headers: { "If-None-Match" => etag }
+      expect(response).to have_http_status(:not_modified)
+    end
+
+    it "/api-docs/endpoints/:slug.md returns an ETag and supports 304" do
+      get "/api-docs/endpoints/start-instance.md"
+      etag = response.headers["ETag"]
+      expect(etag).to be_present
+      get "/api-docs/endpoints/start-instance.md", headers: { "If-None-Match" => etag }
+      expect(response).to have_http_status(:not_modified)
+    end
+
+    it "/llms.txt returns an ETag and supports 304" do
+      get "/llms.txt"
+      etag = response.headers["ETag"]
+      expect(etag).to be_present
+      get "/llms.txt", headers: { "If-None-Match" => etag }
+      expect(response).to have_http_status(:not_modified)
+    end
+
+    it "the etag differs between MD and HTML for the same slug" do
+      get "/api-docs/guides/quickstart"
+      html_etag = response.headers["ETag"]
+      get "/api-docs/guides/quickstart.md"
+      md_etag = response.headers["ETag"]
+      expect(html_etag).not_to eq(md_etag)
+    end
+  end
+
+  # HTML pages should advertise the markdown mirror via <link rel="alternate">
+  # so agents discovering the HTML can find the MD without guessing.
+  describe "HTML pages link to their MD alternate" do
+    it "the index links to the bundled markdown" do
+      get "/api-docs"
+      expect(response.body).to include('<link rel="alternate" type="text/markdown" href="/api-docs.md"')
+    end
+
+    it "a guide page links to its slug-specific markdown" do
+      get "/api-docs/guides/quickstart"
+      expect(response.body).to include('<link rel="alternate" type="text/markdown" href="/api-docs/guides/quickstart.md"')
+    end
+
+    it "an endpoint page links to its slug-specific markdown" do
+      get "/api-docs/endpoints/start-instance"
+      expect(response.body).to include('<link rel="alternate" type="text/markdown" href="/api-docs/endpoints/start-instance.md"')
+    end
+
+    it "every HTML page also links to /llms.txt" do
+      get "/api-docs"
+      expect(response.body).to include('<link rel="alternate" type="text/plain" href="/llms.txt"')
+    end
+  end
+
   # The MD surface is intentionally public — same posture as the HTML site.
   context "when admin HTTP Basic auth is configured" do
     before do

@@ -16,7 +16,22 @@ module Ui
     # workspace-scoped to leak.
     skip_before_action :authenticate_admin_ui!
 
-    helper_method :admin_authenticated?, :docs_cmdk_dataset
+    helper_method :admin_authenticated?, :docs_cmdk_dataset, :docs_etag_for
+
+    # Cacheable, content-addressable etag for any docs response. The
+    # underlying inputs (catalog + i18n + view templates) only change when
+    # we deploy, so we tag every response with the current commit SHA and
+    # the slug + format the request is asking for. Agents that re-fetch
+    # against this etag get a 304.
+    def docs_revision
+      @_docs_revision ||= ENV["OPENSOP_REVISION"].presence ||
+                          ENV["FLY_MACHINE_VERSION"].presence ||
+                          (defined?(Opensop::VERSION) ? Opensop::VERSION : "dev")
+    end
+
+    def docs_etag_for(*parts)
+      [ docs_revision, *parts ].compact.join("-")
+    end
 
     # Defensive override — this layout doesn't render the standard rail, but guard
     # against any future layout changes that might check this.
@@ -37,8 +52,11 @@ module Ui
       raise ActionController::RoutingError, "Guide not found: #{params[:slug]}" unless @guide
 
       respond_to do |format|
-        format.html
-        format.md { render layout: false, content_type: "text/markdown; charset=utf-8" }
+        format.html { fresh_when etag: docs_etag_for(:guide, @guide[:slug], :html), public: true }
+        format.md do
+          fresh_when etag: docs_etag_for(:guide, @guide[:slug], :md), public: true
+          render layout: false, content_type: "text/markdown; charset=utf-8" unless performed?
+        end
       end
     end
 
@@ -52,8 +70,11 @@ module Ui
       @section = Ui::ApiDocs::Catalog.section_for_endpoint(params[:slug])
 
       respond_to do |format|
-        format.html
-        format.md { render layout: false, content_type: "text/markdown; charset=utf-8" }
+        format.html { fresh_when etag: docs_etag_for(:endpoint, @endpoint[:slug], :html), public: true }
+        format.md do
+          fresh_when etag: docs_etag_for(:endpoint, @endpoint[:slug], :md), public: true
+          render layout: false, content_type: "text/markdown; charset=utf-8" unless performed?
+        end
       end
     end
 
@@ -62,14 +83,16 @@ module Ui
     # table-of-contents block at the top. Designed to be fetched by an
     # agent in a single request.
     def bundled
-      render layout: false, content_type: "text/markdown; charset=utf-8"
+      fresh_when etag: docs_etag_for(:bundled, :md), public: true
+      render layout: false, content_type: "text/markdown; charset=utf-8" unless performed?
     end
 
     # GET /llms.txt
     # llms.txt convention — a small index file pointing AI crawlers at the
     # full markdown bundle and per-page markdown URLs.
     def llms_txt
-      render layout: false, content_type: "text/plain; charset=utf-8"
+      fresh_when etag: docs_etag_for(:llms_txt), public: true
+      render layout: false, content_type: "text/plain; charset=utf-8" unless performed?
     end
 
     private
