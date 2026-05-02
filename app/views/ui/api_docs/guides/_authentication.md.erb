@@ -1,0 +1,32 @@
+## <%= t('opensop.api_docs.guides.authentication.title') %>
+
+<%= t('opensop.api_docs.guides.authentication.subtitle') %>
+
+### 1. Outbound calls — bearer token
+
+Every request to the OpenSOP API except `/sop/triggers/*` and `/sop/webhooks/*` requires an `X-SOP-Token` header. Tokens are workspace-scoped.
+
+```bash
+curl https://api.opensop.dev/sop/ \
+  -H "X-SOP-Token: sk_workspace_acme_4f9c..."
+```
+
+### 2. Inbound triggers — HMAC
+
+Endpoints under `/sop/triggers/:process_name` have no bearer token. Instead, the third party signs the raw request body with a shared secret. The engine looks up the secret declared at `process.trigger.auth.secret_env`, recomputes the signature, and compares constant-time.
+
+> **Important:** Provider signature schemes vary — different headers, encodings (hex / base64), and prefixes. See the provider matrix on the trigger endpoint page.
+
+### 3. Webhook callbacks — single-use ID
+
+When a webhook step starts, the engine generates a callback URL containing a one-shot ULID. The third party POSTs back to that URL. The ID itself is the credential — once consumed, it is invalidated.
+
+Callback URLs expire after the step's `timeout`, default 7 days.
+
+### Token rotation
+
+| Action | Endpoint |
+|--------|----------|
+| Create token | `POST /workspace/tokens` |
+| List active tokens | `GET /workspace/tokens` |
+| Revoke token | `DELETE /workspace/tokens/:id` |

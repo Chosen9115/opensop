@@ -25,24 +25,51 @@ module Ui
     end
 
     # GET /api-docs
-    # Renders the Quickstart landing page.
+    # Renders the Quickstart landing page (HTML only).
     def index
     end
 
-    # GET /api-docs/guides/:slug
+    # GET /api-docs/guides/:slug      → HTML
+    # GET /api-docs/guides/:slug.md   → markdown
     # 404 if the slug is not in the catalog.
     def guide
       @guide = Ui::ApiDocs::Catalog.guide(params[:slug])
       raise ActionController::RoutingError, "Guide not found: #{params[:slug]}" unless @guide
+
+      respond_to do |format|
+        format.html
+        format.md { render layout: false, content_type: "text/markdown; charset=utf-8" }
+      end
     end
 
-    # GET /api-docs/endpoints/:slug
+    # GET /api-docs/endpoints/:slug      → HTML
+    # GET /api-docs/endpoints/:slug.md   → markdown
     # 404 if the slug is not in the catalog.
     def endpoint
       @endpoint = Ui::ApiDocs::Catalog.endpoint(params[:slug])
       raise ActionController::RoutingError, "Endpoint not found: #{params[:slug]}" unless @endpoint
 
       @section = Ui::ApiDocs::Catalog.section_for_endpoint(params[:slug])
+
+      respond_to do |format|
+        format.html
+        format.md { render layout: false, content_type: "text/markdown; charset=utf-8" }
+      end
+    end
+
+    # GET /api-docs.md
+    # Bundled markdown — every guide and endpoint concatenated, with a
+    # table-of-contents block at the top. Designed to be fetched by an
+    # agent in a single request.
+    def bundled
+      render layout: false, content_type: "text/markdown; charset=utf-8"
+    end
+
+    # GET /llms.txt
+    # llms.txt convention — a small index file pointing AI crawlers at the
+    # full markdown bundle and per-page markdown URLs.
+    def llms_txt
+      render layout: false, content_type: "text/plain; charset=utf-8"
     end
 
     private
