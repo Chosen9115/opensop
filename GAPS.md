@@ -78,9 +78,9 @@ Format: `#GAP-N | severity | description | discovered while | fix scope`
 
 Third-party SaaS webhooks can now start process instances directly via `POST /sop/triggers/<process-name>` with HMAC signature verification. Documented in [SPEC §2.2](./SPEC.md), [docs/API.md](./docs/API.md), and Playbook D in [docs/AGENT_GUIDE.md](./docs/AGENT_GUIDE.md). Closed GAP-4 use case partially — still no built-in dedup by payload key, but providers that retry will create duplicate instances carrying the provider ID in metadata, so `automated` steps can dedupe downstream.
 
-### GAP-9 | 🟡 medium | Admin UI had no authentication — **closed 2026-04-21**
+### GAP-9 | 🟡 medium | Admin UI had no authentication — **closed 2026-05-04** (branch `worktree-auth-passkeys`)
 
-`Ui::ApplicationController` now has optional HTTP Basic auth gated on the `OPENSOP_UI_USER` + `OPENSOP_UI_PASSWORD` env vars. When either is unset, auth is skipped (dev/test friendly). When both are set, every `/ui` route is challenged. `/sop/*` API endpoints are unaffected — they still use `X-SOP-Token`. Future work: session-based login with multi-user roles (track as a new gap when someone actually needs it).
+Phase 4 hard cutover: the admin UI is now gated by session-based passkey authentication (with magic-link as the bootstrap path). `Ui::ApplicationController` runs `before_action :require_authentication` from the `Authenticatable` concern; unauthenticated requests are redirected to `/auth/sign_in?return_to=…`. The previous HTTP Basic gate (`OPENSOP_UI_USER` / `OPENSOP_UI_PASSWORD`) and its boot-time guard initializer have been removed entirely. `/sop/*` API endpoints are unaffected — they still use `X-SOP-Token`. `/api-docs/*` remains intentionally public.
 
 ---
 

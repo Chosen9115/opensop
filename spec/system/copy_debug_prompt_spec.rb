@@ -13,8 +13,7 @@ require "rails_helper"
 # text matches the data attribute the controller is supposed to copy.
 RSpec.describe "Instance show — copy debug prompt button", type: :system do
   before do
-    ENV.delete("OPENSOP_UI_USER")
-    ENV.delete("OPENSOP_UI_PASSWORD")
+    sign_in_via_magic_link(create(:user))
   end
 
   let!(:process) { build_process(name: "ship-order", version: "1.0") }

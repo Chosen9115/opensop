@@ -7,8 +7,7 @@ require "rails_helper"
 # This is expected. Once the route is added, all examples should pass.
 RSpec.describe "Ui::Costs", type: :request do
   before do
-    ENV.delete("OPENSOP_UI_USER")
-    ENV.delete("OPENSOP_UI_PASSWORD")
+    sign_in_via_magic_link(create(:user))
   end
 
   describe "GET /costs" do

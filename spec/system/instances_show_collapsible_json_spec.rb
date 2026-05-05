@@ -7,8 +7,7 @@ require "rails_helper"
 # toggle actually expands and collapses for users.
 RSpec.describe "Instance show — collapsible JSON", type: :system do
   before do
-    ENV.delete("OPENSOP_UI_USER")
-    ENV.delete("OPENSOP_UI_PASSWORD")
+    sign_in_via_magic_link(create(:user))
   end
 
   let!(:process) do

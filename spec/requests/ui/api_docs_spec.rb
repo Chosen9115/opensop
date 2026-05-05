@@ -6,10 +6,6 @@ require "rails_helper"
 # that lands, this spec will fail with an ActionController::RoutingError —
 # that's expected and is the integration handoff signal.
 RSpec.describe "Ui::ApiDocs", type: :request do
-  before do
-    ENV.delete("OPENSOP_UI_USER")
-    ENV.delete("OPENSOP_UI_PASSWORD")
-  end
 
   let(:endpoint_paths) do
     [
@@ -78,38 +74,28 @@ RSpec.describe "Ui::ApiDocs", type: :request do
   end
 
   # The API reference is intentionally public so docs are linkable and
-  # scrapable. Even when the rest of the admin UI is locked behind HTTP
-  # Basic auth (OPENSOP_UI_USER / OPENSOP_UI_PASSWORD), /api-docs and its
-  # sub-pages must NOT challenge the visitor.
-  context "when admin HTTP Basic auth is configured" do
-    before do
-      ENV["OPENSOP_UI_USER"]     = "admin"
-      ENV["OPENSOP_UI_PASSWORD"] = "secret"
-    end
-
-    after do
-      ENV.delete("OPENSOP_UI_USER")
-      ENV.delete("OPENSOP_UI_PASSWORD")
-    end
-
-    it "/api-docs returns 200 without credentials" do
+  # scrapable. The rest of the admin UI sits behind a session-auth gate
+  # (Authenticatable#require_authentication) but /api-docs must NOT
+  # challenge the visitor.
+  context "auth posture" do
+    it "/api-docs returns 200 to anonymous visitors" do
       get "/api-docs"
       expect(response).to have_http_status(:ok)
     end
 
-    it "/api-docs/guides/:slug returns 200 without credentials" do
+    it "/api-docs/guides/:slug returns 200 to anonymous visitors" do
       get "/api-docs/guides/quickstart"
       expect(response).to have_http_status(:ok)
     end
 
-    it "/api-docs/endpoints/:slug returns 200 without credentials" do
+    it "/api-docs/endpoints/:slug returns 200 to anonymous visitors" do
       get "/api-docs/endpoints/start-instance"
       expect(response).to have_http_status(:ok)
     end
 
-    it "the rest of the admin UI is still gated (sanity check)" do
+    it "the rest of the admin UI is gated (sanity check)" do
       get "/dashboard"
-      expect(response).to have_http_status(:unauthorized)
+      expect(response).to redirect_to(%r{/auth/sign_in})
     end
 
     it "hides the topbar Dashboard link from anonymous visitors" do
@@ -117,15 +103,8 @@ RSpec.describe "Ui::ApiDocs", type: :request do
       expect(response.body).not_to match(%r{<a[^>]+href="/dashboard"})
     end
 
-    it "shows the Dashboard link when valid Basic credentials are sent" do
-      creds = ActionController::HttpAuthentication::Basic.encode_credentials("admin", "secret")
-      get "/api-docs", headers: { "HTTP_AUTHORIZATION" => creds }
-      expect(response.body).to match(%r{<a[^>]+href="/dashboard"})
-    end
-  end
-
-  context "when admin HTTP Basic auth is NOT configured (open dev mode)" do
-    it "shows the Dashboard link to anonymous visitors" do
+    it "shows the Dashboard link when the visitor is signed in" do
+      sign_in_via_magic_link(create(:user))
       get "/api-docs"
       expect(response.body).to match(%r{<a[^>]+href="/dashboard"})
     end

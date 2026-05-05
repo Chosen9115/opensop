@@ -1,0 +1,33 @@
+<div class="rounded-md border border-border bg-bg p-6">
+  <div class="text-center">
+    <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-bg-sunken text-fg-muted">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
+      </svg>
+    </div>
+    <h1 class="text-lg font-semibold text-fg mb-2"><%= t("opensop.auth.magic_link_sent.heading") %></h1>
+    <p class="text-[13px] text-fg-muted"><%= t("opensop.auth.magic_link_sent.body") %></p>
+    <% if email.present? %>
+      <p class="mt-3 text-[12px] text-fg-faint"><%= t("opensop.auth.magic_link_sent.sent_to", email: email) %></p>
+    <% end %>
+  </div>
+
+  <% if dev_url.present? %>
+    <%# Development-only DX: the link the email would have contained, surfaced
+        directly on the page so contributors don't have to grep the log. The
+        controller guards this with Rails.env.development? + mailer log mode,
+        so production cannot render this block. %>
+    <div class="mt-6 rounded border border-amber-300 bg-amber-50 p-4 text-left">
+      <div class="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-amber-800">
+        <span class="rounded bg-amber-200 px-1.5 py-0.5">dev mode</span>
+        <span><%= t("opensop.auth.magic_link_sent.dev.label") %></span>
+      </div>
+      <p class="mb-3 text-[12px] text-amber-900"><%= t("opensop.auth.magic_link_sent.dev.body") %></p>
+      <a href="<%= dev_url %>"
+         class="inline-flex w-full items-center justify-center gap-2 rounded bg-amber-900 px-4 py-2 text-[13px] font-medium text-amber-50 hover:bg-amber-800">
+        <%= t("opensop.auth.magic_link_sent.dev.cta") %>
+      </a>
+      <p class="mt-3 break-all font-mono text-[11px] text-amber-700"><%= dev_url %></p>
+    </div>
+  <% end %>
+</div>

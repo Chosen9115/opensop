@@ -81,3 +81,7 @@ group :test do
   gem "capybara"
   gem "selenium-webdriver"
 end
+
+gem "webauthn", "~> 3.4"
+gem "resend", "~> 1.3"
+gem "rack-attack", "~> 6.8"

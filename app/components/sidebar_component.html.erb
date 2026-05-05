@@ -56,19 +56,49 @@
     </div>
   <% end %>
 
+  <%# Account section — only when signed in %>
+  <% if current_user %>
+    <div class="pp-section-title px-2 pt-3 pb-1"><%= I18n.t("opensop.nav.account", default: "Account") %></div>
+    <% account_items.each do |item| %>
+      <%= link_to item[:path], class: link_classes(item) do %>
+        <svg class="shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="<%= icon_path(item[:icon]) %>" />
+        </svg>
+        <span class="flex-1 truncate"><%= item[:label] %></span>
+      <% end %>
+    <% end %>
+  <% end %>
+
   <%# Foot %>
-  <div class="mt-auto flex flex-col gap-1.5 border-t border-border px-2 pt-3 font-mono text-[10px] text-fg-faint">
-    <% if api_authenticated? %>
-      <div class="flex items-center gap-1.5">
-        <span class="h-1.5 w-1.5 rounded-full bg-ok animate-pp-pulse"></span>
-        <span class="text-ok"><%= I18n.t("opensop.sidebar.api_authenticated", default: "api · authenticated") %></span>
-      </div>
-    <% else %>
-      <div class="flex items-center gap-1.5">
-        <span class="h-1.5 w-1.5 rounded-full bg-fg-faint"></span>
-        <span><%= I18n.t("opensop.sidebar.api_no_token", default: "api · no token") %></span>
+  <div class="mt-auto">
+    <% if current_user %>
+      <div class="flex items-center gap-1.5 border-t border-border px-2 pt-3 font-mono text-[10px] text-fg-faint">
+        <span class="flex-1 truncate text-fg-muted" title="<%= current_user.email %>"><%= current_user.email %></span>
+        <%= button_to helpers.auth_sign_out_path,
+              method: :delete,
+              form_class: "shrink-0",
+              class: "flex items-center justify-center text-fg-faint hover:text-fg cursor-pointer",
+              "aria-label": I18n.t("opensop.sidebar.sign_out", default: "Sign out"),
+              title: I18n.t("opensop.sidebar.sign_out", default: "Sign out") do %>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+          </svg>
+        <% end %>
       </div>
     <% end %>
-    <div><%= I18n.t("opensop.sidebar.workspace_label", name: "acme-prod", default: "workspace · acme-prod") %></div>
+    <div class="flex flex-col gap-1.5 border-t border-border px-2 pt-3 font-mono text-[10px] text-fg-faint">
+      <% if api_authenticated? %>
+        <div class="flex items-center gap-1.5">
+          <span class="h-1.5 w-1.5 rounded-full bg-ok animate-pp-pulse"></span>
+          <span class="text-ok"><%= I18n.t("opensop.sidebar.api_authenticated", default: "api · authenticated") %></span>
+        </div>
+      <% else %>
+        <div class="flex items-center gap-1.5">
+          <span class="h-1.5 w-1.5 rounded-full bg-fg-faint"></span>
+          <span><%= I18n.t("opensop.sidebar.api_no_token", default: "api · no token") %></span>
+        </div>
+      <% end %>
+      <div><%= I18n.t("opensop.sidebar.workspace_label", name: "acme-prod", default: "workspace · acme-prod") %></div>
+    </div>
   </div>
 </aside>

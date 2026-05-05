@@ -2,6 +2,38 @@
 
 All notable changes to OpenSOP. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — 2026-05-04
+
+### BREAKING
+
+- **Admin UI authentication migrated from HTTP Basic to passkeys (WebAuthn).** The `OPENSOP_UI_USER` and `OPENSOP_UI_PASSWORD` environment variables are no longer used and should be removed from your deployment. Operators must set `OPENSOP_BOOTSTRAP_EMAIL`, `RESEND_API_KEY`, `OPENSOP_MAILER_FROM`, `OPENSOP_RP_ID`, and `OPENSOP_ORIGIN` before upgrading. See [README](./README.md#authentication) for the full migration guide. Closes [GAP-9](./GAPS.md).
+
+### Added — auth
+
+- Passkey-based sign-in via WebAuthn (`/auth/sign_in`).
+- Email-based magic link sign-in and account recovery (delivered via Resend).
+- Multi-admin support: invite/remove admins at `/account/users`.
+- Per-passkey management at `/account/passkeys` (list, rename, revoke).
+- Active session management at `/account/sessions` (revoke individual sessions, sign out everywhere else).
+- `AuthEvent` audit log table — records sign-in, sign-out, passkey registration/revocation, magic-link requests, and other auth events.
+- Rate limiting on auth endpoints via rack-attack (5/hour magic-link per email, 20/min passkey verify per IP, etc.).
+
+### Removed
+
+- HTTP Basic authentication on the admin UI (`OPENSOP_UI_USER` / `OPENSOP_UI_PASSWORD`).
+- The `/dashboard` route no longer requires a username/password prompt.
+- The `application_mailer.rb` Rails scaffold (auth emails are sent via a plain-Ruby Resend wrapper, not ActionMailer).
+
+### Migration
+
+For an existing deployment:
+
+1. Add `RESEND_API_KEY`, `OPENSOP_MAILER_FROM`, `OPENSOP_RP_ID`, `OPENSOP_ORIGIN` to your environment.
+2. Add `OPENSOP_BOOTSTRAP_EMAIL=your-admin-email@your-domain` (one-time).
+3. Deploy. Watch the logs for the first-login URL or read `tmp/opensop_first_login.txt`.
+4. Visit the URL and register your first passkey.
+5. Remove `OPENSOP_UI_USER` and `OPENSOP_UI_PASSWORD` from your environment.
+
 ## [Unreleased]
 
 ### Added — UI

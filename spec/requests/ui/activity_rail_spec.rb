@@ -4,6 +4,10 @@ require "rails_helper"
 # via the application layout) emits the three-tab structure with Stimulus
 # wiring, plus the per-tab panels with the right data sources.
 RSpec.describe "Ui::ActivityRail", type: :request do
+  before do
+    sign_in_via_magic_link(create(:user))
+  end
+
   describe "GET /dashboard renders the three-tab activity rail" do
     it "wires the Stimulus controller and exposes all three tabs as buttons" do
       get "/dashboard"

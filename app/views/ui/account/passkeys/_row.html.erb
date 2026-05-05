@@ -1,0 +1,64 @@
+<%# Single passkey row. Wrapped in a div with dom_id(passkey) so it can be %>
+<%# targeted by Turbo Stream replace/remove from the controller. %>
+<div id="<%= dom_id(passkey) %>"
+     class="grid grid-cols-[1fr_180px_180px_120px_140px] items-center gap-4 px-4 py-3 hover:bg-bg-hover">
+  <div class="min-w-0">
+    <details class="group">
+      <summary class="cursor-pointer list-none flex items-center gap-2">
+        <span class="text-fg-faint group-open:rotate-90 transition-transform">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-3 w-3" aria-hidden="true">
+            <path fill-rule="evenodd" d="M6.22 4.22a.75.75 0 011.06 0l3.25 3.25a.75.75 0 010 1.06l-3.25 3.25a.75.75 0 11-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 010-1.06z" clip-rule="evenodd" />
+          </svg>
+        </span>
+        <span class="font-mono text-[12px] text-fg truncate"><%= passkey.nickname %></span>
+        <span class="ml-1 text-[10px] text-fg-faint font-mono"><%= t('opensop.auth.account.passkeys.rename') %></span>
+      </summary>
+      <%= form_with model: passkey,
+            url: ui_account_passkey_path(passkey),
+            method: :patch,
+            scope: :passkey_credential,
+            class: "mt-2 flex items-center gap-2" do |f| %>
+        <%= f.label :nickname, t('opensop.auth.account.passkeys.nickname_label'),
+              class: "sr-only" %>
+        <%= f.text_field :nickname,
+              value: passkey.nickname,
+              placeholder: t('opensop.auth.account.passkeys.nickname_placeholder'),
+              maxlength: 80,
+              required: true,
+              class: "rounded-[3px] border border-border bg-bg px-2 py-1 text-[12px] focus:border-border-focus focus:outline-none w-full" %>
+        <%= f.submit t('opensop.auth.account.passkeys.save'),
+              class: "rounded-[3px] border border-border bg-bg-sunken px-3 py-1 text-[12px] font-medium hover:bg-bg-hover" %>
+      <% end %>
+    </details>
+  </div>
+
+  <div class="text-[11px] text-fg-muted font-mono">
+    <%= render TimestampComponent.new(time: passkey.created_at) %>
+  </div>
+
+  <div class="text-[11px] text-fg-muted font-mono">
+    <% if passkey.last_used_at.present? %>
+      <%= render TimestampComponent.new(time: passkey.last_used_at) %>
+    <% else %>
+      <span class="text-fg-faint"><%= t('opensop.auth.account.passkeys.last_used_never') %></span>
+    <% end %>
+  </div>
+
+  <div class="flex flex-wrap gap-1">
+    <% Array(passkey.transports).each do |transport| %>
+      <span class="pp-tag"><%= transport %></span>
+    <% end %>
+  </div>
+
+  <div class="text-right">
+    <%= button_to ui_account_passkey_path(passkey),
+          method: :delete,
+          form: { data: { turbo_confirm: t('opensop.auth.account.passkeys.revoke_confirm', nickname: passkey.nickname) } },
+          class: "inline-flex items-center gap-1.5 rounded-[3px] border border-border bg-bg px-2 py-1 text-[11px] font-medium text-err hover:bg-err-bg" do %>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3.5 w-3.5" aria-hidden="true">
+        <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clip-rule="evenodd" />
+      </svg>
+      <%= t('opensop.auth.account.passkeys.revoke') %>
+    <% end %>
+  </div>
+</div>

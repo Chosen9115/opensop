@@ -1,0 +1,65 @@
+<header class="mb-6">
+  <h1 class="text-[20px] font-semibold tracking-tight"><%= t('opensop.auth.account.passkeys.title') %></h1>
+  <p class="mt-1 text-[12px] text-fg-muted"><%= t('opensop.auth.account.passkeys.subtitle') %></p>
+</header>
+
+<%# Add-a-passkey card. The Phase 2 passkey_registration Stimulus controller %>
+<%# drives the WebAuthn ceremony — we mount it on a small form with the %>
+<%# required targets and values. %>
+<section class="mb-8 rounded-[3px] border border-border bg-bg-sunken p-4"
+         data-controller="passkey-registration"
+         data-passkey-registration-options-url-value="<%= auth_passkey_registration_options_path %>"
+         data-passkey-registration-register-url-value="<%= auth_passkey_registration_path %>"
+         data-passkey-registration-success-redirect-value="<%= ui_account_passkeys_path %>">
+  <details class="group">
+    <summary class="cursor-pointer list-none inline-flex items-center gap-2 rounded-[3px] border border-border bg-bg px-3 py-2 text-[12px] font-medium hover:bg-bg-hover">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4 text-fg-muted" aria-hidden="true">
+        <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
+      </svg>
+      <%= t('opensop.auth.account.passkeys.add_cta') %>
+    </summary>
+
+    <div class="mt-4 grid grid-cols-[1fr_auto] gap-3 items-end">
+      <div>
+        <label for="passkey-nickname" class="block text-[11px] font-medium text-fg-muted mb-1">
+          <%= t('opensop.auth.account.passkeys.nickname_label') %>
+        </label>
+        <input id="passkey-nickname"
+               type="text"
+               maxlength="80"
+               placeholder="<%= t('opensop.auth.account.passkeys.nickname_placeholder') %>"
+               data-passkey-registration-target="nickname"
+               class="w-full rounded-[3px] border border-border bg-bg px-2 py-1.5 text-[12px] focus:border-border-focus focus:outline-none">
+      </div>
+      <button type="button"
+              data-passkey-registration-target="submit"
+              data-action="click->passkey-registration#submit"
+              class="rounded-[3px] border border-border bg-fg px-4 py-2 text-[12px] font-medium text-bg hover:opacity-90">
+        <%= t('opensop.auth.account.passkeys.add_cta') %>
+      </button>
+    </div>
+    <p data-passkey-registration-target="error"
+       class="hidden mt-3 text-[12px] text-err"
+       role="alert"></p>
+  </details>
+</section>
+
+<section>
+  <% if @passkeys.any? %>
+    <div class="border border-border rounded-[3px] divide-y divide-border bg-bg overflow-hidden">
+      <div class="grid grid-cols-[1fr_180px_180px_120px_140px] gap-4 px-4 py-2 text-[10px] font-mono uppercase tracking-[0.08em] text-fg-muted bg-bg-sunken">
+        <span><%= t('opensop.auth.account.passkeys.nickname_label') %></span>
+        <span><%= t('opensop.auth.account.passkeys.registered') %></span>
+        <span><%= t('opensop.auth.account.passkeys.last_used') %></span>
+        <span><%= t('opensop.auth.account.passkeys.transports') %></span>
+        <span class="text-right"></span>
+      </div>
+
+      <% @passkeys.each do |passkey| %>
+        <%= render partial: "ui/account/passkeys/row", locals: { passkey: passkey } %>
+      <% end %>
+    </div>
+  <% else %>
+    <%= render EmptyStateComponent.new(title: t('opensop.auth.account.passkeys.empty')) %>
+  <% end %>
+</section>

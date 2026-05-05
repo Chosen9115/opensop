@@ -1,3 +1,27 @@
+# Authentication routes — sit OUTSIDE the :ui module scope so they have their
+# own controller namespace (Auth::*) and route helpers (auth_*).
+scope :auth, module: :auth, as: :auth do
+  # Sign-in form (GET) and sign-out (DELETE).
+  get    "sign_in",  to: "sessions#new",     as: :sign_in
+  delete "sign_out", to: "sessions#destroy", as: :sign_out
+
+  # Magic link request and consumption.
+  post "magic_links",        to: "magic_links#create", as: :magic_links
+  get  "magic_links/:token", to: "magic_links#show",   as: :magic_link
+
+  # Invitation acceptance (Phase 2 will add passkey registration here).
+  get  "invitations/:token", to: "invitations#show",   as: :invitation
+
+  # Passkey ceremonies. /options and /verify are PUBLIC (pre-sign-in).
+  # /registration_options and /registration require an active session.
+  scope :passkey, as: :passkey do
+    post "registration_options", to: "passkeys#registration_options", as: :registration_options
+    post "registration",         to: "passkeys#registration",         as: :registration
+    post "options",              to: "passkeys#options",              as: :options
+    post "verify",               to: "passkeys#verify",               as: :verify
+  end
+end
+
 # Admin UI routes. All actions render HTML (or Turbo Stream later).
 scope module: :ui, as: :ui do
   root to: "dashboard#index"
@@ -61,4 +85,17 @@ scope module: :ui, as: :ui do
 
   # Tier 3 — Schedule (cron-driven recurring instances).
   get "/schedule", to: "schedules#index", as: :schedule
+
+  # Account / admin self-service. Three sibling pages: passkeys, users
+  # (admins), and active sessions. All gated by the existing
+  # Ui::ApplicationController auth chain.
+  namespace :account do
+    resources :passkeys, only: %i[index update destroy]
+    resources :users, only: %i[index create destroy]
+    resources :sessions, only: %i[index destroy] do
+      collection do
+        delete :destroy_others, path: "others"
+      end
+    end
+  end
 end

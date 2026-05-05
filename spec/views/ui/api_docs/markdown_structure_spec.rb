@@ -10,10 +10,6 @@ require "rails_helper"
 # its "Code examples" or auth callout, or a code fence without a
 # language tag.
 RSpec.describe "Ui::ApiDocs markdown partials structure", type: :request do
-  before do
-    ENV.delete("OPENSOP_UI_USER")
-    ENV.delete("OPENSOP_UI_PASSWORD")
-  end
 
   # ---------------------------------------------------------------------
   # Shared expectations

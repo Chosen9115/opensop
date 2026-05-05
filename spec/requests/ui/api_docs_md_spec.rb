@@ -8,10 +8,6 @@ require "rails_helper"
 #   GET /api-docs/endpoints/:slug.md    — one endpoint as markdown
 #   GET /llms.txt                       — llms.txt index pointing at the above
 RSpec.describe "Ui::ApiDocs markdown surface", type: :request do
-  before do
-    ENV.delete("OPENSOP_UI_USER")
-    ENV.delete("OPENSOP_UI_PASSWORD")
-  end
 
   describe "GET /api-docs.md (bundled)" do
     it "returns 200 with text/markdown content type" do
@@ -365,28 +361,18 @@ RSpec.describe "Ui::ApiDocs markdown surface", type: :request do
   end
 
   # The MD surface is intentionally public — same posture as the HTML site.
-  context "when admin HTTP Basic auth is configured" do
-    before do
-      ENV["OPENSOP_UI_USER"]     = "admin"
-      ENV["OPENSOP_UI_PASSWORD"] = "secret"
-    end
-
-    after do
-      ENV.delete("OPENSOP_UI_USER")
-      ENV.delete("OPENSOP_UI_PASSWORD")
-    end
-
-    it "/api-docs.md returns 200 without credentials" do
+  context "auth posture (public access)" do
+    it "/api-docs.md returns 200 to anonymous visitors" do
       get "/api-docs.md"
       expect(response).to have_http_status(:ok)
     end
 
-    it "/llms.txt returns 200 without credentials" do
+    it "/llms.txt returns 200 to anonymous visitors" do
       get "/llms.txt"
       expect(response).to have_http_status(:ok)
     end
 
-    it "/api-docs/guides/:slug.md returns 200 without credentials" do
+    it "/api-docs/guides/:slug.md returns 200 to anonymous visitors" do
       get "/api-docs/guides/quickstart.md"
       expect(response).to have_http_status(:ok)
     end

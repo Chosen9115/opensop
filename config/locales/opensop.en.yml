@@ -4,6 +4,120 @@ en:
       name: "OpenSOP"
       tagline: "Define your processes. Get your API."
 
+    auth:
+      sign_in:
+        heading: "Sign in to OpenSOP"
+        description: "Enter your work email. We'll use a passkey on this device, or send a one-time link if you don't have one."
+        breadcrumb: "auth / sign-in"
+        email_label: "Email"
+        email_required_pill: "Required"
+        email_placeholder: "you@example.com"
+        privacy_note: "We never store passwords. Only your email and registered passkeys."
+        passkey_cta: "Continue with passkey"
+        passkey_subtitle: "Use your device to sign in instantly."
+        kbd_hint: "↵"
+        "or": "OR"
+        magic_link_cta: "Email me a sign-in link"
+        magic_link_subtitle: "We'll email you a one-time link."
+        recovery_link: "I lost my passkey"
+        recovery_cta: "Send recovery link"
+        fallback_no_webauthn: "This browser doesn't support passkeys. Use the email link instead."
+        generic_error: "Sign-in failed. Try the email link."
+        email_required: "Please enter your email first."
+        topbar:
+          docs: "Docs"
+          status: "Status"
+          contact: "Contact"
+      magic_link_sent:
+        heading: "Check your email"
+        body: "If an account exists for that email, we just sent a sign-in link. The link expires in 15 minutes."
+        sent_to: "Sent to %{email}"
+        dev:
+          label: "magic link"
+          body: "Email delivery is in log mode. Click below to sign in directly."
+          cta: "Open the magic link"
+      flash:
+        signed_out: "Signed out."
+        signed_in_register_passkey: "Signed in. Register a passkey on this device for faster sign-in next time."
+        invitation_accepted: "Welcome to OpenSOP. Register a passkey on this device to sign in next time."
+        recovered: "You're signed in. Manage your passkeys at /account/passkeys (coming soon)."
+      errors:
+        must_sign_in: "Please sign in."
+        token_invalid: "This link is invalid or expired."
+      emails:
+        shared:
+          expires_in: "This link expires in %{duration}."
+          an_admin: "an administrator"
+        sign_in:
+          subject: "Your OpenSOP sign-in link"
+          heading: "Sign in to OpenSOP"
+          body: "Click the button below to sign in. If you didn't request this, you can ignore this email."
+          cta: "Sign in"
+        recovery:
+          subject: "Recover your OpenSOP account"
+          heading: "Recover your account"
+          body: "Use the link below to register a new passkey or revoke your existing ones. If you didn't request this, you can ignore this email."
+          cta: "Recover account"
+        invitation:
+          subject: "You've been invited to OpenSOP"
+          heading: "You've been invited to OpenSOP"
+          body: "%{inviter} has invited you to administer this OpenSOP workspace. Click below to register a passkey and sign in."
+          cta: "Accept invitation"
+      account:
+        passkeys:
+          title: "Passkeys"
+          subtitle: "Devices you've registered to sign in to OpenSOP."
+          empty: "You haven't registered any passkeys yet."
+          add_cta: "Add a passkey"
+          nickname_label: "Nickname"
+          nickname_placeholder: "e.g. MacBook"
+          registered: "Registered"
+          last_used: "Last used"
+          last_used_never: "Never"
+          transports: "Transports"
+          rename: "Rename"
+          save: "Save"
+          revoke: "Revoke"
+          revoke_confirm: "Revoke %{nickname}? You won't be able to sign in with it."
+          flash:
+            renamed: "Passkey renamed."
+            revoked: "Passkey revoked."
+            last_passkey_blocked: "You can't revoke your last passkey. Use account recovery to start over."
+        users:
+          title: "Admins"
+          subtitle: "People who can administer this OpenSOP workspace."
+          invite_heading: "Invite an admin"
+          email_label: "Email"
+          display_name_label: "Display name"
+          invite_cta: "Send invitation"
+          status_active: "Active"
+          status_pending: "Pending invitation"
+          passkey_count:
+            zero: "No passkeys"
+            one: "1 passkey"
+            other: "%{count} passkeys"
+          remove: "Remove"
+          remove_confirm: "Remove %{email}?"
+          flash:
+            invited: "Invitation sent to %{email}."
+            email_taken: "An admin with that email already exists."
+            removed: "%{email} has been removed."
+            last_admin_blocked: "Can't remove the last admin."
+            self_removal_blocked: "You can't remove yourself."
+        sessions:
+          title: "Active sessions"
+          subtitle: "Sessions currently signed in to OpenSOP with your account."
+          this_session: "This session"
+          user_agent: "Device"
+          ip: "IP"
+          last_used: "Last used"
+          revoke: "Revoke"
+          revoke_others: "Sign out all other sessions"
+          flash:
+            revoked: "Session revoked."
+            others_revoked: "All other sessions have been signed out."
+            cannot_revoke_current: "Use Sign out to end this session."
+
     nav:
       dashboard: "Dashboard"
       processes: "Processes"
@@ -25,6 +139,7 @@ en:
       api_no_token: "api · no token"
       workspace_label: "workspace · %{name}"
       schedule: "Schedule"
+      sign_out: "Sign out"
 
     activity:
       title: "Activity"
