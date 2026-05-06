@@ -4,17 +4,17 @@
 **Authors:** Carlos Medellin + Claude (digital twin)
 **Status:** Draft — foundational spec
 **Domain:** opensop.ai
-**License:** Open source (license TBD — likely Apache 2.0 or MIT)
+**License:** Apache 2.0
 
 ---
 
 ## 1. What OpenSOP Is
 
-OpenSOP is an open standard and runtime for defining, storing, executing, and exposing business processes as APIs.
+OpenSOP is an open standard and runtime for defining, storing, executing, and exposing business processes and agent workflows as APIs.
 
-**The problem:** Business processes live in people's heads, Word docs, PDFs, Notion pages, and tribal knowledge. They're written for humans to read and follow. In the agentic era, processes need to be readable by both humans and machines — discoverable, callable, observable.
+**The problem:** Business processes live in people's heads, Word docs, PDFs, Notion pages, cron scripts, and tribal knowledge. Agent workflows often live as loose prompts wrapped in scripts. In the agentic era, processes need to be readable by both humans and machines — discoverable, callable, observable, and bounded by deterministic gates.
 
-**The solution:** A standard format (OpenSOP Spec) for defining processes as structured objects with typed inputs/outputs, and a self-hostable runtime (OpenSOP Engine) that executes process instances and auto-generates APIs from definitions.
+**The solution:** A standard format (OpenSOP Spec) for defining processes as structured objects with typed inputs/outputs, and a self-hostable runtime (OpenSOP Engine) that executes process instances, auto-generates APIs from definitions, and wraps LLM calls in typed, auditable gates.
 
 **Core beliefs:**
 
@@ -22,7 +22,8 @@ OpenSOP is an open standard and runtime for defining, storing, executing, and ex
 2. **Processes are company IP.** Self-hostable, stored in your own repo or database, never leaves your infrastructure unless you choose.
 3. **Every step has a type.** Automated, judgment, approval, form, webhook — the platform knows which steps need a human, which need an LLM, and which just run.
 4. **Agents are first-class consumers.** The discovery endpoint lets any agent understand what a company does and how to interact with it.
-5. **Start simple, harden over time.** A process can begin as a 3-step checklist and evolve into a fully automated pipeline. The format supports the full spectrum.
+5. **LLM creativity belongs inside deterministic gates.** Agent steps should have typed inputs, explicit outputs, validation, receipts, and checks before side effects.
+6. **Start simple, harden over time.** A process can begin as a 3-step checklist and evolve into a fully automated pipeline. The format supports the full spectrum.
 
 ---
 
