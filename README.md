@@ -1,18 +1,20 @@
 # OpenSOP
 
-> Open standard for processes — humans and agents.
+> Open-source runtime for executable SOPs and agent workflows.
 
 OpenAPI describes APIs. OpenSOP describes the work behind them.
 
-Define a business process once in YAML. OpenSOP serves it as a REST API that humans and agents drive through the same endpoints, with one audit trail.
+Define a business process or agent workflow once in YAML. OpenSOP serves it as a typed, versioned REST API that humans and agents drive through the same endpoints, with state, deterministic gates, append-only receipts, and replayable audit logs.
+
+Use it for classic operations workflows, or as a safety harness around LLM agents doing real work.
 
 ---
 
 ## The 30-second pitch
 
-You have a process — onboard a customer, approve an expense, triage a ticket, ship a release. Today it lives in a Notion doc, a Slack thread, and three engineers' heads. Agents can't execute it reliably. New hires re-derive it. It drifts.
+You have a process: onboard a customer, approve an expense, triage a ticket, ship a release, review a pull request. Today it lives in a Notion doc, a Slack thread, a cron script, and three engineers' heads. Humans forget it. Agents improvise. The process drifts.
 
-OpenSOP turns the process itself into the API contract.
+OpenSOP turns the process itself into the API contract. It also gives agentic workflows a harness: typed inputs, explicit outputs, deterministic gates, and receipts around every run.
 
 **Define the process** (`processes/onboarding.sop.yaml`):
 
@@ -79,6 +81,22 @@ Three jobs that today live in three disconnected places:
 
 OpenSOP collapses all three into one artifact. The runbook is the API. The API is what agents call. Operations, engineering, and AI share one source of truth for how the company actually does the work.
 
+### Why agents need this
+
+LLMs are good at judgment, synthesis, and code generation. They are bad at staying inside operational boundaries by default.
+
+OpenSOP keeps the creative part narrow. Each agentic workflow is a named process with typed inputs, explicit outputs, structured prompts, schema validation, size caps, critical-path exclusions, and ground-truth checks before side effects.
+
+The LLM does the part it is good at. The runtime catches schema drift, scope creep, hallucinated files, and unsafe changes before they touch production.
+
+### Example: opensop-worker
+
+At Coba, we use OpenSOP to run `opensop-worker`: a Rust daemon that schedules 11 specialized agents across our Rails projects.
+
+Those agents review PRs, bump dependencies, resolve conflicts, re-run CI, generate `AGENTS.md` files, write release notes, and handle small engineering chores humans usually defer or forget.
+
+Each job is a typed process with named steps, bounded inputs and outputs, structured prompts, parsed responses, size caps, git diff checks, and append-only receipts. The agents do the creative work. OpenSOP provides the rails.
+
 ---
 
 ## The standard
@@ -141,7 +159,7 @@ OpenSOP is at MVP per [`SPEC.md`](./SPEC.md) §8. Honest accounting:
 
 - **Implemented:** YAML parser, instance executor, REST API, admin UI, RSpec coverage. `form`, `automated`, and `notification` step types are real.
 - **Stubbed** (still callable, but no I/O): `judgment`, `approval`, `webhook`, `subprocess`, `wait`. State transitions work; side effects don't yet.
-- **Planned for v0.2:** LLM-backed judgment, real outbound webhook delivery, Process Designer UI, metrics and constraint detection.
+- **Planned next:** LLM-backed judgment, real outbound webhook delivery, Process Designer UI, metrics and constraint detection.
 
 ---
 
@@ -161,9 +179,9 @@ A pre-wired Postman/Yaak/Insomnia/Bruno collection is at [`docs/opensop.postman.
 
 ---
 
-## Used in production
+## Used internally at Coba
 
-[Coba](https://coba.ai) runs its internal operations on OpenSOP. Improvements that come out of that work flow upstream first.
+[Coba](https://coba.ai) runs internal operations and scheduled engineering agents on OpenSOP. Improvements that come out of that work flow upstream first.
 
 ---
 
@@ -173,7 +191,7 @@ PRs welcome. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) first — especially if
 
 ## License
 
-MIT. See [`LICENSE`](./LICENSE).
+Apache 2.0. See [`LICENSE`](./LICENSE).
 
 ---
 
