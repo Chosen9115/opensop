@@ -58,21 +58,27 @@ RSpec.describe Opensop::DemoMode do
   end
 
   describe ".api_token" do
-    context "when DEMO_API_TOKEN is set" do
-      before { ENV["DEMO_API_TOKEN"] = "custom-token-abc" }
-      after  { ENV.delete("DEMO_API_TOKEN") }
-
-      it "returns the env value" do
-        expect(described_class.api_token).to eq("custom-token-abc")
-      end
+    after do
+      ENV.delete("OPENSOP_API_TOKEN")
+      ENV.delete("DEMO_API_TOKEN")
     end
 
-    context "when DEMO_API_TOKEN is not set" do
-      before { ENV.delete("DEMO_API_TOKEN") }
+    it "prefers OPENSOP_API_TOKEN over DEMO_API_TOKEN — one secret powers auth and homepage display" do
+      ENV["OPENSOP_API_TOKEN"] = "prod-style-token"
+      ENV["DEMO_API_TOKEN"]    = "ignored-token"
+      expect(described_class.api_token).to eq("prod-style-token")
+    end
 
-      it "returns the default token" do
-        expect(described_class.api_token).to eq("demo-public-token-resets-daily")
-      end
+    it "falls back to DEMO_API_TOKEN when OPENSOP_API_TOKEN is unset" do
+      ENV.delete("OPENSOP_API_TOKEN")
+      ENV["DEMO_API_TOKEN"] = "demo-only-token"
+      expect(described_class.api_token).to eq("demo-only-token")
+    end
+
+    it "returns the default when neither env var is set" do
+      ENV.delete("OPENSOP_API_TOKEN")
+      ENV.delete("DEMO_API_TOKEN")
+      expect(described_class.api_token).to eq("demo-public-token-resets-daily")
     end
   end
 

@@ -586,6 +586,41 @@ en:
         tokens_out: "out"
         errored: "errored"
 
+    demo:
+      banner:
+        message: "Public demo. Data resets %{schedule}. Don't store anything sensitive."
+        github_link: "View on GitHub"
+
+      home:
+        hero:
+          reset_note: "Demo data resets %{schedule}."
+
+        api:
+          section_label: "Try the API"
+          heading: "Try the API"
+          token_label: "Token"
+          copy_button: "Copy"
+          copy_token_aria: "Copy API token to clipboard"
+          example_label: "Example"
+
+        processes:
+          section_label: "Sample processes"
+          heading: "Sample processes"
+          empty: "No processes loaded yet."
+
+        docs:
+          section_label: "Read the docs"
+          heading: "Read the docs"
+          guides_title: "Documentation"
+          guides_body: "Concepts, the process format, step types, and worked examples."
+          api_title: "API & SDK reference"
+          api_body: "Every /sop/* endpoint, with request/response shapes and curl examples."
+
+        footer:
+          github: "GitHub"
+          license: "Apache 2.0"
+          built_on: "Built on OpenSOP"
+
     schedule:
       title: "Schedule"
       subtitle: "Recurring process invocations driven by cron expressions."

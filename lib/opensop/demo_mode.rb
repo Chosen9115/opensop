@@ -10,11 +10,16 @@ module Opensop
       ENV.fetch("DEMO_MODE", "").to_s.strip.downcase == "true"
     end
 
-    # The public API token announced on the demo homepage. Reads from env so
-    # the value is rotatable without a code change. Defaults to a stable string
-    # so local development doesn't crash if the env var is missing.
+    # The public API token announced on the demo homepage.
+    #
+    # Prefers OPENSOP_API_TOKEN — the same env var Sop::ApplicationController
+    # uses for /sop/* auth — so a single secret powers both auth and the
+    # value displayed to visitors. Falls back to DEMO_API_TOKEN (kept for
+    # local dev convenience) and finally a stable default so dev never crashes.
     def api_token
-      ENV.fetch("DEMO_API_TOKEN", "demo-public-token-resets-daily")
+      ENV.fetch("OPENSOP_API_TOKEN") do
+        ENV.fetch("DEMO_API_TOKEN", "demo-public-token-resets-daily")
+      end
     end
 
     # The default reset cron schedule, exposed as a single constant so the

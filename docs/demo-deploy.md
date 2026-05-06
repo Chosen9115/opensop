@@ -16,8 +16,8 @@ The demo deployment runs with `DEMO_MODE=true`, which activates:
 - **Public demo banner** — a sitewide notice that data resets daily.
 - **Rate limiting** — stricter per-IP limits to prevent abuse.
 - **Daily reset** — a scheduled job truncates instances and step data at UTC midnight.
-- **Public API token** — a well-known `DEMO_API_TOKEN` value so visitors can
-  try the REST API without signing up.
+- **Public API token** — a well-known `OPENSOP_API_TOKEN` value so visitors
+  can try the REST API without signing up.
 - **Read-only process definitions** — the UI disallows editing or deleting
   built-in demo processes (creation still works in sandboxed form).
 - **`/docs` route** — interactive API documentation enabled in the demo.
@@ -122,17 +122,19 @@ flyctl secrets set \
 ```sh
 flyctl secrets set \
   RAILS_MASTER_KEY="$(cat config/master.key)" \
-  DEMO_API_TOKEN="demo-public-token-resets-daily" \
+  OPENSOP_API_TOKEN="demo-public-token-resets-daily" \
   OPENSOP_BASE_URL="https://demo.opensop.ai" \
   --app opensop-demo
 ```
 
-- `DEMO_API_TOKEN` is the well-known public token for demo API access. Rotate
-  it as part of the daily reset job if you want per-session isolation.
+- `OPENSOP_API_TOKEN` is the public demo token. The same value powers
+  `Sop::ApplicationController` auth (visitors send it as the `X-SOP-Token`
+  header) AND the value displayed on the demo homepage — `Opensop::DemoMode.api_token`
+  reads `OPENSOP_API_TOKEN` first. Setting one secret is enough.
 - `OPENSOP_BASE_URL` is used by the runtime to build webhook callback URLs.
-- Do **not** set `OPENSOP_API_TOKEN` here — the demo uses `DEMO_API_TOKEN`
-  instead; leaving `OPENSOP_API_TOKEN` unset means the normal authenticated
-  API is inaccessible without the demo token.
+- `DEMO_API_TOKEN` is **not required**. It exists only as a fallback for local
+  development and is only consulted when `OPENSOP_API_TOKEN` is unset. Don't
+  bother setting it on Fly.
 
 ---
 
@@ -245,7 +247,7 @@ Most common cause: a missing URL secret. Verify all three are set:
 ```sh
 flyctl secrets list --app opensop-demo
 # Should show: DATABASE_URL, CACHE_DATABASE_URL, QUEUE_DATABASE_URL,
-#              RAILS_MASTER_KEY, DEMO_API_TOKEN, OPENSOP_BASE_URL
+#              RAILS_MASTER_KEY, OPENSOP_API_TOKEN, OPENSOP_BASE_URL
 ```
 
 ### App boots but `/up` returns 500

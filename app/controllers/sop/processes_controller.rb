@@ -2,6 +2,9 @@ module Sop
   # GET  /sop/:name/schema       — returns the full process definition as JSON
   # POST /sop/processes/register — upsert a process from raw YAML
   class ProcessesController < ApplicationController
+    include DemoReadOnly
+    forbid_in_demo! :register
+
     def schema
       process = find_process!
       render json: process.definition

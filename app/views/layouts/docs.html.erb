@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="<%= I18n.locale %>" class="h-full">
+  <head>
+    <title>Docs · OpenSOP</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="OpenSOP project documentation">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+    <%= stylesheet_link_tag "tailwind", "data-turbo-track": "reload" %>
+    <%= javascript_importmap_tags %>
+  </head>
+
+  <body class="h-full bg-bg text-fg antialiased font-sans text-[13px] leading-[1.5]">
+    <%# Wave 2C: demo banner hook %>
+    <%= render "shared/demo_banner" if defined?(Opensop::DemoMode) && Opensop::DemoMode.enabled? && lookup_context.exists?("shared/demo_banner", [], true) %>
+
+    <div class="flex h-full">
+      <aside class="w-64 border-r border-slate-200 p-6 sticky top-0 h-screen overflow-y-auto shrink-0">
+        <a href="/" class="block mb-6 text-sm font-semibold text-fg hover:text-fg-muted transition">
+          ← OpenSOP
+        </a>
+        <h2 class="text-[11px] font-semibold text-fg-faint uppercase tracking-widest mb-4">Documentation</h2>
+        <nav>
+          <ul class="space-y-0.5">
+            <% @docs_index.each do |doc| %>
+              <li>
+                <%= link_to doc[:title],
+                            ui_docs_path(path: doc[:slug]),
+                            class: "block py-1.5 px-2 rounded text-sm transition " \
+                                   "#{params[:path] == doc[:slug] ? 'bg-bg-hover font-medium text-fg' : 'text-fg-muted hover:bg-bg-hover hover:text-fg'}" %>
+              </li>
+            <% end %>
+          </ul>
+        </nav>
+      </aside>
+
+      <main class="flex-1 overflow-auto">
+        <div class="max-w-4xl mx-auto px-10 py-10">
+          <article class="
+            text-fg leading-relaxed
+            [&>h1]:text-3xl [&>h1]:font-bold [&>h1]:mb-6 [&>h1]:text-fg [&>h1]:leading-tight
+            [&>h2]:text-2xl [&>h2]:font-semibold [&>h2]:mt-10 [&>h2]:mb-4 [&>h2]:text-fg [&>h2]:border-b [&>h2]:border-border [&>h2]:pb-2
+            [&>h3]:text-lg [&>h3]:font-semibold [&>h3]:mt-8 [&>h3]:mb-3 [&>h3]:text-fg
+            [&>h4]:text-base [&>h4]:font-semibold [&>h4]:mt-6 [&>h4]:mb-2 [&>h4]:text-fg
+            [&>p]:mb-4 [&>p]:text-[14px] [&>p]:leading-[1.7]
+            [&>ul]:mb-4 [&>ul]:pl-6 [&>ul]:list-disc [&>ul]:space-y-1
+            [&>ol]:mb-4 [&>ol]:pl-6 [&>ol]:list-decimal [&>ol]:space-y-1
+            [&_li]:text-[14px] [&_li]:leading-[1.7]
+            [&>blockquote]:border-l-4 [&>blockquote]:border-border-strong [&>blockquote]:pl-4 [&>blockquote]:my-4 [&>blockquote]:text-fg-muted [&>blockquote]:italic
+            [&>pre]:bg-bg-code [&>pre]:rounded [&>pre]:p-4 [&>pre]:mb-4 [&>pre]:overflow-x-auto [&>pre]:text-[13px] [&>pre]:border [&>pre]:border-border
+            [&>pre>code]:bg-transparent [&>pre>code]:p-0 [&>pre>code]:text-[13px] [&>pre>code]:font-mono
+            [&_code]:bg-bg-code [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[12px] [&_code]:font-mono [&_code]:text-fg
+            [&>table]:w-full [&>table]:mb-4 [&>table]:text-[13px] [&>table]:border-collapse
+            [&>table>thead>tr>th]:bg-bg-sunken [&>table>thead>tr>th]:px-3 [&>table>thead>tr>th]:py-2 [&>table>thead>tr>th]:text-left [&>table>thead>tr>th]:font-semibold [&>table>thead>tr>th]:border [&>table>thead>tr>th]:border-border
+            [&>table>tbody>tr>td]:px-3 [&>table>tbody>tr>td]:py-2 [&>table>tbody>tr>td]:border [&>table>tbody>tr>td]:border-border
+            [&>table>tbody>tr:nth-child(even)>td]:bg-bg-sunken
+            [&>hr]:my-8 [&>hr]:border-border
+            [&>a]:text-info [&>a]:underline
+            [&_a]:text-info [&_a]:underline
+          ">
+            <%= raw @html_content %>
+          </article>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
