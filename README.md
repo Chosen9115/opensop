@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/hero.png" alt="A person and a small robot walking together down a stone path toward the mountains and the rising sun." width="100%" />
+</p>
+
 # OpenSOP
 
 > Open-source runtime for executable SOPs and agent workflows.
