@@ -61,4 +61,7 @@ primary_region = "ord"  # Chicago — central US
 [[vm]]
   cpu_kind  = "shared"
   cpus      = 1
-  memory_mb = 256
+  # 256MB OOMs on Rails 8 + Thruster + Solid Queue boot — port binding never
+  # completes before the kernel kills the worker. 512MB is the smallest size
+  # that boots reliably; the production fly.toml uses 1GB. Cost delta is small.
+  memory_mb = 512
