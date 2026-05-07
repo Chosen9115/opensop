@@ -18,9 +18,13 @@
 # image-build time so the app can boot without real secrets. We skip the
 # credential check in that branch — runtime always has a real
 # SECRET_KEY_BASE, so this only fires on the actual production process.
+# Inlined DEMO_MODE check — initializers run before lib/ autoload, so
+# referencing Opensop::DemoMode here would NameError. Mirror its semantics.
+demo_mode_on = ENV.fetch("DEMO_MODE", "").to_s.strip.downcase == "true"
+
 if Rails.env.production? &&
    ENV["SECRET_KEY_BASE_DUMMY"].to_s.strip.empty? &&
-   !Opensop::DemoMode.enabled?
+   !demo_mode_on
   if ENV["OPENSOP_UI_USER"].to_s.strip.empty? || ENV["OPENSOP_UI_PASSWORD"].to_s.strip.empty?
     raise(
       "[SECURITY] OPENSOP_UI_USER and OPENSOP_UI_PASSWORD must both be set in " \
