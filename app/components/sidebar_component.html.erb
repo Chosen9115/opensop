@@ -48,12 +48,21 @@
   <%# Library section %>
   <div class="pp-section-title px-2 pt-3 pb-1"><%= I18n.t("opensop.nav.library", default: "Library") %></div>
   <% library_items.each do |item| %>
-    <div class="<%= link_classes(item) %>" title="<%= coming_soon_title %>">
-      <svg class="shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="<%= icon_path(item[:icon]) %>" />
-      </svg>
-      <span class="flex-1 truncate"><%= item[:label] %></span>
-    </div>
+    <% if item[:disabled] %>
+      <div class="<%= link_classes(item) %>" title="<%= coming_soon_title %>">
+        <svg class="shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="<%= icon_path(item[:icon]) %>" />
+        </svg>
+        <span class="flex-1 truncate"><%= item[:label] %></span>
+      </div>
+    <% else %>
+      <%= link_to item[:path], class: link_classes(item) do %>
+        <svg class="shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="<%= icon_path(item[:icon]) %>" />
+        </svg>
+        <span class="flex-1 truncate"><%= item[:label] %></span>
+      <% end %>
+    <% end %>
   <% end %>
 
   <%# Foot %>

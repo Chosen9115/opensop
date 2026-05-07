@@ -79,20 +79,44 @@ class SidebarComponent < ViewComponent::Base
         icon: :document_duplicate,
         path: helpers.ui_templates_path,
         active: path_active?(helpers.ui_templates_path),
-        disabled: false },
+        # Templates is a self-hosted feature — the index renders in demo
+        # but only as a passive list of imported example YAMLs, with no
+        # editor and no save flow. Greying it out keeps the demo focused
+        # on what visitors can actually drive (Processes + Instances).
+        disabled: Opensop::DemoMode.enabled? },
       { key: :webhooks,
         label: I18n.t("opensop.nav.webhooks", default: "Webhooks"),
         icon: :bolt,
         path: helpers.ui_webhooks_path,
         active: path_active?(helpers.ui_webhooks_path),
-        disabled: false },
+        # Same logic as Templates — webhook receipts are always 0 in a
+        # daily-reset demo because no callbacks have come back yet.
+        disabled: Opensop::DemoMode.enabled? },
+      api_or_docs_item
+    ]
+  end
+
+  # In demo mode the sidebar's third Library slot points at /docs (the
+  # project documentation rendered from docs/*.md) instead of the API
+  # reference at /api-docs. The reference stays linked from the demo
+  # homepage CTAs; the sidebar picks the broader, more illustrative
+  # docs surface for first-time visitors.
+  def api_or_docs_item
+    if Opensop::DemoMode.enabled?
+      { key: :docs,
+        label: I18n.t("opensop.nav.docs", default: "Docs"),
+        icon: :arrow_top_right_on_square,
+        path: helpers.ui_docs_path,
+        active: path_active?(helpers.ui_docs_path),
+        disabled: false }
+    else
       { key: :api,
         label: I18n.t("opensop.nav.api", default: "API & SDK"),
         icon: :arrow_top_right_on_square,
         path: helpers.ui_api_docs_path,
         active: path_active?(helpers.ui_api_docs_path),
         disabled: false }
-    ]
+    end
   end
 
   def link_classes(item)

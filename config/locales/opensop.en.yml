@@ -16,6 +16,7 @@ en:
       templates: "Templates"
       webhooks: "Webhooks"
       api: "API & SDK"
+      docs: "Docs"
       workspace: "Workspace"
       library: "Library"
       jump_to_anything: "Jump to anything…"
