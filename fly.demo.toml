@@ -32,9 +32,12 @@ primary_region = "ord"  # Chicago — central US
   # read-only process definitions. The app checks ENV["DEMO_MODE"].
   DEMO_MODE = "true"
 
-  # DNS rebinding protection — only the demo hostname is allowed.
-  # The /up health check path is excluded automatically (see production.rb).
-  RAILS_ALLOWED_HOSTS = "demo.opensop.ai"
+  # DNS rebinding protection — only the demo hostname + the Fly internal
+  # hostname are allowed. The Fly hostname stays in the list so curl/health
+  # checks can hit the app directly without going through Cloudflare/DNS,
+  # which is useful for cert-validation troubleshooting and post-deploy
+  # smoke tests. The /up health check path is excluded automatically.
+  RAILS_ALLOWED_HOSTS = "demo.opensop.ai,opensop-demo.fly.dev"
 
 [deploy]
   # Run migrations on a one-off release machine before traffic switches over.
