@@ -49,15 +49,23 @@ primary_region = "ord"  # Chicago — central US
   force_https        = true
   auto_stop_machines = "stop"
   auto_start_machines = true
-  # Zero minimum — machine sleeps when idle to minimise demo costs.
-  # Accept the cold-start penalty (~5 s); this is a demo, not production.
-  min_machines_running = 0
+  # Keep one machine always-on. We tried `min_machines_running = 0` for cost,
+  # but ran into a failure mode where: Postgres flaked → Solid Queue (running
+  # in-Puma) lost its DB connection → graceful-shutdown handler fired → Puma
+  # exited → port 3001 dark → Fly never restarted because the auto-stop=stop
+  # policy doesn't trigger restart-on-unhealthy on idle machines. With ≥1
+  # always-on, Fly's standard restart-on-unhealthy keeps the demo alive.
+  min_machines_running = 1
   processes = ["app"]
 
   [[http_service.checks]]
     interval     = "30s"
     timeout      = "5s"
-    grace_period = "10s"
+    # 10s was too tight for Rails 8 + Thruster + Solid Queue cold boot — the
+    # Fly proxy started routing traffic before Puma had fully bound the port,
+    # producing brief bursts of 502s. 30s comfortably outlasts the boot path
+    # (db:prepare release_command + bootsnap warm-up + Puma fork).
+    grace_period = "30s"
     method       = "GET"
     path         = "/up"
 
