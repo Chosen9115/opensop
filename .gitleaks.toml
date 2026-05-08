@@ -1,0 +1,50 @@
+# gitleaks config for OpenSOP — extends the default ruleset with a small
+# allowlist for known-safe placeholder strings that appear in tests and
+# example configs. See https://github.com/gitleaks/gitleaks for syntax.
+
+[extend]
+# Pull in gitleaks' default ruleset (AWS keys, GitHub tokens, generic
+# high-entropy strings, RSA private keys, JWTs, Stripe keys, etc.).
+useDefault = true
+
+[allowlist]
+description = "Known-safe placeholders in tests, example configs, and docs"
+
+paths = [
+  # Vendored gem code can include synthetic test fixtures that trip the
+  # generic rules. Never our code; never our secrets.
+  '''^vendor/''',
+
+  # Lockfiles regenerate from Gemfile/package.json; nothing here is a secret.
+  '''^Gemfile\.lock$''',
+  '''^yarn\.lock$''',
+  '''^package-lock\.json$''',
+
+  # Documentation that demonstrates the auth flow with placeholder tokens.
+  # Each of these shows curl commands like `-H "X-SOP-Token: sk_..."` or
+  # similar — illustrative, not real. Real production tokens are 64-char
+  # hex from `SecureRandom.hex(32)` and are never written to docs.
+  '''^docs/API\.md$''',
+  '''^docs/opensop\.postman\.json$''',
+  '''^app/views/ui/api_docs/''',
+]
+
+regexes = [
+  # Local dev placeholder password used in spec/.env.example and docs.
+  '''CHANGE_ME''',
+
+  # The faux DB URL used in spec/config/database_yml_spec.rb.
+  '''postgres://app:secret@db\.example\.com:5432/opensop_production''',
+
+  # AWS official documentation example — appears in security guidance docs.
+  '''AKIAIOSFODNN7EXAMPLE''',
+
+  # Hex-encoded master.key shape (32 hex chars) — comment-only references in
+  # docs/deploying.md and CHANGELOG. Real keys are gitignored at config/master.key
+  # so they never reach the diff.
+  '''(?i)1bf737815e67469a8a5d72f4e8b3fa8d''',
+]
+
+# Note: the encrypted credentials.yml.enc file is intentionally committed and
+# is opaque ciphertext without master.key. gitleaks' default rules don't flag
+# it; if a future rule does, add ^config/credentials\.yml\.enc$ to `paths`.
