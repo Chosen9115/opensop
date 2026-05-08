@@ -142,6 +142,12 @@ Auth: set `OPENSOP_API_TOKEN`, send `X-SOP-Token: <value>` on every request. Ful
 
 ---
 
+## Companion CLI
+
+If you prefer the terminal over curl, [opensop-cli](https://github.com/Chosen9115/opensop-cli) is a single-file bash client for any OpenSOP server. Point it at `https://demo.opensop.ai` to explore the API without running Rails locally, or point it at your own instance once it's running.
+
+---
+
 ## Run it locally
 
 Requirements: Ruby 3.3.7, PostgreSQL, Node (for Tailwind).
