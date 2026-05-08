@@ -19,6 +19,14 @@ paths = [
   '''^Gemfile\.lock$''',
   '''^yarn\.lock$''',
   '''^package-lock\.json$''',
+
+  # Documentation that demonstrates the auth flow with placeholder tokens.
+  # Each of these shows curl commands like `-H "X-SOP-Token: sk_..."` or
+  # similar — illustrative, not real. Real production tokens are 64-char
+  # hex from `SecureRandom.hex(32)` and are never written to docs.
+  '''^docs/API\.md$''',
+  '''^docs/opensop\.postman\.json$''',
+  '''^app/views/ui/api_docs/''',
 ]
 
 regexes = [
