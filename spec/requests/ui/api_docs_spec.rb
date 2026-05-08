@@ -6,7 +6,6 @@ require "rails_helper"
 # that lands, this spec will fail with an ActionController::RoutingError —
 # that's expected and is the integration handoff signal.
 RSpec.describe "Ui::ApiDocs", type: :request do
-
   let(:endpoint_paths) do
     [
       "/sop/",

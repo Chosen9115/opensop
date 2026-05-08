@@ -14,7 +14,7 @@ RSpec.describe Auth::PasskeysController, type: :request do
   let(:original_rp_id) { WebAuthn.configuration.rp_id }
 
   before do
-    WebAuthn.configuration.allowed_origins = [fake_origin]
+    WebAuthn.configuration.allowed_origins = [ fake_origin ]
     WebAuthn.configuration.rp_id = "www.example.com"
   end
 
@@ -227,7 +227,7 @@ RSpec.describe Auth::PasskeysController, type: :request do
       # Sign out so the verify ceremony starts from a clean slate.
       delete auth_sign_out_path
 
-      [client, user.passkey_credentials.last]
+      [ client, user.passkey_credentials.last ]
     end
 
     it "verifies an assertion and creates a session" do

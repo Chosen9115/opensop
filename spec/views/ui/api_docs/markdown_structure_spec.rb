@@ -10,7 +10,6 @@ require "rails_helper"
 # its "Code examples" or auth callout, or a code fence without a
 # language tag.
 RSpec.describe "Ui::ApiDocs markdown partials structure", type: :request do
-
   # ---------------------------------------------------------------------
   # Shared expectations
   # ---------------------------------------------------------------------

@@ -39,7 +39,7 @@ RSpec.describe AuthEvent, type: :model do
       it "orders by created_at desc" do
         older = create(:auth_event, user: user, created_at: 2.hours.ago)
         newer = create(:auth_event, user: user, created_at: 1.minute.ago)
-        expect(AuthEvent.recent.to_a.first(2)).to eq([newer, older])
+        expect(AuthEvent.recent.to_a.first(2)).to eq([ newer, older ])
       end
     end
 

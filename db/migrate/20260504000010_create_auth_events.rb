@@ -12,6 +12,6 @@ class CreateAuthEvents < ActiveRecord::Migration[8.1]
 
     add_index :auth_events, :kind
     add_index :auth_events, :created_at
-    add_index :auth_events, [:user_id, :created_at]
+    add_index :auth_events, [ :user_id, :created_at ]
   end
 end

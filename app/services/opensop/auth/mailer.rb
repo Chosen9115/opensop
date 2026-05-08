@@ -72,7 +72,7 @@ module Opensop
         from = ENV.fetch("OPENSOP_MAILER_FROM")
         Resend::Emails.send(
           from: from,
-          to: [to],
+          to: [ to ],
           subject: subject,
           html: html,
           text: text
@@ -85,10 +85,10 @@ module Opensop
 
       def url_for_purpose(purpose, raw_token, host)
         path = case purpose
-               when "sign_in", "recovery" then "/auth/magic_links/#{raw_token}"
-               when "invitation"          then "/auth/invitations/#{raw_token}"
-               else raise ArgumentError, "Unknown purpose: #{purpose.inspect}"
-               end
+        when "sign_in", "recovery" then "/auth/magic_links/#{raw_token}"
+        when "invitation"          then "/auth/invitations/#{raw_token}"
+        else raise ArgumentError, "Unknown purpose: #{purpose.inspect}"
+        end
         "#{host}#{path}"
       end
 

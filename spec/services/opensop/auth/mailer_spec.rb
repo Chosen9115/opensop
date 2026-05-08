@@ -74,7 +74,7 @@ RSpec.describe Opensop::Auth::Mailer do
         described_class.send_magic_link(user: user, raw_token: raw_token, purpose: "sign_in", host: host)
 
         expect(captured[:from]).to eq("noreply@opensop.dev")
-        expect(captured[:to]).to eq(["alice@example.com"])
+        expect(captured[:to]).to eq([ "alice@example.com" ])
         expect(captured[:subject]).to eq(I18n.t("opensop.auth.emails.sign_in.subject"))
         expect(captured[:html]).to include("#{host}/auth/magic_links/#{raw_token}")
         expect(captured[:text]).to include("#{host}/auth/magic_links/#{raw_token}")

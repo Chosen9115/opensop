@@ -23,10 +23,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.jsonb "metadata", default: {}, null: false
     t.string "user_agent", limit: 255
     t.uuid "user_id"
-    t.index ["created_at"], name: "index_auth_events_on_created_at"
-    t.index ["kind"], name: "index_auth_events_on_kind"
-    t.index ["user_id", "created_at"], name: "index_auth_events_on_user_id_and_created_at"
-    t.index ["user_id"], name: "index_auth_events_on_user_id"
+    t.index [ "created_at" ], name: "index_auth_events_on_created_at"
+    t.index [ "kind" ], name: "index_auth_events_on_kind"
+    t.index [ "user_id", "created_at" ], name: "index_auth_events_on_user_id_and_created_at"
+    t.index [ "user_id" ], name: "index_auth_events_on_user_id"
   end
 
   create_table "auth_sessions", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -39,9 +39,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.datetime "updated_at", null: false
     t.string "user_agent", limit: 255
     t.uuid "user_id", null: false
-    t.index ["expires_at"], name: "index_auth_sessions_on_expires_at"
-    t.index ["token_digest"], name: "index_auth_sessions_on_token_digest", unique: true
-    t.index ["user_id"], name: "index_auth_sessions_on_user_id"
+    t.index [ "expires_at" ], name: "index_auth_sessions_on_expires_at"
+    t.index [ "token_digest" ], name: "index_auth_sessions_on_token_digest", unique: true
+    t.index [ "user_id" ], name: "index_auth_sessions_on_user_id"
   end
 
   create_table "magic_link_tokens", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -52,9 +52,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.inet "requested_ip"
     t.string "token_digest", null: false
     t.uuid "user_id", null: false
-    t.index ["expires_at"], name: "index_magic_link_tokens_on_expires_at"
-    t.index ["token_digest"], name: "index_magic_link_tokens_on_token_digest", unique: true
-    t.index ["user_id"], name: "index_magic_link_tokens_on_user_id"
+    t.index [ "expires_at" ], name: "index_magic_link_tokens_on_expires_at"
+    t.index [ "token_digest" ], name: "index_magic_link_tokens_on_token_digest", unique: true
+    t.index [ "user_id" ], name: "index_magic_link_tokens_on_user_id"
   end
 
   create_table "passkey_credentials", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -67,8 +67,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.string "transports", default: [], array: true
     t.datetime "updated_at", null: false
     t.uuid "user_id", null: false
-    t.index ["external_id"], name: "index_passkey_credentials_on_external_id", unique: true
-    t.index ["user_id"], name: "index_passkey_credentials_on_user_id"
+    t.index [ "external_id" ], name: "index_passkey_credentials_on_external_id", unique: true
+    t.index [ "user_id" ], name: "index_passkey_credentials_on_user_id"
   end
 
   create_table "sop_callbacks", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -80,10 +80,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.string "status", default: "pending", null: false
     t.string "step_id", null: false
     t.datetime "updated_at", null: false
-    t.index ["callback_path"], name: "index_sop_callbacks_on_callback_path", unique: true
-    t.index ["expires_at"], name: "index_sop_callbacks_on_expires_at"
-    t.index ["instance_id"], name: "index_sop_callbacks_on_instance_id"
-    t.index ["status"], name: "index_sop_callbacks_on_status"
+    t.index [ "callback_path" ], name: "index_sop_callbacks_on_callback_path", unique: true
+    t.index [ "expires_at" ], name: "index_sop_callbacks_on_expires_at"
+    t.index [ "instance_id" ], name: "index_sop_callbacks_on_instance_id"
+    t.index [ "status" ], name: "index_sop_callbacks_on_status"
   end
 
   create_table "sop_events", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -94,9 +94,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.uuid "instance_id", null: false
     t.string "step_id"
     t.datetime "updated_at", null: false
-    t.index ["created_at"], name: "index_sop_events_on_created_at"
-    t.index ["event_type"], name: "index_sop_events_on_event_type"
-    t.index ["instance_id"], name: "index_sop_events_on_instance_id"
+    t.index [ "created_at" ], name: "index_sop_events_on_created_at"
+    t.index [ "event_type" ], name: "index_sop_events_on_event_type"
+    t.index [ "instance_id" ], name: "index_sop_events_on_instance_id"
   end
 
   create_table "sop_instances", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -112,10 +112,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.datetime "started_at"
     t.string "state", default: "pending", null: false
     t.datetime "updated_at", null: false
-    t.index ["process_id"], name: "index_sop_instances_on_process_id"
-    t.index ["process_name", "state"], name: "index_sop_instances_on_process_name_and_state"
-    t.index ["started_at"], name: "index_sop_instances_on_started_at"
-    t.index ["state"], name: "index_sop_instances_on_state"
+    t.index [ "process_id" ], name: "index_sop_instances_on_process_id"
+    t.index [ "process_name", "state" ], name: "index_sop_instances_on_process_name_and_state"
+    t.index [ "started_at" ], name: "index_sop_instances_on_started_at"
+    t.index [ "state" ], name: "index_sop_instances_on_state"
   end
 
   create_table "sop_llm_calls", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -134,9 +134,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.string "status", null: false
     t.uuid "step_id", null: false
     t.datetime "updated_at", null: false
-    t.index ["status"], name: "index_sop_llm_calls_on_status"
-    t.index ["step_id", "attempt"], name: "index_sop_llm_calls_on_step_id_and_attempt", unique: true
-    t.index ["step_id"], name: "index_sop_llm_calls_on_step_id"
+    t.index [ "status" ], name: "index_sop_llm_calls_on_status"
+    t.index [ "step_id", "attempt" ], name: "index_sop_llm_calls_on_step_id_and_attempt", unique: true
+    t.index [ "step_id" ], name: "index_sop_llm_calls_on_step_id"
   end
 
   create_table "sop_processes", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -149,9 +149,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.string "tags", default: [], array: true
     t.datetime "updated_at", null: false
     t.string "version", null: false
-    t.index ["name", "version"], name: "index_sop_processes_on_name_and_version", unique: true
-    t.index ["status"], name: "index_sop_processes_on_status"
-    t.index ["tags"], name: "index_sop_processes_on_tags", using: :gin
+    t.index [ "name", "version" ], name: "index_sop_processes_on_name_and_version", unique: true
+    t.index [ "status" ], name: "index_sop_processes_on_status"
+    t.index [ "tags" ], name: "index_sop_processes_on_tags", using: :gin
   end
 
   create_table "sop_schedules", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -169,8 +169,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.string "process_name", null: false
     t.string "timezone", default: "UTC", null: false
     t.datetime "updated_at", null: false
-    t.index ["enabled", "next_run_at"], name: "index_sop_schedules_on_enabled_and_next_run_at"
-    t.index ["process_name"], name: "index_sop_schedules_on_process_name"
+    t.index [ "enabled", "next_run_at" ], name: "index_sop_schedules_on_enabled_and_next_run_at"
+    t.index [ "process_name" ], name: "index_sop_schedules_on_process_name"
   end
 
   create_table "sop_step_iterations", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -184,8 +184,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.datetime "started_at", null: false
     t.string "state", default: "running", null: false
     t.datetime "updated_at", null: false
-    t.index ["parent_step_id", "index"], name: "index_sop_step_iterations_on_parent_step_id_and_index", unique: true
-    t.index ["parent_step_id"], name: "index_sop_step_iterations_on_parent_step_id"
+    t.index [ "parent_step_id", "index" ], name: "index_sop_step_iterations_on_parent_step_id_and_index", unique: true
+    t.index [ "parent_step_id" ], name: "index_sop_step_iterations_on_parent_step_id"
   end
 
   create_table "sop_steps", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -208,13 +208,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.string "sub_state"
     t.jsonb "tools", default: []
     t.datetime "updated_at", null: false
-    t.index ["instance_id", "position"], name: "index_sop_steps_on_instance_id_and_position"
-    t.index ["instance_id", "step_id"], name: "index_sop_steps_on_instance_id_and_step_id", unique: true
-    t.index ["instance_id"], name: "index_sop_steps_on_instance_id"
-    t.index ["parent_iteration_id"], name: "index_sop_steps_on_parent_iteration_id"
-    t.index ["state"], name: "index_sop_steps_on_state"
-    t.index ["step_type"], name: "index_sop_steps_on_step_type"
-    t.index ["tools"], name: "index_sop_steps_on_tools", using: :gin
+    t.index [ "instance_id", "position" ], name: "index_sop_steps_on_instance_id_and_position"
+    t.index [ "instance_id", "step_id" ], name: "index_sop_steps_on_instance_id_and_step_id", unique: true
+    t.index [ "instance_id" ], name: "index_sop_steps_on_instance_id"
+    t.index [ "parent_iteration_id" ], name: "index_sop_steps_on_parent_iteration_id"
+    t.index [ "state" ], name: "index_sop_steps_on_state"
+    t.index [ "step_type" ], name: "index_sop_steps_on_step_type"
+    t.index [ "tools" ], name: "index_sop_steps_on_tools", using: :gin
   end
 
   create_table "sop_webhook_deliveries", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -235,13 +235,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.uuid "step_iteration_id"
     t.datetime "updated_at", null: false
     t.uuid "webhook_id", null: false
-    t.index ["created_at"], name: "index_sop_webhook_deliveries_on_created_at"
-    t.index ["event_id"], name: "index_sop_webhook_deliveries_on_event_id"
-    t.index ["instance_id"], name: "index_sop_webhook_deliveries_on_instance_id"
-    t.index ["status", "next_attempt_at"], name: "index_sop_webhook_deliveries_on_status_and_next_attempt_at"
-    t.index ["step_iteration_id"], name: "index_sop_webhook_deliveries_on_step_iteration_id"
-    t.index ["webhook_id", "created_at"], name: "index_sop_webhook_deliveries_on_webhook_id_and_created_at", order: { created_at: :desc }
-    t.index ["webhook_id"], name: "index_sop_webhook_deliveries_on_webhook_id"
+    t.index [ "created_at" ], name: "index_sop_webhook_deliveries_on_created_at"
+    t.index [ "event_id" ], name: "index_sop_webhook_deliveries_on_event_id"
+    t.index [ "instance_id" ], name: "index_sop_webhook_deliveries_on_instance_id"
+    t.index [ "status", "next_attempt_at" ], name: "index_sop_webhook_deliveries_on_status_and_next_attempt_at"
+    t.index [ "step_iteration_id" ], name: "index_sop_webhook_deliveries_on_step_iteration_id"
+    t.index [ "webhook_id", "created_at" ], name: "index_sop_webhook_deliveries_on_webhook_id_and_created_at", order: { created_at: :desc }
+    t.index [ "webhook_id" ], name: "index_sop_webhook_deliveries_on_webhook_id"
   end
 
   create_table "sop_webhooks", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -257,9 +257,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.text "step_ids", default: [], null: false, array: true
     t.datetime "updated_at", null: false
     t.string "url", null: false
-    t.index ["events"], name: "index_sop_webhooks_on_events", using: :gin
-    t.index ["process_id", "enabled"], name: "index_sop_webhooks_on_process_id_and_enabled"
-    t.index ["process_id"], name: "index_sop_webhooks_on_process_id"
+    t.index [ "events" ], name: "index_sop_webhooks_on_events", using: :gin
+    t.index [ "process_id", "enabled" ], name: "index_sop_webhooks_on_process_id_and_enabled"
+    t.index [ "process_id" ], name: "index_sop_webhooks_on_process_id"
   end
 
   create_table "users", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -269,7 +269,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_04_000010) do
     t.datetime "last_signed_in_at"
     t.string "role", default: "admin", null: false
     t.datetime "updated_at", null: false
-    t.index ["email"], name: "index_users_on_email", unique: true
+    t.index [ "email" ], name: "index_users_on_email", unique: true
   end
 
   add_foreign_key "auth_events", "users"

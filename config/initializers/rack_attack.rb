@@ -65,7 +65,7 @@ class Rack::Attack
       "Retry-After" => retry_after.to_s
     }
     body = { error: "rate_limited", retry_after: retry_after }.to_json
-    [429, headers, [body]]
+    [ 429, headers, [ body ] ]
   end
 end
 

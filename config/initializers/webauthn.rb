@@ -13,7 +13,7 @@ require "webauthn"
 WebAuthn.configure do |config|
   origin = ENV["OPENSOP_ORIGIN"].presence ||
            (Rails.env.production? ? nil : "http://localhost:3000")
-  config.allowed_origins = [origin].compact
+  config.allowed_origins = [ origin ].compact
   config.rp_id = ENV["OPENSOP_RP_ID"].presence ||
                   (Rails.env.production? ? nil : "localhost")
   config.rp_name = ENV["OPENSOP_RP_NAME"].presence || "OpenSOP"

@@ -24,7 +24,7 @@ RSpec.describe "Ui::Account::SessionsController", type: :request do
       expect(response.body).to include("Other UA")
       expect(response.body).not_to include("Some stranger")
       # Both the request session and the additional session belong to user
-      expect([current_session, another].map(&:user_id).uniq).to eq([user.id])
+      expect([ current_session, another ].map(&:user_id).uniq).to eq([ user.id ])
     end
   end
 

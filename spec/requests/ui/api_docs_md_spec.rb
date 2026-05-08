@@ -8,7 +8,6 @@ require "rails_helper"
 #   GET /api-docs/endpoints/:slug.md    — one endpoint as markdown
 #   GET /llms.txt                       — llms.txt index pointing at the above
 RSpec.describe "Ui::ApiDocs markdown surface", type: :request do
-
   describe "GET /api-docs.md (bundled)" do
     it "returns 200 with text/markdown content type" do
       get "/api-docs.md"

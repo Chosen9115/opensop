@@ -91,9 +91,9 @@ module Auth
 
       allow = if user
                 user.passkey_credentials.pluck(:external_id)
-              else
+      else
                 []
-              end
+      end
 
       options = WebAuthn::Credential.options_for_get(
         allow: allow,
