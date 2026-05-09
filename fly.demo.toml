@@ -1,0 +1,78 @@
+# fly.demo.toml — Fly.io configuration for the OpenSOP public demo
+#
+# App: opensop-demo  /  demo.opensop.ai
+# Deploy with: flyctl deploy --config fly.demo.toml
+#
+# This is a SEPARATE config from fly.toml (which drives the primary deployment).
+# Do NOT modify fly.toml when working on the demo.
+# Docs: https://fly.io/docs/reference/configuration/
+
+app = "opensop-demo"
+primary_region = "ord"  # Chicago — central US
+
+[build]
+  # Same Dockerfile as the primary app; no changes needed.
+
+[env]
+  RAILS_ENV           = "production"
+  RAILS_LOG_TO_STDOUT = "true"
+  RAILS_LOG_LEVEL     = "info"
+
+  # The Rails 8 Dockerfile runs as uid 1000 without cap_net_bind_service, so
+  # Thruster can't bind port 80. Move both Thruster (HTTP_PORT) and its upstream
+  # Puma (TARGET_PORT) to unprivileged ports. Fly's edge proxy handles 80/443
+  # publicly and routes to HTTP_PORT internally.
+  HTTP_PORT   = "3000"
+  TARGET_PORT = "3001"
+
+  # Run Solid Queue inside Puma — no separate worker machine for the demo.
+  SOLID_QUEUE_IN_PUMA = "true"
+
+  # Demo-mode flag — enables the demo banner, rate limiting, daily reset, and
+  # read-only process definitions. The app checks ENV["DEMO_MODE"].
+  DEMO_MODE = "true"
+
+  # DNS rebinding protection — only the demo hostname + the Fly internal
+  # hostname are allowed. The Fly hostname stays in the list so curl/health
+  # checks can hit the app directly without going through Cloudflare/DNS,
+  # which is useful for cert-validation troubleshooting and post-deploy
+  # smoke tests. The /up health check path is excluded automatically.
+  RAILS_ALLOWED_HOSTS = "demo.opensop.ai,opensop-demo.fly.dev"
+
+[deploy]
+  # Run migrations on a one-off release machine before traffic switches over.
+  # The Docker entrypoint also runs db:prepare on web boot (idempotent safety net).
+  release_command = "./bin/rails db:prepare"
+
+[http_service]
+  internal_port      = 3000   # Thruster's HTTP_PORT
+  force_https        = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  # Keep one machine always-on. We tried `min_machines_running = 0` for cost,
+  # but ran into a failure mode where: Postgres flaked → Solid Queue (running
+  # in-Puma) lost its DB connection → graceful-shutdown handler fired → Puma
+  # exited → port 3001 dark → Fly never restarted because the auto-stop=stop
+  # policy doesn't trigger restart-on-unhealthy on idle machines. With ≥1
+  # always-on, Fly's standard restart-on-unhealthy keeps the demo alive.
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval     = "30s"
+    timeout      = "5s"
+    # 10s was too tight for Rails 8 + Thruster + Solid Queue cold boot — the
+    # Fly proxy started routing traffic before Puma had fully bound the port,
+    # producing brief bursts of 502s. 30s comfortably outlasts the boot path
+    # (db:prepare release_command + bootsnap warm-up + Puma fork).
+    grace_period = "30s"
+    method       = "GET"
+    path         = "/up"
+
+[[vm]]
+  cpu_kind  = "shared"
+  cpus      = 1
+  # 256MB OOMs on Rails 8 + Thruster + Solid Queue boot — port binding never
+  # completes before the kernel kills the worker. 512MB is the smallest size
+  # that boots reliably; the production fly.toml uses 1GB. Cost delta is small.
+  memory_mb = 512

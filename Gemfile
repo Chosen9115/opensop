@@ -22,6 +22,12 @@ gem "psych"
 # CORS for API access
 gem "rack-cors"
 
+# Per-IP request throttling (engaged in DEMO_MODE)
+gem "rack-attack"
+
+# CommonMark / GitHub-flavored Markdown rendering for /docs route
+gem "commonmarker"
+
 # Hotwire for UI
 gem "turbo-rails"
 gem "stimulus-rails"

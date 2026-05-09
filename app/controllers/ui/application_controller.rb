@@ -176,6 +176,9 @@ module Ui
 
     # Auth contract for the admin UI:
     #
+    # * demo     — when DEMO_MODE=true, the admin UI is intentionally public.
+    #              Mutation surfaces visitors can reach are already locked
+    #              down by the DemoReadOnly concern + rack-attack throttles.
     # * test     — bypassed entirely when both env vars are unset (so request
     #              specs hit admin pages without signing every request). Specs
     #              that need to assert the auth gate set the env vars in a
@@ -186,6 +189,8 @@ module Ui
     #              development credentials `admin` / `admin` and log a one-time
     #              warning. Set both env vars to override.
     def authenticate_admin_ui!
+      return if Opensop::DemoMode.enabled?
+
       expected_user = ENV["OPENSOP_UI_USER"].to_s
       expected_pass = ENV["OPENSOP_UI_PASSWORD"].to_s
 
@@ -194,7 +199,8 @@ module Ui
         # request-spec convention.
         return if Rails.env.test?
 
-        # Production should never reach here (the initializer raises). Defensive.
+        # Production should never reach here (the initializer raises, unless
+        # DEMO_MODE is on — but DEMO_MODE returns above). Defensive.
         return if Rails.env.production?
 
         expected_user = "admin"

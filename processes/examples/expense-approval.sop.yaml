@@ -1,0 +1,155 @@
+# Demo: Expense Approval
+# Step types demonstrated: form, judgment, approval, notification
+# Status in v0.1: mixed (form + notification fully executable; judgment and approval are stubbed — state transitions only)
+#
+# NOTE: `judgment` and `approval` step types are recognized by the parser and
+# stored correctly, but the runtime's judgment router (LLM integration) and
+# approval gate UI are not yet wired in v0.1. Instances will pause at those
+# steps waiting for a manual `submit` API call. See README §3 for roadmap.
+
+opensop: "0.1"
+
+process:
+  name: expense-approval
+  version: "1.0"
+  description: "Employee submits an expense; an LLM categorizes and checks policy; manager approves if required; requester is notified."
+  owner: finance-team
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: employee_email
+      type: string
+      format: email
+      required: true
+    - name: employee_name
+      type: string
+      required: true
+    - name: department
+      type: enum
+      values: [engineering, sales, marketing, operations, hr]
+      required: true
+
+  outputs:
+    - name: expense_id
+      type: string
+      from: steps.submit-expense.outputs.expense_id
+    - name: decision
+      type: enum
+      values: [approved, rejected, pending_manager]
+      from: steps.policy-check.outputs.decision
+    - name: reimbursement_amount
+      type: number
+      from: steps.submit-expense.outputs.amount
+
+  steps:
+    - id: submit-expense
+      name: "Submit expense claim"
+      type: form
+      description: "Employee provides receipt details, amount, category, and business justification"
+      inputs:
+        - name: employee_name
+          from: process.inputs.employee_name
+        - name: department
+          from: process.inputs.department
+      outputs:
+        - name: expense_id
+          type: string
+        - name: amount
+          type: number
+        - name: currency
+          type: enum
+          values: [USD, EUR, GBP, MXN, CAD]
+        - name: merchant
+          type: string
+        - name: expense_date
+          type: date
+        - name: category
+          type: enum
+          values: [travel, meals, software, hardware, training, other]
+        - name: justification
+          type: string
+        - name: receipt
+          type: file
+      timeout: 3d
+      on_timeout: notify-and-wait
+
+    - id: policy-check
+      name: "Check expense against policy"
+      type: judgment
+      description: "Assess whether the expense complies with company policy and determine if manager approval is required (threshold: $500 or category hardware/training)"
+      inputs:
+        - name: amount
+          from: steps.submit-expense.outputs.amount
+        - name: currency
+          from: steps.submit-expense.outputs.currency
+        - name: category
+          from: steps.submit-expense.outputs.category
+        - name: justification
+          from: steps.submit-expense.outputs.justification
+        - name: department
+          from: process.inputs.department
+      outputs:
+        - name: decision
+          type: enum
+          values: [approved, rejected, pending_manager]
+        - name: policy_notes
+          type: string
+        - name: requires_manager_approval
+          type: boolean
+        - name: rejection_reason
+          type: string
+          required_if: "decision == 'rejected'"
+      judgment:
+        allow_agent: true
+        require_human_review: false
+        confidence_threshold: 0.88
+        escalation: manual
+
+    - id: manager-approval
+      name: "Manager approval"
+      type: approval
+      description: "Department manager reviews and approves or rejects the expense"
+      condition: "steps.policy-check.outputs.requires_manager_approval == true"
+      inputs:
+        - name: employee_name
+          from: process.inputs.employee_name
+        - name: amount
+          from: steps.submit-expense.outputs.amount
+        - name: category
+          from: steps.submit-expense.outputs.category
+        - name: justification
+          from: steps.submit-expense.outputs.justification
+        - name: policy_notes
+          from: steps.policy-check.outputs.policy_notes
+      outputs:
+        - name: approved
+          type: boolean
+        - name: manager_notes
+          type: string
+      timeout: 2d
+      on_timeout: escalate
+
+    - id: notify-requester
+      name: "Notify requester of outcome"
+      type: notification
+      inputs:
+        - name: employee_email
+          from: process.inputs.employee_email
+        - name: expense_id
+          from: steps.submit-expense.outputs.expense_id
+        - name: decision
+          from: steps.policy-check.outputs.decision
+        - name: amount
+          from: steps.submit-expense.outputs.amount
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#finance-ops"
+
+  tags: [finance, expense, approval, hr]
+  sla:
+    target: 48h
+    warning: 24h

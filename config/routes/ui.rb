@@ -1,5 +1,14 @@
 # Admin UI routes. All actions render HTML (or Turbo Stream later).
 scope module: :ui, as: :ui do
+  # Demo homepage — shown when DEMO_MODE=true; normal dashboard otherwise.
+  # The constrained route must be declared first (Rails evaluates top-to-bottom).
+  # We suppress the route name on the constrained entry so only the unconstrainted
+  # "root" gets the canonical `ui_root` helper — both routes map to "/" but
+  # the named helper always resolves to the dashboard, which is correct for
+  # link_to/redirect_to usage inside the app.
+  get "/", to: "demo/home#show",
+      constraints: ->(_req) { Opensop::DemoMode.enabled? },
+      as: :demo_home
   root to: "dashboard#index"
   get "dashboard", to: "dashboard#index", as: :dashboard
 
@@ -21,6 +30,11 @@ scope module: :ui, as: :ui do
   get "/webhooks",  to: "webhooks#index",  as: :webhooks
   get "/costs",     to: "costs#index",     as: :costs
   get "/templates", to: "templates#index", as: :templates
+
+  # Project documentation rendered from docs/*.md
+  get "/docs(/*path)", to: "docs#show", as: :docs,
+      constraints: { path: %r{[a-zA-Z0-9_\-/]+} },
+      defaults: { path: "index" }
   # Bundled markdown — every guide and endpoint in one file. Defined BEFORE
   # the /api-docs scope so the explicit /api-docs.md path wins over the
   # scope's index route, which would otherwise greedily match `.md` as the
