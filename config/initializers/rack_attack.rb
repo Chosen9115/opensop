@@ -10,11 +10,18 @@
 #   - 60 req/min/IP across the SOP API
 #   - 10 starts/hour/IP (the most expensive call — creates an instance + steps)
 #   - 120 req/min/IP for the homepage and docs
-# Plus a 5-minute IP ban for anyone exceeding 1000 req in 5 minutes (obvious abuse).
+#
+# IMPORTANT: counters live in an in-process MemoryStore, not Rails.cache.
+# Rails.cache resolves to Solid Cache (Postgres-backed), and using it here
+# was causing 2-3 PG writes per request to track counters — on a small
+# demo Postgres VM this was the dominant write load and contributed to a
+# `role: error` outage on 2026-05-08. Memory-backed counters reset when
+# Puma restarts; that's acceptable for demo abuse prevention because the
+# per-minute throttles still bound any single window.
 
 return unless defined?(Rack::Attack)
 
-Rack::Attack.cache.store = Rails.cache
+Rack::Attack.cache.store = ActiveSupport::Cache::MemoryStore.new
 
 # Helper: only fire throttles in demo mode.
 def demo_throttle?
@@ -40,14 +47,16 @@ Rack::Attack.throttle("demo:ui:per-ip-per-minute", limit: 120, period: 60.second
   req.ip if demo_throttle? && !req.path.start_with?("/sop/")
 end
 
-# 4) Hard ban: anyone exceeding 1000 requests in 5 minutes is obviously
-#    abusing the demo. Block them for 5 minutes.
-Rack::Attack.blocklist("demo:abuse-ip-ban") do |req|
-  next false unless demo_throttle?
-  Rack::Attack::Allow2Ban.filter("abuse:#{req.ip}", maxretry: 1000, findtime: 5.minutes, bantime: 5.minutes) do
-    true
-  end
-end
+# Note: a 5-minute Allow2Ban abuse-ban rule used to live here, but the
+# filter block returned `true` unconditionally — meaning every request
+# (legitimate or not) ticked the counter, multiplying PG-write load. The
+# per-minute throttles above are sufficient for demo abuse prevention:
+# 60 req/min on /sop/ + 120 req/min on UI = 180 max per minute per IP,
+# i.e. no IP can sustain more than ~900 req in any 5-minute window even
+# with perfect pacing — well under the 1000-threshold the old Allow2Ban
+# was guarding. If we ever need a hard 5-minute ban for repeated abuse,
+# scope the filter block to ONLY count already-throttled requests
+# (e.g. via `req.env["rack.attack.match_type"] == :throttle`).
 
 # Custom 429 response — JSON for /sop, HTML for everything else.
 Rack::Attack.throttled_responder = lambda do |request|
