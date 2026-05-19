@@ -15,6 +15,16 @@ APP="opensop"
 REMOTE_ONLY=true
 RELEASE=true
 
+# Locate the Fly CLI. Both `flyctl` and `fly` refer to the same binary, but
+# different installs ship them under different names — superfly/flyctl-actions
+# on CI only exposes `flyctl`, while a Homebrew install ships both. Prefer
+# `flyctl` (the canonical name) and fall back to `fly`.
+FLY=$(command -v flyctl || command -v fly || true)
+if [ -z "$FLY" ]; then
+  echo "Error: fly/flyctl CLI not found on PATH" >&2
+  exit 1
+fi
+
 for arg in "$@"; do
   case $arg in
     --local)      REMOTE_ONLY=false ;;
@@ -27,10 +37,10 @@ echo "==> Deploying $APP to Fly.io"
 echo ""
 
 # Push any secrets that are staged but not yet deployed.
-STAGED=$(fly secrets list --app "$APP" 2>/dev/null | grep -c "Staged" || true)
+STAGED=$("$FLY" secrets list --app "$APP" 2>/dev/null | grep -c "Staged" || true)
 if [ "$STAGED" -gt 0 ]; then
   echo "==> Flushing $STAGED staged secret(s)"
-  fly secrets deploy --app "$APP"
+  "$FLY" secrets deploy --app "$APP"
   echo ""
 fi
 
@@ -39,9 +49,9 @@ FLAGS=(--app "$APP")
 $REMOTE_ONLY && FLAGS+=(--remote-only)
 $RELEASE     || FLAGS+=(--no-release-command)
 
-echo "==> Running fly deploy ${FLAGS[*]}"
-fly deploy "${FLAGS[@]}"
+echo "==> Running $FLY deploy ${FLAGS[*]}"
+"$FLY" deploy "${FLAGS[@]}"
 
 echo ""
 echo "==> Done. App status:"
-fly status --app "$APP"
+"$FLY" status --app "$APP"
