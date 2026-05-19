@@ -132,6 +132,9 @@ en:
       api: "API & SDK"
       workspace: "Workspace"
       library: "Library"
+      account: "Account"
+      passkeys: "Passkeys"
+      users: "Users"
       jump_to_anything: "Jump to anything…"
 
     sidebar:
