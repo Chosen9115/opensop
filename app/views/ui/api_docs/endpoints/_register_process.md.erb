@@ -1,0 +1,72 @@
+## `POST /sop/processes/register`
+
+**<%= t('opensop.api_docs.endpoints.register_process.title') %>** — <%= t('opensop.api_docs.endpoints.register_process.description') %>
+
+> **Auth:** Requires `X-SOP-Token` header. See [Authentication](/api-docs/guides/authentication.md).
+
+### Request body
+
+**Content-Type:** `multipart/form-data`
+
+- `file` (file, required) — The `.sop.yaml` file to register.
+
+### Response
+
+`201 application/json` — The registered process definition.
+
+```json
+{
+  "name":    "customer-onboarding",
+  "version": "1.0"
+}
+```
+
+### Errors
+
+| Status | Code | Meaning |
+|--------|------|---------|
+| 422 | `invalid_definition` | YAML failed schema or syntax check. |
+| 401 | `unauthorized` | Token missing or revoked. |
+
+### Code examples
+
+#### curl
+
+```bash
+curl https://api.opensop.dev/sop/processes/register \
+  -X POST \
+  -H "X-SOP-Token: $OPENSOP_TOKEN" \
+  -F "file=@customer-onboarding.sop.yaml"
+```
+
+#### Node
+
+```js
+const form = new FormData();
+form.append("file", fs.createReadStream("./customer-onboarding.sop.yaml"));
+await fetch("https://api.opensop.dev/sop/processes/register", {
+  method: "POST",
+  headers: { "X-SOP-Token": process.env.OPENSOP_TOKEN },
+  body: form
+});
+```
+
+#### Python
+
+```python
+with open("customer-onboarding.sop.yaml", "rb") as f:
+  resp = requests.post(
+    "https://api.opensop.dev/sop/processes/register",
+    headers={"X-SOP-Token": os.environ["OPENSOP_TOKEN"]},
+    files={"file": f}
+  )
+```
+
+#### Ruby
+
+```ruby
+uri = URI("https://api.opensop.dev/sop/processes/register")
+req = Net::HTTP::Post.new(uri)
+req["X-SOP-Token"] = ENV["OPENSOP_TOKEN"]
+req.set_form([["file", File.open("./customer-onboarding.sop.yaml")]])
+```

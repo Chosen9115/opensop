@@ -1,0 +1,140 @@
+<%
+  status_pill_state_for = ->(status) {
+    case status
+    when "success" then :ok
+    when "failed"  then :err
+    else                :neutral
+    end
+  }
+
+  status_pill_label_for = ->(status) {
+    case status
+    when "success" then t('opensop.schedule.status.success')
+    when "failed"  then t('opensop.schedule.status.failed')
+    else                t('opensop.schedule.status.none')
+    end
+  }
+%>
+
+<section class="mb-6">
+  <h1 class="text-[20px] font-semibold tracking-tight text-fg">
+    <%= t('opensop.schedule.title') %>
+  </h1>
+  <p class="mt-1 text-sm text-fg-muted">
+    <%= t('opensop.schedule.subtitle') %>
+  </p>
+</section>
+
+<% if @table_unavailable %>
+  <%= render EmptyStateComponent.new(
+        title: t('opensop.schedule.unavailable.title'),
+        description: t('opensop.schedule.unavailable.body')
+      ) %>
+<% else %>
+  <section class="grid grid-cols-3 gap-4 mb-10">
+    <div class="rounded-[3px] border border-border bg-bg p-4">
+      <div class="text-xs uppercase tracking-wide text-fg-muted">
+        <%= t('opensop.schedule.tiles.active') %>
+      </div>
+      <div class="mt-2 text-[28px] font-mono tabular-nums text-fg leading-none">
+        <%= number_with_delimiter(@totals[:active]) %>
+      </div>
+    </div>
+
+    <div class="rounded-[3px] border border-border bg-bg p-4">
+      <div class="text-xs uppercase tracking-wide text-fg-muted">
+        <%= t('opensop.schedule.tiles.due_now') %>
+      </div>
+      <div class="mt-2 text-[28px] font-mono tabular-nums text-fg leading-none">
+        <%= number_with_delimiter(@totals[:due_now]) %>
+      </div>
+    </div>
+
+    <div class="rounded-[3px] border border-border bg-bg p-4">
+      <div class="text-xs uppercase tracking-wide text-fg-muted">
+        <%= t('opensop.schedule.tiles.failures_24h') %>
+      </div>
+      <div class="mt-2 text-[28px] font-mono tabular-nums text-fg leading-none">
+        <%= number_with_delimiter(@totals[:failures_24h]) %>
+      </div>
+    </div>
+  </section>
+
+  <% if @schedules.empty? %>
+    <%= render EmptyStateComponent.new(
+          title: t('opensop.schedule.empty.title'),
+          description: t('opensop.schedule.empty.body')
+        ) %>
+  <% else %>
+    <section>
+      <div class="border border-border rounded-[3px] divide-y divide-border bg-bg overflow-hidden">
+        <div class="grid grid-cols-[1.5fr_1fr_1fr_60px_140px_140px_100px_90px] gap-4 px-4 py-2 text-[10px] font-mono uppercase tracking-[0.08em] text-fg-muted bg-bg-sunken">
+          <span><%= t('opensop.schedule.table.name') %></span>
+          <span><%= t('opensop.schedule.table.process') %></span>
+          <span><%= t('opensop.schedule.table.cron') %></span>
+          <span><%= t('opensop.schedule.table.timezone') %></span>
+          <span><%= t('opensop.schedule.table.next_run') %></span>
+          <span><%= t('opensop.schedule.table.last_run') %></span>
+          <span><%= t('opensop.schedule.table.status') %></span>
+          <span><%= t('opensop.schedule.table.state') %></span>
+        </div>
+
+        <% @schedules.each do |schedule| %>
+          <div class="grid grid-cols-[1.5fr_1fr_1fr_60px_140px_140px_100px_90px] gap-4 items-center px-4 py-3 hover:bg-bg-hover transition-colors text-[12px]">
+            <div class="min-w-0">
+              <div class="text-fg truncate" title="<%= schedule.name %>">
+                <%= schedule.name %>
+              </div>
+              <% if schedule.description.present? %>
+                <div class="mt-0.5 text-[11px] text-fg-muted truncate" title="<%= schedule.description %>">
+                  <%= schedule.description %>
+                </div>
+              <% end %>
+            </div>
+
+            <span class="font-mono tabular-nums text-fg truncate" title="<%= schedule.process_name %>">
+              <%= schedule.process_name %>
+            </span>
+
+            <span class="font-mono tabular-nums text-fg truncate" title="<%= schedule.cron_expression %>">
+              <%= schedule.humanized_cron %>
+            </span>
+
+            <span class="font-mono tabular-nums text-fg-muted truncate" title="<%= schedule.timezone %>">
+              <%= schedule.timezone %>
+            </span>
+
+            <span class="font-mono tabular-nums text-fg-muted">
+              <%= render TimestampComponent.new(time: schedule.next_run_at) %>
+            </span>
+
+            <span class="font-mono tabular-nums text-fg-muted">
+              <%= render TimestampComponent.new(time: schedule.last_run_at) %>
+            </span>
+
+            <span>
+              <%= render PillComponent.new(
+                    state: status_pill_state_for.call(schedule.last_status),
+                    label: status_pill_label_for.call(schedule.last_status)
+                  ) %>
+            </span>
+
+            <span>
+              <% if schedule.enabled? %>
+                <%= render PillComponent.new(
+                      state: :info,
+                      label: t('opensop.schedule.states.enabled')
+                    ) %>
+              <% else %>
+                <%= render PillComponent.new(
+                      state: :neutral,
+                      label: t('opensop.schedule.states.disabled')
+                    ) %>
+              <% end %>
+            </span>
+          </div>
+        <% end %>
+      </div>
+    </section>
+  <% end %>
+<% end %>

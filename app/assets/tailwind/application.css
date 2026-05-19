@@ -5,23 +5,131 @@
 @source "../../helpers/**/*.rb";
 @source "../../javascript/**/*.js";
 
+/* ─────────────────────────────────────────────────────────────────────
+   OpenSOP "Paper Pro" design tokens — Tailwind v4 @theme.
+   Distilled from new_design/OpenSop v1/paper-pro.css. CSS-var equivalents
+   become Tailwind utilities (e.g. bg-bg, text-fg, border-border).
+   ───────────────────────────────────────────────────────────────────── */
+@theme {
+  /* Surfaces */
+  --color-bg:        #ffffff;
+  --color-bg-elev:   #ffffff;
+  --color-bg-sunken: #f7f8fa;
+  --color-bg-hover:  #f0f2f5;
+  --color-bg-row:    #ffffff;
+  --color-bg-pill:   #eef0f3;
+  --color-bg-code:   #f7f8fa;
+
+  /* Borders */
+  --color-border:        #eaecef;
+  --color-border-strong: #d5d8de;
+  --color-border-focus:  #0f1115;
+
+  /* Text */
+  --color-fg:          #0f1115;
+  --color-fg-muted:    #5d6470;
+  --color-fg-faint:    #9aa0a8;
+  --color-fg-onaccent: #ffffff;
+
+  /* Status */
+  --color-ok:      #0f7a3d;
+  --color-ok-bg:   #e7f6ec;
+  --color-warn:    #946700;
+  --color-warn-bg: #fdf3d6;
+  --color-err:     #b03333;
+  --color-err-bg:  #fbe9e9;
+  --color-info:    #1f4ed8;
+  --color-info-bg: #e3ebfd;
+  --color-neutral:    #5d6470;
+  --color-neutral-bg: #eef0f3;
+
+  /* Accent (for primary CTA only) */
+  --color-accent:    #0f1115;
+  --color-accent-fg: #ffffff;
+
+  /* Radii */
+  --radius-pp:    4px;
+  --radius-pp-sm: 3px;
+
+  /* Typography */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Shadow */
+  --shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.04);
+
+  /* API docs dark code surface */
+  --color-bg-code-dark:   #0f1115;
+  --color-border-code:    #2a2f3a;
+}
+
+/* Webfonts — Inter + JetBrains Mono.
+   Loaded from Google Fonts at the layout level via <link>; this is the
+   fallback declaration for body/UI. */
+:root {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+}
+
+/* Mono helper — keep as a class because the design uses font-mono everywhere
+   for IDs, codes, table headers, kbds, etc. */
+.font-mono { font-feature-settings: "tnum"; }
+
+/* ─── Animations ─────────────────────────────────────────────────────── */
+@keyframes pp-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+.animate-pp-pulse { animation: pp-pulse 2.4s ease-in-out infinite; }
+
+@keyframes pp-pulse-fast {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+.animate-pp-pulse-fast { animation: pp-pulse-fast 1.6s ease-in-out infinite; }
+
+/* ─── Component shorthands kept lean — most styling is utility-driven ── */
 @layer components {
-  .btn {
-    @apply inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium shadow-sm transition;
+  /* PRIMARY action — black box with white text, no shadow */
+  .btn-pp {
+    @apply inline-flex items-center gap-1.5 rounded-[3px] border border-border-strong bg-bg px-3 py-1.5 text-xs font-medium text-fg transition hover:bg-bg-hover whitespace-nowrap cursor-pointer;
   }
-  .btn-primary {
-    @apply inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium shadow-sm transition bg-indigo-600 text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1;
+  .btn-pp-primary {
+    @apply border-accent bg-accent text-accent-fg hover:opacity-90;
   }
-  .btn-secondary {
-    @apply inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium shadow-sm transition border border-slate-200 bg-white text-slate-700 hover:bg-slate-50;
+  .btn-pp-ghost {
+    @apply border-transparent bg-transparent text-fg-muted hover:bg-bg-hover hover:text-fg;
   }
-  .btn-danger {
-    @apply inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium shadow-sm transition bg-rose-600 text-white hover:bg-rose-700;
+  .btn-pp-sm { @apply px-2 py-1 text-[11px]; }
+
+  /* Pill — status badge with leading dot */
+  .pp-pill {
+    @apply inline-flex items-center gap-1.5 rounded-[3px] px-2 py-0.5 font-mono text-[11px] font-medium;
   }
-  .card {
-    @apply rounded-lg border border-slate-200 bg-white shadow-sm p-6;
+  .pp-pill-dot { @apply h-[5px] w-[5px] rounded-full; }
+
+  /* Tags — neutral mono pill */
+  .pp-tag {
+    @apply inline-flex items-center rounded-[3px] bg-bg-pill px-1.5 py-0.5 font-mono text-[10px] text-fg-muted;
   }
-  .chip {
-    @apply inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700;
+
+  /* Section heads */
+  .pp-section-title {
+    @apply font-mono text-[11px] uppercase tracking-[0.08em] text-fg-muted font-medium;
   }
+
+  /* API docs syntax-highlight token classes — used in code panel bodies */
+  .tk-key   { color: #b6c1d6; }
+  .tk-str   { color: #c5d99a; }
+  .tk-num   { color: #f1c075; }
+  .tk-com   { color: #6b7281; }
+  .tk-typ   { color: #a8c5ff; }
+  .tk-punct { color: #a4abb8; }
 }

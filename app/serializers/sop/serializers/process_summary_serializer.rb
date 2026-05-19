@@ -28,10 +28,10 @@ module Sop
         Array(fields).map do |field|
           name = field["name"]
           type = field["type"] || field["format"] || "any"
-          parts = [type.to_s]
+          parts = [ type.to_s ]
           parts << "required" if field["required"]
           if field["type"] == "enum" && field["values"].is_a?(Array)
-            parts = ["enum: #{field["values"].join("|")}"]
+            parts = [ "enum: #{field["values"].join("|")}" ]
             parts << "required" if field["required"]
           end
           "#{name} (#{parts.join(", ")})"

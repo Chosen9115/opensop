@@ -1,0 +1,203 @@
+opensop: "0.1"
+
+process:
+  name: appsignal-incident-fix
+  version: "1.0"
+  description: "Classify an AppSignal incident, optionally spawn a fix worktree and open a PR."
+  owner: opensop-worker
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: incident
+      type: object
+      required: true
+      description: "Full incident object from AppSignal"
+    - name: incident_id
+      type: string
+      required: true
+    - name: incident_number
+      type: number
+      required: true
+    - name: app_id
+      type: string
+      required: true
+    - name: project
+      type: string
+      required: true
+    - name: project_path
+      type: string
+      required: true
+    - name: repo
+      type: string
+      required: true
+    - name: exception_name
+      type: string
+      required: true
+    - name: phase
+      type: enum
+      values: ["1", "2", "3", "4"]
+      required: true
+
+  outputs:
+    - name: decision
+      type: string
+      from: steps.classify-incident.outputs.decision
+    - name: reason
+      type: string
+      from: steps.classify-incident.outputs.reason
+    - name: gate_passed
+      type: boolean
+      from: steps.pre-dispatch-gate.outputs.gate_passed
+
+  steps:
+    - id: classify-incident
+      name: "Classify incident"
+      type: judgment
+      description: "Decide whether to fix, skip, or defer this incident"
+      inputs:
+        - name: incident_id
+          from: process.inputs.incident_id
+        - name: incident_number
+          from: process.inputs.incident_number
+        - name: exception_name
+          from: process.inputs.exception_name
+        - name: incident
+          from: process.inputs.incident
+      outputs:
+        - name: decision
+          type: enum
+          values: [fix, skip, skip-duplicate, defer]
+        - name: reason
+          type: string
+        - name: file
+          type: string
+        - name: line
+          type: number
+      judgment:
+        allow_agent: true
+        require_human_review: false
+        confidence_threshold: 0.8
+        escalation: manual
+
+    - id: pre-dispatch-gate
+      name: "Pre-dispatch gate"
+      type: automated
+      condition: "steps.classify-incident.outputs.decision == 'fix'"
+      inputs:
+        - name: incident_id
+          from: process.inputs.incident_id
+        - name: incident_number
+          from: process.inputs.incident_number
+        - name: project
+          from: process.inputs.project
+        - name: repo
+          from: process.inputs.repo
+        - name: phase
+          from: process.inputs.phase
+      outputs:
+        - name: gate_passed
+          type: boolean
+        - name: gate_reason
+          type: string
+
+    - id: create-fix-worktree
+      name: "Create fix worktree"
+      type: automated
+      condition: "steps.pre-dispatch-gate.outputs.gate_passed == true"
+      inputs:
+        - name: incident_id
+          from: process.inputs.incident_id
+        - name: project_path
+          from: process.inputs.project_path
+      outputs:
+        - name: worktree_path
+          type: string
+        - name: branch_name
+          type: string
+
+    - id: run-swarm
+      name: "Run fix swarm"
+      type: automated
+      condition: "steps.create-fix-worktree.outputs.worktree_path != null"
+      inputs:
+        - name: worktree_path
+          from: steps.create-fix-worktree.outputs.worktree_path
+        - name: incident
+          from: process.inputs.incident
+        - name: file
+          from: steps.classify-incident.outputs.file
+        - name: line
+          from: steps.classify-incident.outputs.line
+      outputs:
+        - name: swarm_exit_code
+          type: number
+        - name: diff_summary
+          type: string
+        - name: committed
+          type: boolean
+
+    - id: safety-gate
+      name: "Safety gate"
+      type: automated
+      condition: "steps.run-swarm.outputs.committed == true"
+      inputs:
+        - name: worktree_path
+          from: steps.create-fix-worktree.outputs.worktree_path
+        - name: project
+          from: process.inputs.project
+      outputs:
+        - name: files_changed
+          type: number
+        - name: additions
+          type: number
+        - name: critical_path_hit
+          type: boolean
+        - name: gate_passed
+          type: boolean
+        - name: gate_reason
+          type: string
+
+    - id: push-and-create-pr
+      name: "Push branch and create PR"
+      type: automated
+      condition: "steps.safety-gate.outputs.gate_passed == true && process.inputs.phase >= '3'"
+      inputs:
+        - name: worktree_path
+          from: steps.create-fix-worktree.outputs.worktree_path
+        - name: branch_name
+          from: steps.create-fix-worktree.outputs.branch_name
+        - name: repo
+          from: process.inputs.repo
+        - name: incident_number
+          from: process.inputs.incident_number
+        - name: incident_id
+          from: process.inputs.incident_id
+        - name: exception_name
+          from: process.inputs.exception_name
+        - name: diff_summary
+          from: steps.run-swarm.outputs.diff_summary
+      outputs:
+        - name: pr_url
+          type: string
+        - name: pr_number
+          type: number
+
+    - id: notify-team
+      name: "Notify team"
+      type: notification
+      inputs:
+        - name: incident_number
+          from: process.inputs.incident_number
+        - name: project
+          from: process.inputs.project
+        - name: decision
+          from: steps.classify-incident.outputs.decision
+        - name: reason
+          from: steps.classify-incident.outputs.reason
+      outputs:
+        - name: notified
+          type: boolean
+
+  tags: [appsignal, incident-management, fix]

@@ -1,0 +1,71 @@
+<%= render "ui/api_docs/page_header",
+      crumbs: [["api", nil], ["errors", nil]],
+      title: t('opensop.api_docs.guides.errors.title'),
+      subtitle: t('opensop.api_docs.guides.errors.subtitle') %>
+
+<div class="px-10 py-8 max-w-3xl space-y-10">
+
+  <%# Shape %>
+  <section>
+    <h2 class="text-[18px] font-semibold text-[#0f1115] mb-3"><%= t('opensop.api_docs.guides.errors.shape.heading') %></h2>
+
+    <%= render Ui::ApiDocs::CodePanelComponent.new(label: "ERROR RESPONSE", status: { code: 422, label: "RESPONSE" }) do |panel| %>
+      <% panel.with_body do %><span class="text-[#a4abb8]">{</span>
+  <span class="text-[#b6c1d6]">"error"</span><span class="text-[#a4abb8]">:</span>   <span class="text-[#c5d99a]">"invalid_inputs"</span><span class="text-[#a4abb8]">,</span>
+  <span class="text-[#b6c1d6]">"details"</span><span class="text-[#a4abb8]">:</span> <span class="text-[#a4abb8]">[</span>
+    <span class="text-[#a4abb8]">{</span>
+      <span class="text-[#b6c1d6]">"field"</span><span class="text-[#a4abb8]">:</span>    <span class="text-[#c5d99a]">"country"</span><span class="text-[#a4abb8]">,</span>
+      <span class="text-[#b6c1d6]">"code"</span><span class="text-[#a4abb8]">:</span>     <span class="text-[#c5d99a]">"not_in_enum"</span><span class="text-[#a4abb8]">,</span>
+      <span class="text-[#b6c1d6]">"expected"</span><span class="text-[#a4abb8]">:</span> <span class="text-[#a4abb8]">[</span><span class="text-[#c5d99a]">"US"</span><span class="text-[#a4abb8]">,</span> <span class="text-[#c5d99a]">"MX"</span><span class="text-[#a4abb8]">]</span>
+    <span class="text-[#a4abb8]">}</span>
+  <span class="text-[#a4abb8]">]</span>
+<span class="text-[#a4abb8]">}</span><% end %>
+    <% end %>
+  </section>
+
+  <%# Status codes %>
+  <section>
+    <h2 class="text-[18px] font-semibold text-[#0f1115] mb-3"><%= t('opensop.api_docs.guides.errors.status_codes.heading') %></h2>
+    <table class="w-full text-left border-collapse">
+      <thead>
+        <tr>
+          <th class="font-mono text-[10px] uppercase tracking-[0.06em] text-[#9aa0a8] py-3 px-4 border-b border-[#eaecef]"><%= t('opensop.api_docs.guides.errors.status_codes.col_status') %></th>
+          <th class="font-mono text-[10px] uppercase tracking-[0.06em] text-[#9aa0a8] py-3 px-4 border-b border-[#eaecef]"><%= t('opensop.api_docs.guides.errors.status_codes.col_code') %></th>
+          <th class="font-mono text-[10px] uppercase tracking-[0.06em] text-[#9aa0a8] py-3 px-4 border-b border-[#eaecef]"><%= t('opensop.api_docs.guides.errors.status_codes.col_meaning') %></th>
+        </tr>
+      </thead>
+      <tbody>
+        <%
+          error_rows = [
+            { status: 400, badge: "bg-[#fdf3d6] text-[#946700]", code: "invalid_payload",           meaning: "Body could not be parsed as JSON." },
+            { status: 401, badge: "bg-[#fdf3d6] text-[#946700]", code: "unauthorized",              meaning: "Token missing, malformed, or revoked." },
+            { status: 401, badge: "bg-[#fdf3d6] text-[#946700]", code: "invalid_signature",         meaning: "HMAC verification failed for a trigger." },
+            { status: 404, badge: "bg-[#fdf3d6] text-[#946700]", code: "not_found",                 meaning: "Process, instance, or callback does not exist." },
+            { status: 409, badge: "bg-[#fdf3d6] text-[#946700]", code: "callback_already_resolved", meaning: "One-shot webhook callback was already received." },
+            { status: 422, badge: "bg-[#fdf3d6] text-[#946700]", code: "invalid_inputs",            meaning: "Inputs failed schema validation. details lists each violation." },
+            { status: 422, badge: "bg-[#fdf3d6] text-[#946700]", code: "invalid_definition",        meaning: "Process YAML failed schema or syntax check." },
+            { status: 422, badge: "bg-[#fdf3d6] text-[#946700]", code: "invalid_transition",        meaning: "Tried to act on a terminal instance/step." },
+            { status: 429, badge: "bg-[#fdf3d6] text-[#946700]", code: "rate_limited",              meaning: "Too many requests. Retry-After header advises a wait." },
+            { status: 500, badge: "bg-[#fbe9e9] text-[#b03333]", code: "trigger_misconfigured",     meaning: "Engine env var for HMAC secret is unset." }
+          ]
+        %>
+        <% error_rows.each_with_index do |row, idx| %>
+          <tr class="<%= idx < error_rows.length - 1 ? 'border-b border-[#eaecef]' : '' %>">
+            <td class="py-3 px-4">
+              <span class="font-mono text-[11px] font-semibold rounded-[3px] px-2 py-px <%= row[:badge] %>"><%= row[:status] %></span>
+            </td>
+            <td class="font-mono text-[12px] text-[#0f1115] py-3 px-4"><%= row[:code] %></td>
+            <td class="text-[13px] text-[#5d6470] py-3 px-4"><%= row[:meaning] %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </section>
+
+  <%# Retries %>
+  <section>
+    <h2 class="text-[18px] font-semibold text-[#0f1115] mb-3"><%= t('opensop.api_docs.guides.errors.retries.heading') %></h2>
+    <p class="text-[14px] text-[#5d6470] leading-relaxed"><%= t('opensop.api_docs.guides.errors.retries.body_html').html_safe %></p>
+  </section>
+
+</div>

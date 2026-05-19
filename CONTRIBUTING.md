@@ -24,9 +24,30 @@ This split is the point: the engine doesn't care where processes come from. Cont
 ```bash
 bundle install
 bin/rails db:create db:migrate db:seed
+bin/install-git-hooks             # one-time, installs the secret-scan pre-commit hook
 bin/rails opensop:demo            # full pipeline walkthrough
 bin/rspec                         # 135 / 0
 ```
+
+### Working with Claude Code
+
+OpenSOP uses the [roundhouse](https://github.com/kurenn/roundhouse) Claude Code plugin for AI-assisted Rails development. If you're contributing through Claude Code:
+
+```bash
+claude plugin marketplace add kurenn/marketplace   # one-time per user
+claude plugin install roundhouse@kurenn            # one-time install
+```
+
+Then use `/rails-feature` for new features, `/rails-bugfix` for bug reports, and the specialist skills (`/rails-models`, `/rails-controllers`, `/rails-views`, `/rails-services`, `/rails-tests`) when the scope is clearly one Rails layer. Full conventions are in [`CLAUDE.md`](./CLAUDE.md).
+
+### Secret scanning
+
+Two layers, both running [gitleaks](https://github.com/gitleaks/gitleaks):
+
+- **Local pre-commit hook** (after `bin/install-git-hooks`) — blocks commits that contain detected secrets. Install gitleaks with `brew install gitleaks` (macOS) or see the [releases page](https://github.com/gitleaks/gitleaks/releases).
+- **CI on every PR** (`.github/workflows/secret-scan.yml`) — the source of truth. Catches anything bypassed locally with `git commit --no-verify`.
+
+Allowlist entries for known-safe placeholders (test fixtures, doc examples) live in `.gitleaks.toml`.
 
 ### Workflow
 
@@ -139,7 +160,7 @@ If you've been doing engine work correctly (upstream-first), this is a fast-forw
 ## Reporting issues
 
 - **Bugs:** open an issue on `Chosen9115/opensop` with repro steps and what you expected to happen.
-- **Security:** please don't open public issues for security reports. Email the maintainer (see GitHub profile).
+- **Security:** please don't open public issues for security reports. See [`SECURITY.md`](SECURITY.md) for the disclosure policy and reporting channels.
 - **Spec proposals:** for changes to the `0.1` format, open a discussion first — the YAML format is a contract.
 
 ---

@@ -1,0 +1,80 @@
+<%# Topbar for the API Reference site — 48px fixed bar, white bg, border-b %>
+<header class="h-12 flex items-center px-6 bg-bg border-b border-border shrink-0">
+  <%# === Brand === %>
+  <div class="flex items-center gap-2.5 shrink-0">
+    <%# 4-square logo: 20×20 grid. top-left + bottom-right = #0f1115, top-right + bottom-left = #5d6470 %>
+    <div class="relative w-5 h-5 shrink-0">
+      <%# top-left square %>
+      <div class="absolute top-0 left-0 w-[9px] h-[9px] bg-[#0f1115]"></div>
+      <%# top-right square %>
+      <div class="absolute top-0 right-0 w-[9px] h-[9px] bg-[#5d6470]"></div>
+      <%# bottom-left square %>
+      <div class="absolute bottom-0 left-0 w-[9px] h-[9px] bg-[#5d6470]"></div>
+      <%# bottom-right square %>
+      <div class="absolute bottom-0 right-0 w-[9px] h-[9px] bg-[#0f1115]"></div>
+    </div>
+
+    <%# Wordmark %>
+    <span class="text-[14px] font-semibold text-[#0f1115] leading-none">OpenSOP</span>
+
+    <%# Section tag %>
+    <span class="text-[12px] font-medium text-[#5d6470] leading-none">
+      <%= t('opensop.api_docs.topbar.section_label') %>
+    </span>
+
+    <%# Version pill %>
+    <span class="font-mono text-[11px] bg-[#eef0f3] text-[#5d6470] px-1.5 py-0.5 rounded-[3px] leading-none">
+      <%= t('opensop.api_docs.topbar.version_label') %>
+    </span>
+  </div>
+
+  <%# === Spacer === %>
+  <div class="flex-1"></div>
+
+  <%# === Nav links === %>
+  <nav class="flex items-center gap-5 mr-6">
+    <%# Dashboard link is admin-only — hidden from anonymous visitors when the %>
+    <%# UI is gated behind HTTP Basic auth. %>
+    <% if admin_authenticated? %>
+      <%= link_to t('opensop.api_docs.topbar.nav.dashboard'),
+                  ui_dashboard_path,
+                  class: "text-[12px] text-[#5d6470] hover:text-[#0f1115] transition-colors" %>
+    <% end %>
+
+    <%= link_to t('opensop.api_docs.topbar.nav.changelog'),
+                "#",
+                class: "text-[12px] text-[#5d6470] hover:text-[#0f1115] transition-colors" %>
+
+    <%# GitHub link with octocat icon %>
+    <%= link_to "https://github.com/Chosen9115/opensop",
+                target: "_blank",
+                rel: "noopener",
+                class: "flex items-center gap-1.5 text-[12px] text-[#5d6470] hover:text-[#0f1115] transition-colors" do %>
+      <%# Heroicon: code-bracket (github-style octocat substitute) — inline SVG 16×16 %>
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd" />
+      </svg>
+      <%= t('opensop.api_docs.topbar.nav.github') %>
+    <% end %>
+  </nav>
+
+  <%# === Search trigger — click or ⌘K opens the cmdk modal (rendered by the layout) === %>
+  <button type="button"
+          data-action="click->api-docs-cmdk#open"
+          class="relative w-[280px] h-7 pl-8 pr-12 bg-bg border border-border rounded-[3px] text-[12px] text-left text-[#9aa0a8] hover:border-[#d5d8de] transition-colors shrink-0">
+    <%# Magnifier icon %>
+    <span class="absolute left-2.5 top-1/2 -translate-y-1/2">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="8"/>
+        <path d="m21 21-4.35-4.35"/>
+      </svg>
+    </span>
+
+    <%= t('opensop.api_docs.topbar.search_placeholder') %>
+
+    <%# ⌘K hint %>
+    <span class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
+      <kbd class="font-mono text-[10px] text-[#9aa0a8] bg-[#eef0f3] px-1 py-0.5 rounded-[2px] leading-none">⌘K</kbd>
+    </span>
+  </button>
+</header>

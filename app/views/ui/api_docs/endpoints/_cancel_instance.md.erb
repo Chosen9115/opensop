@@ -1,0 +1,67 @@
+## `POST /sop/:name/:id/cancel`
+
+**<%= t('opensop.api_docs.endpoints.cancel_instance.title') %>** — Terminates a running instance immediately. The instance moves to the `cancelled` state. Any pending steps are skipped. This action is irreversible.
+
+> **Auth:** Requires `X-SOP-Token` header. See [Authentication](/api-docs/guides/authentication.md).
+
+### Path parameters
+
+- `name` (string, required) — The process name.
+- `id` (string, required) — The instance ULID.
+
+### Response
+
+`200 application/json` — Instance in `cancelled` state.
+
+```json
+{
+  "id":    "01HXYZ_ACME_001",
+  "state": "cancelled"
+}
+```
+
+### Errors
+
+| Status | Code | Meaning |
+|--------|------|---------|
+| 404 | `not_found` | Instance does not exist. |
+| 422 | `invalid_transition` | Instance is already in a terminal state. |
+
+### Code examples
+
+#### curl
+
+```bash
+curl https://api.opensop.dev/sop/customer-onboarding/01HXYZ_ACME_001/cancel \
+  -X POST \
+  -H "X-SOP-Token: $OPENSOP_TOKEN"
+```
+
+#### Node
+
+```js
+await fetch(
+  `https://api.opensop.dev/sop/customer-onboarding/${id}/cancel`,
+  {
+    method: "POST",
+    headers: { "X-SOP-Token": process.env.OPENSOP_TOKEN }
+  }
+);
+```
+
+#### Python
+
+```python
+requests.post(
+  f"https://api.opensop.dev/sop/customer-onboarding/{instance_id}/cancel",
+  headers={"X-SOP-Token": os.environ["OPENSOP_TOKEN"]}
+)
+```
+
+#### Ruby
+
+```ruby
+req = Net::HTTP::Post.new("/sop/customer-onboarding/#{id}/cancel")
+req["X-SOP-Token"] = ENV["OPENSOP_TOKEN"]
+Net::HTTP.start("api.opensop.dev", use_ssl: true) { |h| h.request(req) }
+```

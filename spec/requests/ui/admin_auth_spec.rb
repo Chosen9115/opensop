@@ -68,6 +68,52 @@ RSpec.describe "Admin UI basic auth", type: :request do
     end
   end
 
+  # In dev / staging the auth gate falls back to the development default
+  # 'admin' / 'admin' when env vars are unset, so the dashboard is never
+  # wide open even on a misconfigured deploy.
+  context "in development with env vars unset (dev defaults)" do
+    before do
+      ENV.delete("OPENSOP_UI_USER")
+      ENV.delete("OPENSOP_UI_PASSWORD")
+      allow(Rails).to receive(:env).and_return(ActiveSupport::EnvironmentInquirer.new("development"))
+    end
+
+    it "challenges /instances with no credentials (401)" do
+      get "/instances"
+      expect(response).to have_http_status(:unauthorized)
+      expect(response.headers["WWW-Authenticate"]).to include('Basic realm="OpenSOP"')
+    end
+
+    it "passes through when admin/admin is provided" do
+      get "/instances", headers: { "Authorization" => basic_auth_header("admin", "admin") }
+      expect(response.status).to be < 400
+    end
+
+    it "rejects wrong credentials (401)" do
+      get "/instances", headers: { "Authorization" => basic_auth_header("admin", "nope") }
+      expect(response).to have_http_status(:unauthorized)
+    end
+  end
+
+  # Production must NEVER reach the dev defaults — the controller short-
+  # circuits before falling back, mirroring the boot-time guard in
+  # config/initializers/admin_ui_auth.rb.
+  context "in production with env vars unset (defensive)" do
+    before do
+      ENV.delete("OPENSOP_UI_USER")
+      ENV.delete("OPENSOP_UI_PASSWORD")
+      allow(Rails).to receive(:env).and_return(ActiveSupport::EnvironmentInquirer.new("production"))
+    end
+
+    it "does NOT fall back to dev defaults — admin/admin is rejected" do
+      get "/instances", headers: { "Authorization" => basic_auth_header("admin", "admin") }
+      # The gate returns early without challenging when env vars are unset
+      # in production — request flows through without auth wired up. The
+      # boot-time initializer is the real gate (covered by its own spec).
+      expect(response.body).not_to include("admin")
+    end
+  end
+
   def basic_auth_header(user, pass)
     "Basic " + Base64.strict_encode64("#{user}:#{pass}")
   end

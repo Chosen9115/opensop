@@ -20,21 +20,21 @@ module Opensop
     class InvalidExpression < StandardError; end
 
     TOKEN_SPEC = [
-      [:WS,     /\A\s+/],
-      [:AND,    /\A&&/],
-      [:OR,     /\A\|\|/],
-      [:NOT,    /\A!(?!=)/],
-      [:EQ,     /\A==/],
-      [:NEQ,    /\A!=/],
-      [:GTE,    /\A>=/],
-      [:LTE,    /\A<=/],
-      [:GT,     /\A>/],
-      [:LT,     /\A</],
-      [:LPAREN, /\A\(/],
-      [:RPAREN, /\A\)/],
-      [:NUMBER, /\A-?\d+(?:\.\d+)?/],
-      [:STRING, /\A'([^'\\]*(?:\\.[^'\\]*)*)'|\A"([^"\\]*(?:\\.[^"\\]*)*)"/],
-      [:IDENT,  /\A[A-Za-z_][A-Za-z0-9_.\-]*/]
+      [ :WS,     /\A\s+/ ],
+      [ :AND,    /\A&&/ ],
+      [ :OR,     /\A\|\|/ ],
+      [ :NOT,    /\A!(?!=)/ ],
+      [ :EQ,     /\A==/ ],
+      [ :NEQ,    /\A!=/ ],
+      [ :GTE,    /\A>=/ ],
+      [ :LTE,    /\A<=/ ],
+      [ :GT,     /\A>/ ],
+      [ :LT,     /\A</ ],
+      [ :LPAREN, /\A\(/ ],
+      [ :RPAREN, /\A\)/ ],
+      [ :NUMBER, /\A-?\d+(?:\.\d+)?/ ],
+      [ :STRING, /\A'([^'\\]*(?:\\.[^'\\]*)*)'|\A"([^"\\]*(?:\\.[^"\\]*)*)"/ ],
+      [ :IDENT,  /\A[A-Za-z_][A-Za-z0-9_.\-]*/ ]
     ].freeze
 
     attr_reader :instance
@@ -95,7 +95,7 @@ module Opensop
             else
               value
             end
-          tokens << [type, value]
+          tokens << [ type, value ]
           break
         end
         raise InvalidExpression, "unexpected char at offset #{pos}: #{str[pos].inspect}" unless matched

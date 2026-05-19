@@ -23,7 +23,10 @@ module Opensop
     end
 
     def load_file(path)
-      raw = File.read(path)
+      load_yaml(File.read(path), source: path.to_s)
+    end
+
+    def load_yaml(raw, source: "api")
       parser_result = Opensop::DefinitionParser.call(raw)
       definition = parser_result.value
       process_block = definition["process"]
@@ -33,9 +36,8 @@ module Opensop
         version: process_block["version"].to_s
       )
 
-      # If the definition hasn't changed, skip.
       if record.persisted? && record.definition == definition
-        Rails.logger.info("[Opensop::Registry] unchanged: #{process_block["name"]} v#{process_block["version"]}")
+        Rails.logger.info("[Opensop::Registry] unchanged: #{process_block["name"]} v#{process_block["version"]} (#{source})")
         return record
       end
 
@@ -47,7 +49,7 @@ module Opensop
         status: "active"
       )
       record.save!
-      Rails.logger.info("[Opensop::Registry] loaded: #{record.name} v#{record.version} (#{path})")
+      Rails.logger.info("[Opensop::Registry] loaded: #{record.name} v#{record.version} (#{source})")
       record
     end
 

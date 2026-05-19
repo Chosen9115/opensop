@@ -100,4 +100,76 @@ RSpec.describe Opensop::InputResolver do
         .to raise_error(described_class::UnresolvedReference, /unrecognized reference/)
     end
   end
+
+  describe "#resolve_reference with collection selectors (SPEC v0.2 §2.7)" do
+    let(:classifications) do
+      [ { "label" => "spam", "score" => 0.9 }, { "label" => "ham", "score" => 0.1 } ]
+    end
+
+    before do
+      create(:sop_step, instance: instance, step_id: "first", state: "completed",
+                        outputs: { "classifications" => classifications, "score" => 0.42 })
+      instance.reload
+    end
+
+    it "returns the whole array for a bare path" do
+      expect(resolver.resolve_reference("steps.first.outputs.classifications"))
+        .to eq(classifications)
+    end
+
+    it "returns the whole array for [*]" do
+      expect(resolver.resolve_reference("steps.first.outputs.classifications[*]"))
+        .to eq(classifications)
+    end
+
+    it "returns the indexed item for [<n>]" do
+      expect(resolver.resolve_reference("steps.first.outputs.classifications[0]"))
+        .to eq({ "label" => "spam", "score" => 0.9 })
+    end
+
+    it "returns nil for an out-of-range index" do
+      expect(resolver.resolve_reference("steps.first.outputs.classifications[99]"))
+        .to be_nil
+    end
+
+    it "plucks a string-valued field with [*].<field>" do
+      expect(resolver.resolve_reference("steps.first.outputs.classifications[*].label"))
+        .to eq([ "spam", "ham" ])
+    end
+
+    it "plucks a numeric-valued field with [*].<field>" do
+      expect(resolver.resolve_reference("steps.first.outputs.classifications[*].score"))
+        .to eq([ 0.9, 0.1 ])
+    end
+
+    it "drops items missing the plucked field (no nil placeholders)" do
+      mixed = [ { "label" => "a" }, { "score" => 0.5 }, { "label" => "b" } ]
+      create(:sop_step, instance: instance, step_id: "mixed", state: "completed",
+                        outputs: { "items" => mixed })
+      instance.reload
+      expect(resolver.resolve_reference("steps.mixed.outputs.items[*].label"))
+        .to eq([ "a", "b" ])
+    end
+
+    it "raises when an index selector is applied to a non-array value" do
+      expect { resolver.resolve_reference("steps.first.outputs.score[0]") }
+        .to raise_error(described_class::UnresolvedReference, /non-array/)
+    end
+
+    it "raises when [*] is applied to a non-array value" do
+      expect { resolver.resolve_reference("steps.first.outputs.score[*]") }
+        .to raise_error(described_class::UnresolvedReference, /non-array/)
+    end
+
+    it "raises a clear error for nested [*] selectors" do
+      expect { resolver.resolve_reference("steps.first.outputs.classifications[*].label[*]") }
+        .to raise_error(described_class::UnresolvedReference,
+                        /nested \[\*\] selectors are not supported in v0\.2/)
+    end
+
+    it "raises for an unrecognized selector form" do
+      expect { resolver.resolve_reference("steps.first.outputs.classifications[bogus]") }
+        .to raise_error(described_class::UnresolvedReference, /unrecognized collection selector/)
+    end
+  end
 end

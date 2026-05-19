@@ -1,0 +1,73 @@
+## `GET /sop/:name/:id/steps`
+
+**<%= t('opensop.api_docs.endpoints.list_steps.title') %>** — <%= t('opensop.api_docs.endpoints.list_steps.description') %>
+
+> **Auth:** Requires `X-SOP-Token` header. See [Authentication](/api-docs/guides/authentication.md).
+
+### Path parameters
+
+- `name` (string, required) — The process name.
+- `id` (string, required) — The instance ULID.
+
+### Response
+
+`200 application/json` — Array of step state objects.
+
+```json
+[
+  {
+    "id":      "collect-business-info",
+    "type":    "form",
+    "state":   "completed",
+    "outputs": { "company_name": "Acme Corp" }
+  },
+  {
+    "id":    "review-application",
+    "type":  "judgment",
+    "state": "active"
+  }
+]
+```
+
+### Errors
+
+| Status | Code | Meaning |
+|--------|------|---------|
+| 404 | `not_found` | Instance not found. |
+
+### Code examples
+
+#### curl
+
+```bash
+curl https://api.opensop.dev/sop/customer-onboarding/01HXYZ_ACME_001/steps \
+  -H "X-SOP-Token: $OPENSOP_TOKEN"
+```
+
+#### Node
+
+```js
+const steps = await fetch(
+  `https://api.opensop.dev/sop/customer-onboarding/${id}/steps`,
+  { headers: { "X-SOP-Token": process.env.OPENSOP_TOKEN } }
+).then(r => r.json());
+```
+
+#### Python
+
+```python
+resp = requests.get(
+  f"https://api.opensop.dev/sop/customer-onboarding/{id}/steps",
+  headers={"X-SOP-Token": os.environ["OPENSOP_TOKEN"]}
+)
+```
+
+#### Ruby
+
+```ruby
+Net::HTTP.start("api.opensop.dev", use_ssl: true) do |h|
+  req = Net::HTTP::Get.new("/sop/customer-onboarding/#{id}/steps")
+  req["X-SOP-Token"] = ENV["OPENSOP_TOKEN"]
+  puts h.request(req).body
+end
+```

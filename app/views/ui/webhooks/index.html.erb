@@ -1,0 +1,99 @@
+<section class="mb-6">
+  <h1 class="text-[20px] font-semibold tracking-tight text-fg">
+    <%= t('opensop.webhooks.title', default: 'Webhooks') %>
+  </h1>
+  <p class="mt-1 text-[12px] text-fg-muted">
+    <%= t('opensop.webhooks.subtitle', default: 'Inbound callback receipts for webhook steps awaiting external systems.') %>
+  </p>
+</section>
+
+<section class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+  <% [
+    { key: :pending,  count: @counts['pending'],  tone: 'info',     hint_default: 'Awaiting an inbound callback.' },
+    { key: :received, count: @counts['received'], tone: 'ok',       hint_default: 'Callback delivered successfully.' },
+    { key: :expired,  count: @counts['expired'],  tone: 'err',      hint_default: 'Callback window closed without a response.' },
+    { key: :total,    count: @total,              tone: 'neutral',  hint_default: 'All callbacks ever recorded.' }
+  ].each do |tile| %>
+    <div class="relative rounded-[3px] border border-border bg-bg p-4">
+      <div class="pp-section-title">
+        <%= t("opensop.webhooks.stats.#{tile[:key]}", default: tile[:key].to_s.humanize) %>
+      </div>
+      <div class="mt-2 text-[28px] font-mono tabular-nums text-fg leading-none">
+        <%= tile[:count].to_i %>
+      </div>
+      <div class="mt-2 text-[11px] text-fg-muted">
+        <%= t("opensop.webhooks.stats.#{tile[:key]}_hint", default: tile[:hint_default]) %>
+      </div>
+      <span class="absolute right-3 top-3 h-1.5 w-1.5 rounded-full bg-<%= tile[:tone] %>"></span>
+    </div>
+  <% end %>
+</section>
+
+<section>
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="pp-section-title">
+      <%= t('opensop.webhooks.recent', default: 'Recent callbacks') %>
+    </h2>
+    <% if @callbacks.any? %>
+      <span class="text-[11px] font-mono tabular-nums text-fg-muted">
+        <%= @callbacks.size %> / <%= @total %>
+      </span>
+    <% end %>
+  </div>
+
+  <% if @callbacks.any? %>
+    <div class="border border-border rounded-[3px] divide-y divide-border bg-bg overflow-hidden">
+      <div class="grid grid-cols-[160px_1fr_120px_120px_140px_140px] gap-4 px-4 py-2 text-[10px] font-mono uppercase tracking-[0.08em] text-fg-muted bg-bg-sunken">
+        <span><%= t('opensop.webhooks.table.callback_id', default: 'Callback ID') %></span>
+        <span><%= t('opensop.webhooks.table.instance',    default: 'Instance') %></span>
+        <span><%= t('opensop.webhooks.table.step',        default: 'Step') %></span>
+        <span><%= t('opensop.webhooks.table.status',      default: 'Status') %></span>
+        <span><%= t('opensop.webhooks.table.received',    default: 'Received') %></span>
+        <span><%= t('opensop.webhooks.table.expires',     default: 'Expires') %></span>
+      </div>
+
+      <% @callbacks.each do |callback| %>
+        <% callback_id = callback.callback_path.to_s.split('/').last.to_s %>
+        <% short_id = callback_id.first(12) %>
+        <div class="grid grid-cols-[160px_1fr_120px_120px_140px_140px] gap-4 items-center px-4 py-2.5 hover:bg-bg-hover transition-colors">
+          <span class="font-mono text-[12px] text-fg truncate" title="<%= callback.callback_path %>">
+            <%= short_id %>
+          </span>
+          <div class="min-w-0">
+            <% if callback.instance.present? %>
+              <%= link_to ui_instance_path(callback.instance), class: "block min-w-0" do %>
+                <div class="font-mono text-[12px] text-fg truncate"><%= callback.instance.process_name %></div>
+                <div class="font-mono text-[10px] text-fg-faint">v<%= callback.instance.process_version %> · <%= callback.instance.id.to_s.first(8) %></div>
+              <% end %>
+            <% else %>
+              <span class="text-fg-faint">—</span>
+            <% end %>
+          </div>
+          <span class="font-mono text-[11px] text-fg-muted truncate"><%= callback.step_id %></span>
+          <div>
+            <%= render PillComponent.new(state: callback.status.to_s) %>
+          </div>
+          <div class="text-[11px] text-fg-muted font-mono">
+            <% if callback.status == 'received' %>
+              <%= render TimestampComponent.new(time: callback.updated_at) %>
+            <% else %>
+              <span class="text-fg-faint">—</span>
+            <% end %>
+          </div>
+          <div class="text-[11px] text-fg-muted font-mono">
+            <% if callback.expires_at.present? %>
+              <%= render TimestampComponent.new(time: callback.expires_at, suffix: (callback.expires_at > Time.current ? :in : :ago)) %>
+            <% else %>
+              <span class="text-fg-faint">—</span>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+    </div>
+  <% else %>
+    <%= render EmptyStateComponent.new(
+          title: t('opensop.webhooks.empty_title', default: 'No webhook callbacks yet'),
+          description: t('opensop.webhooks.empty_description', default: 'Callbacks appear here once a webhook step issues an inbound URL and the external system responds.')
+        ) %>
+  <% end %>
+</section>

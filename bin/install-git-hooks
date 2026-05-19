@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Install OpenSOP's local git hooks. Idempotent — safe to run multiple times.
+#
+# What this installs:
+#   .git/hooks/pre-commit  →  runs `gitleaks protect` on staged changes
+#                              before each commit. Blocks the commit if a
+#                              secret is detected.
+#
+# Run this once after cloning the repo. Re-run it any time the hooks under
+# script/git-hooks/ change.
+#
+# CI runs the same scan on every PR (.github/workflows/secret-scan.yml), so
+# a `git commit --no-verify` bypass at the local level is still caught
+# before merge.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOOKS_SRC="${REPO_ROOT}/script/git-hooks"
+
+# Resolve the hooks dir via git rather than hardcoding .git/hooks. In worktrees,
+# .git is a file pointing at the per-worktree gitdir, but the hooks directory
+# lives in the common git dir — `git rev-parse --git-path hooks` always returns
+# the right path regardless.
+HOOKS_DST="$(cd "${REPO_ROOT}" && git rev-parse --git-path hooks 2>/dev/null || true)"
+
+if [[ -z "${HOOKS_DST}" || ! -d "${HOOKS_DST}" ]]; then
+  echo "error: could not resolve git hooks directory — are you inside a git checkout?" >&2
+  exit 1
+fi
+
+if [[ ! -d "${HOOKS_SRC}" ]]; then
+  echo "error: ${HOOKS_SRC} not found — bad checkout?" >&2
+  exit 1
+fi
+
+# Check gitleaks is available — surface a friendly install hint if not.
+if ! command -v gitleaks >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+warning: gitleaks not found in PATH.
+
+The pre-commit hook will be installed, but secret scanning is a no-op
+until you install gitleaks:
+
+  macOS:    brew install gitleaks
+  Linux:    https://github.com/gitleaks/gitleaks/releases
+  Go:       go install github.com/gitleaks/gitleaks/v8@latest
+
+CI still scans on every PR, so secrets won't reach main even without it
+installed locally — but you'll get faster feedback with it.
+EOF
+fi
+
+installed=0
+for hook_src in "${HOOKS_SRC}"/*; do
+  [[ -f "${hook_src}" ]] || continue
+  hook_name="$(basename "${hook_src}")"
+  hook_dst="${HOOKS_DST}/${hook_name}"
+
+  cp "${hook_src}" "${hook_dst}"
+  chmod +x "${hook_dst}"
+  echo "installed: .git/hooks/${hook_name}"
+  installed=$((installed + 1))
+done
+
+echo "done — ${installed} hook(s) installed."

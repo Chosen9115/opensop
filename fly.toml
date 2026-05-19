@@ -1,0 +1,52 @@
+# fly.toml — Fly.io configuration for OpenSOP
+#
+# Rename `app` to the name you chose (or will choose) in `fly launch`.
+# Docs: https://fly.io/docs/reference/configuration/
+
+app = "opensop"
+primary_region = "dfw"  # Dallas, TX — closest to MX (no Fly region in Mexico).
+
+[build]
+  # Dockerfile lives at the repo root; Fly auto-detects it, no key required.
+
+[env]
+  RAILS_ENV = "production"
+  RAILS_LOG_TO_STDOUT = "true"
+  # The Rails 8 Dockerfile runs as uid 1000 without cap_net_bind_service, so
+  # Thruster can't bind port 80. Move both Thruster (HTTP_PORT) and its upstream
+  # Puma (TARGET_PORT → Puma's PORT) to unprivileged ports. Fly's edge proxy
+  # still serves 80/443 publicly; it routes to HTTP_PORT internally.
+  HTTP_PORT = "3000"
+  TARGET_PORT = "3001"
+  # Run the Solid Queue supervisor inside Puma so we don't need a second process
+  # group. Fine for a starter deployment; split out later if jobs saturate web.
+  SOLID_QUEUE_IN_PUMA = "true"
+
+[deploy]
+  # Run migrations on a one-off release machine before flipping traffic.
+  # The Docker entrypoint also runs `db:prepare` on web boot as a safety net
+  # (idempotent), but having it here gives you a clean failure mode if a
+  # migration breaks.
+  release_command = "./bin/rails db:prepare"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  # Keep at least one machine running at all times — no cold starts, and
+  # Solid Queue (running in-Puma) keeps processing background jobs while idle.
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/up"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

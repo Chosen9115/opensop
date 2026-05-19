@@ -76,4 +76,8 @@ end
 group :test do
   gem "database_cleaner-active_record"
   gem "simplecov", require: false
+
+  # System specs run against headless Chrome via Selenium.
+  gem "capybara"
+  gem "selenium-webdriver"
 end
