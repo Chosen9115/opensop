@@ -76,12 +76,16 @@ module Opensop
       end
 
       def deliver_resend(to:, subject:, template_id:, variables:)
-        Resend::Emails.send(
+        # Resend's send takes a positional hash (`def send(params, options: {})`).
+        # Under Ruby 3, keyword args are not auto-collapsed to a positional Hash,
+        # so the params must be wrapped explicitly — otherwise Ruby falls through
+        # to Object#send and raises ArgumentError.
+        Resend::Emails.send({
           from: ENV.fetch("OPENSOP_MAILER_FROM"),
           to: [ to ],
           subject: subject,
           template: { id: template_id, variables: variables }
-        )
+        })
       end
 
       def mode
