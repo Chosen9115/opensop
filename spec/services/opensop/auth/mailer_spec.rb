@@ -15,6 +15,8 @@ RSpec.describe Opensop::Auth::Mailer do
   after do
     ENV.delete("OPENSOP_MAILER_MODE")
     ENV.delete("OPENSOP_MAILER_FROM")
+    ENV.delete("OPENSOP_RESEND_TEMPLATE_MAGIC_LINK")
+    ENV.delete("OPENSOP_RESEND_TEMPLATE_INVITATION")
   end
 
   describe ".send_magic_link" do
@@ -64,7 +66,7 @@ RSpec.describe Opensop::Auth::Mailer do
         ENV["OPENSOP_MAILER_FROM"] = "noreply@opensop.dev"
       end
 
-      it "calls Resend::Emails.send with the right payload" do
+      it "sends via the Resend magic-link template with the URL as a variable" do
         captured = nil
         allow(Resend::Emails).to receive(:send) do |args|
           captured = args
@@ -76,8 +78,19 @@ RSpec.describe Opensop::Auth::Mailer do
         expect(captured[:from]).to eq("noreply@opensop.dev")
         expect(captured[:to]).to eq([ "alice@example.com" ])
         expect(captured[:subject]).to eq(I18n.t("opensop.auth.emails.sign_in.subject"))
-        expect(captured[:html]).to include("#{host}/auth/magic_links/#{raw_token}")
-        expect(captured[:text]).to include("#{host}/auth/magic_links/#{raw_token}")
+        expect(captured[:template][:id]).to eq("opensop-magic-link")
+        expect(captured[:template][:variables][:URL]).to eq("#{host}/auth/magic_links/#{raw_token}")
+        expect(captured[:template][:variables][:HEADING]).to eq(I18n.t("opensop.auth.emails.sign_in.heading"))
+        expect(captured).not_to have_key(:html)
+        expect(captured).not_to have_key(:text)
+      end
+
+      it "honors OPENSOP_RESEND_TEMPLATE_MAGIC_LINK override when set" do
+        ENV["OPENSOP_RESEND_TEMPLATE_MAGIC_LINK"] = "custom-magic-link"
+        captured = nil
+        allow(Resend::Emails).to receive(:send) { |args| captured = args; { id: "x" } }
+        described_class.send_magic_link(user: user, raw_token: raw_token, purpose: "sign_in", host: host)
+        expect(captured[:template][:id]).to eq("custom-magic-link")
       end
 
       it "raises if OPENSOP_MAILER_FROM is missing" do
@@ -149,6 +162,17 @@ RSpec.describe Opensop::Auth::Mailer do
         allow(Resend::Emails).to receive(:send) { |args| captured = args; { id: "x" } }
         described_class.send_invitation(user: user, raw_token: raw_token, host: host, inviter: inviter)
         expect(captured[:subject]).to eq(I18n.t("opensop.auth.emails.invitation.subject"))
+      end
+
+      it "sends via the Resend invitation template with the URL as a variable" do
+        ENV["OPENSOP_MAILER_MODE"] = "send"
+        ENV["OPENSOP_MAILER_FROM"] = "noreply@opensop.dev"
+        captured = nil
+        allow(Resend::Emails).to receive(:send) { |args| captured = args; { id: "x" } }
+        described_class.send_invitation(user: user, raw_token: raw_token, host: host, inviter: inviter)
+        expect(captured[:template][:id]).to eq("opensop-invitation")
+        expect(captured[:template][:variables][:URL]).to eq("#{host}/auth/invitations/#{raw_token}")
+        expect(captured[:template][:variables][:BODY]).to include(inviter.email)
       end
     end
   end
