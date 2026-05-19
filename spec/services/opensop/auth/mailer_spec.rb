@@ -100,6 +100,26 @@ RSpec.describe Opensop::Auth::Mailer do
           described_class.send_magic_link(user: user, raw_token: raw_token, purpose: "sign_in", host: host)
         }.to raise_error(KeyError)
       end
+
+      # Regression: Resend::Emails.send takes a positional Hash. Under Ruby 3,
+      # keyword args are NOT auto-collapsed, so passing `from: x, to: y, ...`
+      # without an outer `{}` falls through to Object#send and raises
+      # ArgumentError. RSpec stubs hide this — verify against the real SDK.
+      it "calls the real Resend SDK without a Ruby-3 keyword-arg ArgumentError" do
+        Resend.api_key = "test-key"
+        stubbed_body = nil
+        stub_request(:post, "https://api.resend.com/emails")
+          .with { |req| stubbed_body = JSON.parse(req.body); true }
+          .to_return(status: 200, body: '{"id":"stub-id"}', headers: { "Content-Type" => "application/json" })
+
+        expect {
+          described_class.send_magic_link(user: user, raw_token: raw_token, purpose: "sign_in", host: host)
+        }.not_to raise_error
+
+        expect(stubbed_body).to include("from" => "noreply@opensop.dev", "subject" => I18n.t("opensop.auth.emails.sign_in.subject"))
+        expect(stubbed_body["template"]).to include("id" => "opensop-magic-link")
+        expect(stubbed_body["template"]["variables"]).to include("URL" => "#{host}/auth/magic_links/#{raw_token}")
+      end
     end
 
     it "embeds the URL exactly once in the HTML href and once as a fallback link" do
