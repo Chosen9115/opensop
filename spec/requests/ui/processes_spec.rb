@@ -12,8 +12,7 @@ require "rails_helper"
 #   5. Show page version dropdown — prior versions linked when >1 version exists
 RSpec.describe "Ui::Processes", type: :request do
   before do
-    ENV.delete("OPENSOP_UI_USER")
-    ENV.delete("OPENSOP_UI_PASSWORD")
+    sign_in_via_magic_link(create(:user))
   end
 
   # ---------------------------------------------------------------------------

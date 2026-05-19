@@ -2,26 +2,24 @@ module Ui
   # Base controller for the admin UI (Dashboard, Process Library, Instance
   # Dashboard, Process Detail, Instance Detail).
   #
-  # Optional HTTP Basic auth is gated by ENV:
+  # Auth contract (Phase 4 cutover — GAP-9 closed):
   #
-  #   OPENSOP_UI_USER     — username expected on all /ui pages
-  #   OPENSOP_UI_PASSWORD — password expected on all /ui pages
+  # Every /ui route requires a valid session cookie. Authentication is
+  # session-based, backed by passkeys (with magic-link as the bootstrap
+  # path). The `Authenticatable` concern reads the signed cookie named
+  # `:opensop_session`, resolves it to an `AuthSession` row, and exposes
+  # `current_user` / `signed_in?` to controllers and views. Unauthenticated
+  # requests are redirected to `/auth/sign_in` with a `return_to` parameter.
   #
-  # If either variable is unset, auth is skipped (so local development and
-  # the test suite work without ceremony). If both are set, every UI request
-  # is challenged with HTTP Basic — failure returns 401 with a `realm=OpenSOP`
-  # prompt.
-  #
-  # Production deployments SHOULD set both. Track GAP-9 for lifting this to
-  # a proper session-based login once the engine supports multi-user admin.
-  #
-  # Note: /sop/* API endpoints use `X-SOP-Token` instead (see
-  # Sop::ApplicationController). The two auth schemes coexist so API callers
-  # and humans can use the same deployment without interference.
+  # The previous HTTP Basic gate (OPENSOP_UI_USER / OPENSOP_UI_PASSWORD) has
+  # been removed entirely. /sop/* API endpoints continue to use
+  # `X-SOP-Token` (see Sop::ApplicationController) — that path is unchanged.
   class ApplicationController < ActionController::Base
+    include Authenticatable
+
     layout "application"
 
-    before_action :authenticate_admin_ui!
+    before_action :require_authentication
     before_action :load_rail_data
 
     helper_method :sidebar_counts, :api_token_active?, :show_rail?, :cmdk_dataset
@@ -171,47 +169,6 @@ module Ui
         nav + processes + instances
       rescue ActiveRecord::StatementInvalid
         []
-      end
-    end
-
-    # Auth contract for the admin UI:
-    #
-    # * test     — bypassed entirely when both env vars are unset (so request
-    #              specs hit admin pages without signing every request). Specs
-    #              that need to assert the auth gate set the env vars in a
-    #              `before` block.
-    # * production — env vars MUST be set. Boot fails in
-    #              config/initializers/admin_ui_auth.rb if they are not.
-    # * dev / staging / anything else — when env vars are unset, fall back to
-    #              development credentials `admin` / `admin` and log a one-time
-    #              warning. Set both env vars to override.
-    def authenticate_admin_ui!
-      expected_user = ENV["OPENSOP_UI_USER"].to_s
-      expected_pass = ENV["OPENSOP_UI_PASSWORD"].to_s
-
-      if expected_user.empty? || expected_pass.empty?
-        # In test, missing env vars opt out of auth — preserves the existing
-        # request-spec convention.
-        return if Rails.env.test?
-
-        # Production should never reach here (the initializer raises). Defensive.
-        return if Rails.env.production?
-
-        expected_user = "admin"
-        expected_pass = "admin"
-        unless self.class.instance_variable_get(:@_admin_default_warning_logged)
-          Rails.logger.warn(
-            "[SECURITY] OPENSOP_UI_USER / OPENSOP_UI_PASSWORD are unset — admin UI " \
-            "is using development defaults 'admin' / 'admin'. Set both env vars " \
-            "before exposing this server to anyone else."
-          )
-          self.class.instance_variable_set(:@_admin_default_warning_logged, true)
-        end
-      end
-
-      authenticate_or_request_with_http_basic("OpenSOP") do |u, p|
-        ActiveSupport::SecurityUtils.secure_compare(u.to_s, expected_user) &&
-          ActiveSupport::SecurityUtils.secure_compare(p.to_s, expected_pass)
       end
     end
   end

@@ -10,11 +10,11 @@ module Ui
   class ApiDocsController < ApplicationController
     layout "api_docs"
 
-    # The API reference is intentionally PUBLIC — no admin auth challenge —
-    # so the docs are linkable, scrapable, and indexable. Content is 100%
-    # static (driven by Ui::ApiDocs::Catalog + i18n) so there is nothing
-    # workspace-scoped to leak.
-    skip_before_action :authenticate_admin_ui!
+    # The API reference is intentionally PUBLIC — no auth challenge — so the
+    # docs are linkable, scrapable, and indexable. Content is 100% static
+    # (driven by Ui::ApiDocs::Catalog + i18n) so there is nothing workspace-
+    # scoped to leak.
+    skip_before_action :require_authentication
 
     helper_method :admin_authenticated?, :docs_cmdk_dataset, :docs_etag_for, :docs_lastmod
 
@@ -148,30 +148,12 @@ module Ui
 
     private
 
-    # True when the visitor's request carries valid admin credentials. Mirrors
-    # the auth contract in Ui::ApplicationController#authenticate_admin_ui!.
-    # When OPENSOP_UI_USER / OPENSOP_UI_PASSWORD are set the request is checked
-    # against them in every env; when unset, the test env treats the visitor
-    # as authenticated and dev / staging falls back to the 'admin' / 'admin'
-    # development default. Used to conditionally show admin-only links (e.g.
-    # the topbar Dashboard link) on this otherwise-public page. Does NOT
-    # challenge the visitor — read-only check.
+    # True when the visitor has a valid admin session. Used to conditionally
+    # show admin-only links (e.g. the topbar Dashboard link) on this
+    # otherwise-public page. Does NOT challenge the visitor — read-only
+    # check that delegates to Authenticatable#signed_in?.
     def admin_authenticated?
-      expected_user = ENV["OPENSOP_UI_USER"].presence
-      expected_pass = ENV["OPENSOP_UI_PASSWORD"].presence
-
-      if expected_user.nil? || expected_pass.nil?
-        return true  if Rails.env.test?
-        return false if Rails.env.production?
-        expected_user = "admin"
-        expected_pass = "admin"
-      end
-
-      result = authenticate_with_http_basic do |u, p|
-        ActiveSupport::SecurityUtils.secure_compare(u.to_s, expected_user) &&
-          ActiveSupport::SecurityUtils.secure_compare(p.to_s, expected_pass)
-      end
-      result == true
+      signed_in?
     end
 
     # Dataset for the ⌘K command palette modal. One row per guide and per

@@ -9,8 +9,7 @@ require "rails_helper"
 # should pass without modification.
 RSpec.describe "Ui::Metrics", type: :request do
   before do
-    ENV.delete("OPENSOP_UI_USER")
-    ENV.delete("OPENSOP_UI_PASSWORD")
+    sign_in_via_magic_link(create(:user))
   end
 
   describe "GET /metrics" do

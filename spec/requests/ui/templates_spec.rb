@@ -5,8 +5,7 @@ require "rails_helper"
 #   get "/templates", to: "ui/templates#index", as: :ui_templates
 RSpec.describe "Ui::Templates", type: :request do
   before do
-    ENV.delete("OPENSOP_UI_USER")
-    ENV.delete("OPENSOP_UI_PASSWORD")
+    sign_in_via_magic_link(create(:user))
   end
 
   describe "GET /templates" do

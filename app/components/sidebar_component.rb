@@ -5,14 +5,16 @@ class SidebarComponent < ViewComponent::Base
   # Usage:
   #   <%= render SidebarComponent.new(
   #         current_path: request.path,
-  #         counts: { processes: 12, instances_running: 3, instances_waiting: 1 }
+  #         counts: { processes: 12, instances_running: 3, instances_waiting: 1 },
+  #         current_user: current_user
   #       ) %>
-  def initialize(current_path:, counts:)
+  def initialize(current_path:, counts:, current_user: nil)
     @current_path = current_path.to_s
     @counts = counts || {}
+    @current_user = current_user
   end
 
-  attr_reader :current_path, :counts
+  attr_reader :current_path, :counts, :current_user
 
   def version_label
     if defined?(Opensop::VERSION)
@@ -95,6 +97,17 @@ class SidebarComponent < ViewComponent::Base
     ]
   end
 
+  def account_items
+    [
+      { key: :passkeys,
+        label: I18n.t("opensop.nav.passkeys", default: "Passkeys"),
+        icon: :key,
+        path: helpers.ui_account_passkeys_path,
+        active: path_active?(helpers.ui_account_passkeys_path),
+        disabled: false }
+    ]
+  end
+
   def link_classes(item)
     base = "flex items-center gap-2 px-3 py-1.5 text-[12px] cursor-pointer rounded-[3px]"
     if item[:disabled]
@@ -137,7 +150,8 @@ class SidebarComponent < ViewComponent::Base
     document_duplicate: "M7.5 3.75A1.5 1.5 0 006 5.25v13.5a1.5 1.5 0 001.5 1.5h6a1.5 1.5 0 001.5-1.5V15a.75.75 0 011.5 0v3.75a3 3 0 01-3 3h-6a3 3 0 01-3-3V5.25a3 3 0 013-3H10.5a.75.75 0 010 1.5h-3z M16.5 6.75a.75.75 0 01.75-.75h3.75a.75.75 0 01.75.75v3.75a.75.75 0 01-1.5 0V8.56l-7.72 7.72a.75.75 0 11-1.06-1.06l7.72-7.72H17.25a.75.75 0 01-.75-.75z",
     bolt: "M14.615 1.595a.75.75 0 01.359.852L12.982 9.75h7.268a.75.75 0 01.548 1.262l-10.5 11.25a.75.75 0 01-1.272-.71l1.992-7.302H3.75a.75.75 0 01-.548-1.262l10.5-11.25a.75.75 0 01.913-.143z",
     arrow_top_right_on_square: "M15.75 2.25H21a.75.75 0 01.75.75v5.25a.75.75 0 01-1.5 0V4.81L8.03 17.03a.75.75 0 01-1.06-1.06L19.19 3.75h-3.44a.75.75 0 010-1.5z M5.25 6.75a3 3 0 00-3 3v9a3 3 0 003 3h9a3 3 0 003-3V13.5a.75.75 0 00-1.5 0v5.25a1.5 1.5 0 01-1.5 1.5h-9a1.5 1.5 0 01-1.5-1.5v-9a1.5 1.5 0 011.5-1.5h5.25a.75.75 0 000-1.5H5.25z",
-    search: "M10.5 3.75a6.75 6.75 0 100 13.5 6.75 6.75 0 000-13.5zM2.25 10.5a8.25 8.25 0 1114.59 5.28l4.69 4.69a.75.75 0 11-1.06 1.06l-4.69-4.69A8.25 8.25 0 012.25 10.5z"
+    search: "M10.5 3.75a6.75 6.75 0 100 13.5 6.75 6.75 0 000-13.5zM2.25 10.5a8.25 8.25 0 1114.59 5.28l4.69 4.69a.75.75 0 11-1.06 1.06l-4.69-4.69A8.25 8.25 0 012.25 10.5z",
+    key: "M15.75 1.5a6.75 6.75 0 0 0-6.651 7.906c.067.39-.032.717-.221.906l-6.5 6.499a3 3 0 0 0-.878 2.121v2.818c0 .414.336.75.75.75H6a.75.75 0 0 0 .75-.75v-1.5h1.5A.75.75 0 0 0 9 19.5V18h1.06a.75.75 0 0 0 .53-.22l.97-.97a2.32 2.32 0 0 1 .42-.336.75.75 0 0 0 .302-.94 6.75 6.75 0 0 1 6.293-9.284 6.75 6.75 0 0 0-2.825-3.45zm.75 6.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5z"
   }.freeze
 
   private

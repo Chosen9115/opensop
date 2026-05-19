@@ -73,9 +73,14 @@
   -webkit-font-smoothing: antialiased;
 }
 
-body {
-  background: var(--color-bg);
-  color: var(--color-fg);
+@layer base {
+  /* Default body surface — kept in @layer base so utility classes
+     like `bg-bg-sunken` on a per-page body can override it. Without
+     a layer, this rule outranks Tailwind utilities. */
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+  }
 }
 
 /* Mono helper — keep as a class because the design uses font-mono everywhere

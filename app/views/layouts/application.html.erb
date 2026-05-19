@@ -24,7 +24,7 @@
     <% rail_up_next = (defined?(@rail_up_next) && @rail_up_next) || nil %>
 
     <div class="grid h-screen w-full bg-bg <%= show_rail ? 'grid-cols-[220px_1fr_320px]' : 'grid-cols-[220px_1fr]' %>">
-      <%= render SidebarComponent.new(current_path: request.path, counts: sidebar_counts) %>
+      <%= render SidebarComponent.new(current_path: request.path, counts: sidebar_counts, current_user: current_user) %>
 
       <main class="flex flex-col overflow-auto">
         <% if flash[:notice].present? || flash[:alert].present? %>

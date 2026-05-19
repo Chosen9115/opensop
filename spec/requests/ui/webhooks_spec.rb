@@ -8,6 +8,10 @@ require "rails_helper"
 # is expected. Once the integration agent wires the route, this file should
 # pass without modification.
 RSpec.describe "Ui::Webhooks", type: :request do
+  before do
+    sign_in_via_magic_link(create(:user))
+  end
+
   describe "GET /webhooks" do
     context "when no callbacks exist" do
       it "returns 200 and renders the page header" do

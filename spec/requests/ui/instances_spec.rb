@@ -9,8 +9,7 @@ require "rails_helper"
 # wrapped in a <details> element that is collapsed by default.
 RSpec.describe "Ui::Instances", type: :request do
   before do
-    ENV.delete("OPENSOP_UI_USER")
-    ENV.delete("OPENSOP_UI_PASSWORD")
+    sign_in_via_magic_link(create(:user))
   end
 
   describe "GET /instances/:id" do

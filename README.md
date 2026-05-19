@@ -142,6 +142,51 @@ Auth: set `OPENSOP_API_TOKEN`, send `X-SOP-Token: <value>` on every request. Ful
 
 ---
 
+## Authentication
+
+OpenSOP uses **passkeys** (WebAuthn) for admin UI authentication. Each deployment supports multiple admin users; sign-in is sole-factor (the passkey is multi-factor by definition — biometric + device).
+
+### Required environment variables (production)
+
+| Variable | Purpose |
+|---|---|
+| `RESEND_API_KEY` | Resend API key for delivery |
+| `OPENSOP_MAILER_FROM` | From address, e.g. `"OpenSOP <noreply@your-domain>"` |
+| `OPENSOP_RP_ID` | WebAuthn relying-party ID (apex domain) |
+| `OPENSOP_ORIGIN` | Full origin, e.g. `https://opensop.your-domain.com` |
+| `OPENSOP_BOOTSTRAP_EMAIL` | Email for the first admin (only honored once on a fresh deploy) |
+| `OPENSOP_RP_NAME` | (optional) Display name. Defaults to `OpenSOP`. |
+| `OPENSOP_MAILER_MODE` | (optional) `send` (prod default) or `log` (dev/test default) |
+
+### First-run bootstrap
+
+Set `OPENSOP_BOOTSTRAP_EMAIL` to the email you want to use as the first admin. On boot, OpenSOP will:
+
+1. Create a `User` row with that email
+2. Issue a one-time invitation token (valid 7 days)
+3. Print the invitation URL to the application logs
+4. Write the URL to `tmp/opensop_first_login.txt` (mode 0600)
+
+Visit the URL, register your first passkey on a device that supports WebAuthn (any modern Mac, iPhone, Android, Windows Hello, or hardware key), and you're signed in. From there:
+
+- Manage your passkeys at `/account/passkeys`
+- Invite additional admins at `/account/users`
+- View active sessions at `/account/sessions`
+
+### Account recovery
+
+If you lose all your passkeys, click **"I lost my passkey"** on the sign-in page. We'll email a one-time recovery link. From there you can register a new passkey or revoke all and start over.
+
+### Lost/forgot bootstrap email?
+
+If `User.count == 0`, just set `OPENSOP_BOOTSTRAP_EMAIL` and redeploy — the bootstrap will run again. Otherwise sign in as any existing admin and use `/account/users` to invite the right one.
+
+### API authentication
+
+API endpoints under `/sop/*` continue to use the `X-SOP-Token` header backed by `OPENSOP_API_TOKEN`. This is unchanged.
+
+---
+
 ## Companion CLI
 
 If you prefer the terminal over curl, [opensop-cli](https://github.com/Chosen9115/opensop-cli) is a single-file bash client for any OpenSOP server. Point it at `https://demo.opensop.ai` to explore the API without running Rails locally, or point it at your own instance once it's running.
