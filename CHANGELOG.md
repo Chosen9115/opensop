@@ -2,6 +2,35 @@
 
 All notable changes to OpenSOP. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — 2026-05-19
+
+The big shift this week was the **passkey admin auth migration shipping to production** — see the section below for the full migration guide. Everything in this entry is on top of that.
+
+### Added — admin UI
+
+- **Users link in the sidebar Account section.** Admins can now reach `/account/users` (invite, list, remove admins) directly from the sidebar instead of typing the URL. Uses a distinct `user-circle` heroicon so it doesn't visually collide with the `users` icon already on Agents. First spec for `SidebarComponent` lands alongside (covers visibility gating, link paths, active highlighting, ordering, and the icon-collision regression). (#43)
+
+### Fixed — auth
+
+- **`POST /auth/magic_links` returned 500 in production.** `Resend::Emails.send(from:, to:, ...)` was being called with Ruby keyword args, but the gem's signature is `def send(params, options: {})` — under Ruby 3 those don't auto-collapse into a positional Hash, so the call fell through to `Object#send` and raised `ArgumentError`. The original spec missed it because `allow(...).to receive(:send)` bypasses the real method signature. Fix wraps the params in an explicit `{}` and adds a WebMock-backed regression spec that exercises the real SDK code path so the dispatch mismatch surfaces in CI. (#41)
+
+### Fixed — CI / deploy
+
+- **CI deploy job couldn't find the Fly CLI.** `superfly/flyctl-actions/setup-flyctl@master` only puts `flyctl` on PATH on the GitHub runner, but `bin/deploy` was hardcoded to call `fly` (which is what Homebrew installs locally). `bin/deploy` now detects at script start (`command -v flyctl || command -v fly`) and uses whichever is present. Works in both environments without forcing either side to install the other alias. (#42)
+
+### Maintenance
+
+- **Security gem bumps** (rolled in with the auth-fix PR):
+  - `net-imap` 0.6.3 → 0.6.4 — closes 5 advisories including command injection (`CVE-2026-42258`, `CVE-2026-42257`), STARTTLS stripping, DoS, and quadratic-complexity response parsing.
+  - `view_component` 4.8.0 → 4.11.0 — closes `CVE-2026-44836` (preview route helper dispatch) and `CVE-2026-44837` (system test path escape).
+- **Dependabot bumps:** `oj` 3.17.1 (#35), `selenium-webdriver` 4.44.0 (#37), `bootsnap` 1.24.4 (#39), `pagy` 43.5.4 (#38), `thruster` 0.1.21 (#36), `actions/checkout` 6 (#32).
+- Closed `oj` 3.17.0 bump (#17) — superseded by #35 (3.17.1).
+
+### Known issues / follow-ups
+
+- **`FLY_API_TOKEN` GitHub Actions secret not set.** Auto-deploy on push to `main` reaches the deploy step (PR #42 fixed the binary-not-found error) but fails authenticating against Fly. Until the secret is added, deploys must be done manually with `fly deploy --app opensop --remote-only`.
+- **Legacy `OPENSOP_UI_USER` / `OPENSOP_UI_PASSWORD` Fly secrets** are still set on the `opensop` app. Harmless under the new code (nothing reads them) but should be removed: `fly secrets unset OPENSOP_UI_USER OPENSOP_UI_PASSWORD -a opensop`.
+
 ## [Unreleased] — 2026-05-04
 
 ### BREAKING
