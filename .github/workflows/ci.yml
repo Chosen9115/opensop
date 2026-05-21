@@ -95,11 +95,29 @@ jobs:
     needs: [scan_ruby, lint, test]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
+      # Secrets can't be referenced in job/step `if:` conditions directly, so
+      # map the token into a step that records its presence as an output. When
+      # FLY_API_TOKEN is unset the deploy steps below are skipped and the job
+      # stays green, instead of hard-failing with "no access token available".
+      - name: Check for Fly deploy token
+        id: flytoken
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::warning::FLY_API_TOKEN secret not set — skipping Fly.io deploy."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Checkout code
+        if: steps.flytoken.outputs.present == 'true'
         uses: actions/checkout@v6
       - name: Install flyctl
+        if: steps.flytoken.outputs.present == 'true'
         uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy to Fly.io
+        if: steps.flytoken.outputs.present == 'true'
         run: bin/deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
