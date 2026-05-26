@@ -3,7 +3,7 @@ require "rails_helper"
 RSpec.describe "v0.2 exit_when smoke end-to-end", type: :request do
   before do
     Opensop::Registry.load_file(
-      Rails.root.join("processes/v02-smoke-exit-when.sop.yaml")
+      Rails.root.join("spec/fixtures/processes/v02-smoke-exit-when.sop.yaml")
     )
   end
 
