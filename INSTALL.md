@@ -73,6 +73,9 @@ OPENSOP_BASE_URL=http://localhost:3000
 OPENSOP_RP_ID=localhost
 OPENSOP_ORIGIN=http://localhost:3000
 RAILS_ALLOWED_HOSTS=localhost,127.0.0.1
+# development uses the async queue adapter and has no Solid Queue tables, so the
+# in-Puma supervisor must be off or it crashes the app on boot.
+SOLID_QUEUE_IN_PUMA=false
 ```
 
 **self-host-local** (production settings, localhost only):
@@ -93,30 +96,25 @@ and edit it for your proxy setup.
 
 ---
 
-## 4. Regenerate credentials
+## 4. Remove the committed credentials file
 
 The committed `config/credentials.yml.enc` was encrypted with the author's
-master key. A fresh install must create a new one:
+master key, so a fresh install's `RAILS_MASTER_KEY` can't decrypt it — and if
+it's present, Rails aborts on boot with
+`ActiveSupport::MessageEncryptor::InvalidMessage`.
+
+OpenSOP reads its secrets from environment variables (`SECRET_KEY_BASE` and the
+rest come from `.env`), not from Rails credentials, so the file isn't needed.
+Just delete it:
 
 ```bash
 rm -f config/credentials.yml.enc
-RAILS_MASTER_KEY="$(grep '^RAILS_MASTER_KEY=' .env | cut -d= -f2)" \
-  EDITOR=true bin/rails credentials:edit
 ```
 
-This creates a fresh empty credentials file encrypted with your key. If the
-`bin/rails` command is not available locally, use the Docker one-off:
+Verify it's gone (the app runs fine without it):
 
 ```bash
-docker compose run --rm \
-  -e RAILS_MASTER_KEY="$(grep '^RAILS_MASTER_KEY=' .env | cut -d= -f2)" \
-  app bash -c "EDITOR=true bin/rails credentials:edit"
-```
-
-Verify it was created:
-
-```bash
-test -s config/credentials.yml.enc && echo "OK"
+test ! -e config/credentials.yml.enc && echo "OK"
 ```
 
 ---
@@ -159,13 +157,25 @@ curl -H "X-SOP-Token: $TOKEN" http://localhost:3000/sop/
 
 ## 7. First login
 
-1. Open `http://localhost:3000` (or your domain) in a browser.
-2. Sign in with the email you set in `OPENSOP_BOOTSTRAP_EMAIL`.
-3. Register a passkey when prompted. A hardware key, Face ID, Touch ID, or
-   Windows Hello all work.
+First boot creates the admin from `OPENSOP_BOOTSTRAP_EMAIL` and prints a one-time
+**first-login URL** to the logs (also saved to `tmp/opensop_first_login.txt`).
+The plain sign-in page rejects you until a passkey is registered, so use this URL
+for the very first sign-in. Fetch it:
 
-If you enabled magic-link email sign-in (`RESEND_API_KEY` set), you can also
-request a link from the sign-in page.
+```bash
+docker compose logs app | grep "First-login URL"
+```
+
+1. Open that first-login URL in a browser (valid 7 days).
+2. Register a passkey when prompted. A hardware key, Face ID, Touch ID, or
+   Windows Hello all work.
+3. From then on, sign in normally at `http://localhost:3000` (or your domain)
+   as `OPENSOP_BOOTSTRAP_EMAIL`.
+
+If you enabled magic-link email sign-in (`RESEND_API_KEY` set), you can instead
+request a link from the sign-in page. For local-dev or a trusted single-machine
+self-host, you can skip login entirely with `OPENSOP_DISABLE_AUTH=true` in `.env`
+(ignored on public deployments — see `.env.example`).
 
 ---
 
@@ -214,7 +224,9 @@ docker compose exec app bin/rails console
 ## Troubleshooting
 
 **`ActiveSupport::MessageEncryptor::InvalidMessage` on boot**
-The credentials file was not regenerated. Re-run Step 4.
+The committed `config/credentials.yml.enc` is still present and can't be decrypted
+with your key. Delete it (Step 4): `rm -f config/credentials.yml.enc`, then
+`docker compose down && docker compose up -d`.
 
 **HTTP 401 from `/sop/`**
 The `X-SOP-Token` header value doesn't match `OPENSOP_API_TOKEN`. Re-read

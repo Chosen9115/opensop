@@ -351,6 +351,10 @@ RAILS_ALLOWED_HOSTS=localhost,127.0.0.1
 OPENSOP_BASE_URL=http://localhost:<OPENSOP_PORT>
 OPENSOP_RP_ID=localhost
 OPENSOP_ORIGIN=http://localhost:<OPENSOP_PORT>
+# local-dev runs Rails in development, which uses the async queue adapter and
+# never migrates the Solid Queue tables. The Solid Queue supervisor must stay
+# OFF inside Puma here, or it crashes the app on boot.
+SOLID_QUEUE_IN_PUMA=false
 ```
 
 **Verification:** confirm the file was written and is non-empty.
@@ -371,45 +375,27 @@ echo "All required secrets set" || echo "MISSING REQUIRED SECRET"
 
 ---
 
-## Step 4 — Regenerate config/credentials.yml.enc
+## Step 4 — Remove config/credentials.yml.enc
 
 **Why this step exists:** the `config/credentials.yml.enc` committed to the
-repository was encrypted with the original author's master key. A fresh
-install using a newly generated `RAILS_MASTER_KEY` cannot decrypt it. If left
-in place, Rails will abort on first boot with a
-`ActiveSupport::MessageEncryptor::InvalidMessage` error.
+repository was encrypted with the original author's master key. A fresh install
+using a newly generated `RAILS_MASTER_KEY` cannot decrypt it, and if the file is
+present Rails aborts on first boot with
+`ActiveSupport::MessageEncryptor::InvalidMessage`.
 
-Delete the committed file and create a fresh empty one encrypted with your
-master key:
+OpenSOP does not read Rails credentials at runtime — `SECRET_KEY_BASE` and every
+other secret come from environment variables (the `.env` you wrote in Step 3).
+So the encrypted file is not needed: delete it.
 
 ```bash
 cd <INSTALL_DIR>
-
-# Delete the committed encrypted credentials file
 rm -f config/credentials.yml.enc
-
-# Create a fresh empty credentials file encrypted with the new master key.
-# EDITOR=true causes Rails to open, immediately save, and close the temp file
-# without requiring an interactive editor — appropriate for automated install.
-RAILS_MASTER_KEY="$(grep '^RAILS_MASTER_KEY=' .env | cut -d= -f2)" \
-  EDITOR=true \
-  bin/rails credentials:edit
 ```
 
-**Verification:** confirm the new file exists and is non-empty:
+**Verification:** confirm it is gone (Rails runs fine without it):
 
 ```bash
-test -s config/credentials.yml.enc && echo "OK" || echo "MISSING"
-```
-
-**Recovery:** if `bin/rails credentials:edit` fails with "bundler not
-available" or similar, the rails binary inside the repo may not be executable
-or the container build hasn't happened yet. Use the Docker-based alternative:
-
-```bash
-docker compose run --rm \
-  -e RAILS_MASTER_KEY="$(grep '^RAILS_MASTER_KEY=' .env | cut -d= -f2)" \
-  app bash -c "EDITOR=true bin/rails credentials:edit"
+test ! -e config/credentials.yml.enc && echo "OK" || echo "STILL PRESENT"
 ```
 
 ---
@@ -505,6 +491,16 @@ are loaded.)
 
 ## Step 8 — Print success and first-login instructions
 
+First boot creates the admin account from `OPENSOP_BOOTSTRAP_EMAIL` and prints a
+one-time **first-login URL** to the logs (also written to
+`tmp/opensop_first_login.txt`). That URL — not the plain sign-in page — is how the
+first admin registers their passkey: the sign-in page rejects them until a passkey
+exists. Fetch it:
+
+```bash
+docker compose logs app 2>/dev/null | grep "First-login URL" | tail -1
+```
+
 Print a message to the operator (do not include any secret values):
 
 ```
@@ -515,17 +511,17 @@ API base: http://localhost:<OPENSOP_PORT>/sop/
 API auth: X-SOP-Token header — value is in <INSTALL_DIR>/.env (OPENSOP_API_TOKEN)
 
 First login:
-  1. Open the web UI in your browser.
-  2. Sign in with the admin email: <OPENSOP_BOOTSTRAP_EMAIL>
-     (The account was created on first boot via OPENSOP_BOOTSTRAP_EMAIL.)
-  3. Register a passkey when prompted.
+  1. Open the first-login URL above in your browser (valid 7 days).
+     The plain sign-in page will reject you until a passkey is registered —
+     use this URL for the very first sign-in.
+  2. Register a passkey when prompted (hardware key, Face ID, Touch ID, Windows Hello).
+  3. After that, sign in normally at the web UI as <OPENSOP_BOOTSTRAP_EMAIL>.
 ```
 
-If magic links were enabled, add:
-
-```
-  4. If passkey registration fails, request a magic link at the sign-in page.
-```
+If magic links were enabled (RESEND_API_KEY set), the operator can instead request
+a sign-in link from the sign-in page. For local-dev or a trusted single-machine
+self-host, login can be skipped entirely with `OPENSOP_DISABLE_AUTH=true` in `.env`
+(ignored on public deployments — see `.env.example`).
 
 ```
 Stack management:
@@ -595,10 +591,10 @@ docker compose logs app | tail -100
 
 Show the output. Common causes:
 
-- **`ActiveSupport::MessageEncryptor::InvalidMessage`** — Step 4 was not
-  completed or failed silently. Re-run Step 4, then `docker compose restart app`.
-- **`RAILS_MASTER_KEY` mismatch** — the `.env` value was changed after the
-  credentials file was regenerated. Re-run Step 4 with the current value.
+- **`ActiveSupport::MessageEncryptor::InvalidMessage`** — the committed
+  `config/credentials.yml.enc` is still present and can't be decrypted with this
+  install's key. Delete it (Step 4): `rm -f config/credentials.yml.enc`, then
+  `docker compose restart app`. OpenSOP reads its secrets from env, not credentials.
 - **Missing required env var** — compose `:?` syntax logs a clear error.
   Fill in the missing var in `.env`, then `docker compose restart app`.
 - **OOM / memory error** — the container ran out of memory. The minimum is
