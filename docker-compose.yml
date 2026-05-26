@@ -57,6 +57,10 @@ services:
       OPENSOP_ORIGIN: ${OPENSOP_ORIGIN:-http://localhost:3000}
       OPENSOP_RP_NAME: ${OPENSOP_RP_NAME:-OpenSOP}
       OPENSOP_BOOTSTRAP_EMAIL: ${OPENSOP_BOOTSTRAP_EMAIL:-}
+      # Optional, off by default. Guarded login bypass for local-dev / trusted
+      # self-host (auto-login the bootstrap admin, no passkey). Ignored on public
+      # deployments. See .env.example for the full warning.
+      OPENSOP_DISABLE_AUTH: ${OPENSOP_DISABLE_AUTH:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       OPENSOP_MAILER_FROM: ${OPENSOP_MAILER_FROM:-}
       OPENSOP_MAILER_MODE: ${OPENSOP_MAILER_MODE:-log}
