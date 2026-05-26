@@ -38,10 +38,19 @@ services:
       RAILS_MASTER_KEY: ${RAILS_MASTER_KEY:?RAILS_MASTER_KEY is required — see .env.example}
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is required — see .env.example}
       DATABASE_URL: postgres://${POSTGRES_USER:-opensop}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opensop_production}
+      # Solid Cache and Solid Queue use dedicated logical databases on the same
+      # Postgres server. Without these, the cache/queue connections in
+      # config/database.yml resolve to no host and fall back to a local socket,
+      # so db:prepare crash-loops the app. Point them at the db service.
+      CACHE_DATABASE_URL: postgres://${POSTGRES_USER:-opensop}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opensop_production}_cache
+      QUEUE_DATABASE_URL: postgres://${POSTGRES_USER:-opensop}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opensop_production}_queue
       RAILS_ALLOWED_HOSTS: ${RAILS_ALLOWED_HOSTS:-localhost,127.0.0.1}
       HTTP_PORT: "3000"
       TARGET_PORT: "3001"
-      SOLID_QUEUE_IN_PUMA: "true"
+      # Honor the value written to .env (local-dev sets this false — dev uses the
+      # async adapter and has no Solid Queue tables). Defaults to true for the
+      # production self-host modes that run the supervisor inside Puma.
+      SOLID_QUEUE_IN_PUMA: ${SOLID_QUEUE_IN_PUMA:-true}
       OPENSOP_BASE_URL: ${OPENSOP_BASE_URL:-http://localhost:3000}
       OPENSOP_API_TOKEN: ${OPENSOP_API_TOKEN:?OPENSOP_API_TOKEN is required — see .env.example}
       OPENSOP_RP_ID: ${OPENSOP_RP_ID:-localhost}

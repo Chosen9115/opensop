@@ -321,6 +321,11 @@ write_env() {
   local base_url="http://localhost:${OPENSOP_PORT}"
   local mailer_mode="log"
   local rails_env="production"
+  # The Solid Queue supervisor runs inside Puma for the production modes
+  # (single-server deploys). local-dev runs RAILS_ENV=development, which uses
+  # the async queue adapter and never migrates the Solid Queue tables — so
+  # starting the supervisor there crashes Puma. Keep it off for local-dev.
+  local solid_queue_in_puma="true"
 
   if [[ "$OPENSOP_MODE" == "self-host-public" && -n "$OPENSOP_DOMAIN" ]]; then
     rp_id="$OPENSOP_DOMAIN"
@@ -335,6 +340,7 @@ write_env() {
 
   if [[ "$OPENSOP_MODE" == "local-dev" ]]; then
     rails_env="development"
+    solid_queue_in_puma="false"
   fi
 
   cat > .env <<EOF
@@ -348,7 +354,7 @@ RAILS_MASTER_KEY=${RAILS_MASTER_KEY}
 SECRET_KEY_BASE=${SECRET_KEY_BASE}
 RAILS_LOG_LEVEL=info
 RAILS_ALLOWED_HOSTS=${allowed_hosts}
-SOLID_QUEUE_IN_PUMA=true
+SOLID_QUEUE_IN_PUMA=${solid_queue_in_puma}
 
 # ── Database ───────────────────────────────────────────────────────────────
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
