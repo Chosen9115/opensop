@@ -1,0 +1,13 @@
+# Copy to docker-compose.override.yml and customize for your domain.
+# Compose auto-merges this with docker-compose.yml.
+#
+# Example: bind to all interfaces, expose port 443, use Caddy/Traefik:
+
+services:
+  app:
+    ports:
+      - "${OPENSOP_PORT:-80}:3000"
+    environment:
+      OPENSOP_BASE_URL: ${OPENSOP_BASE_URL}
+      OPENSOP_ORIGIN: ${OPENSOP_BASE_URL}
+      OPENSOP_RP_ID: ${OPENSOP_RP_ID}

@@ -117,6 +117,9 @@ en:
             revoked: "Session revoked."
             others_revoked: "All other sessions have been signed out."
             cannot_revoke_current: "Use Sign out to end this session."
+      bypass_banner:
+        title: "Authentication disabled"
+        message: "Login is bypassed via OPENSOP_DISABLE_AUTH. Anyone who can reach this server has full admin access. Do not use on a public deployment."
 
     nav:
       dashboard: "Dashboard"
