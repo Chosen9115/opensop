@@ -1,0 +1,5 @@
+✓ OpenSOP is running.
+
+  → Dashboard:     PLACEHOLDER_URL
+  → API endpoint:  PLACEHOLDER_URL/sop/
+

@@ -14,6 +14,22 @@ Use it for classic operations workflows, or as a safety harness around LLM agent
 
 ---
 
+## Quick start
+
+Tell your AI agent:
+
+> _Read and follow https://raw.githubusercontent.com/Chosen9115/opensop/main/INSTALL_FOR_AGENTS.md to set up OpenSOP for me._
+
+Or install it yourself:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/scripts/install.sh | bash
+```
+
+For manual setup, see [INSTALL.md](INSTALL.md).
+
+---
+
 ## The 30-second pitch
 
 You have a process: onboard a customer, approve an expense, triage a ticket, ship a release, review a pull request. Today it lives in a Notion doc, a Slack thread, a cron script, and three engineers' heads. Humans forget it. Agents improvise. The process drifts.

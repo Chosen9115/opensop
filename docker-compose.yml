@@ -1,0 +1,70 @@
+# OpenSOP self-host — see INSTALL.md for setup
+# Run:    docker compose up -d
+# Stop:   docker compose down
+# Logs:   docker compose logs -f app
+# Status: docker compose ps
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-opensop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-opensop_production}
+    volumes:
+      - opensop-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opensop}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"  # only loopback by default
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      RAILS_ENV: ${RAILS_ENV:-production}
+      RAILS_LOG_TO_STDOUT: "true"
+      RAILS_LOG_LEVEL: ${RAILS_LOG_LEVEL:-info}
+      RAILS_MASTER_KEY: ${RAILS_MASTER_KEY:?RAILS_MASTER_KEY is required — see .env.example}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is required — see .env.example}
+      DATABASE_URL: postgres://${POSTGRES_USER:-opensop}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opensop_production}
+      RAILS_ALLOWED_HOSTS: ${RAILS_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      HTTP_PORT: "3000"
+      TARGET_PORT: "3001"
+      SOLID_QUEUE_IN_PUMA: "true"
+      OPENSOP_BASE_URL: ${OPENSOP_BASE_URL:-http://localhost:3000}
+      OPENSOP_API_TOKEN: ${OPENSOP_API_TOKEN:?OPENSOP_API_TOKEN is required — see .env.example}
+      OPENSOP_RP_ID: ${OPENSOP_RP_ID:-localhost}
+      OPENSOP_ORIGIN: ${OPENSOP_ORIGIN:-http://localhost:3000}
+      OPENSOP_RP_NAME: ${OPENSOP_RP_NAME:-OpenSOP}
+      OPENSOP_BOOTSTRAP_EMAIL: ${OPENSOP_BOOTSTRAP_EMAIL:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      OPENSOP_MAILER_FROM: ${OPENSOP_MAILER_FROM:-}
+      OPENSOP_MAILER_MODE: ${OPENSOP_MAILER_MODE:-log}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "${OPENSOP_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/up"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    volumes:
+      - opensop-app-storage:/rails/storage
+      - opensop-app-tmp:/rails/tmp
+
+volumes:
+  opensop-pgdata:
+  opensop-app-storage:
+  opensop-app-tmp:
