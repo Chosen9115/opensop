@@ -196,7 +196,29 @@ Record as `RESEND_API_KEY` and `OPENSOP_MAILER_FROM`.
 
 ---
 
-## DECISION GATE 5 — LLM provider
+## DECISION GATE 5 — Skip login (non-public deployments only)
+
+*Skip this gate entirely if MODE is `self-host-public`. Authentication must
+never be disabled on a public deployment — if the operator asks, decline and
+explain why.*
+
+If MODE is `local-dev` or `self-host-local`, ask the operator:
+
+> "Optional: do you want to **disable the login screen** on this instance?
+> If yes, the admin UI auto-signs-in as the bootstrap admin — no passkey, no
+> sign-in step — which is handy for local testing or a trusted single-user
+> machine. The trade-off: anyone who can reach this server gets full admin
+> access, and a red 'Authentication disabled' banner is shown at all times.
+> Default is **no** (keep the login). (yes / no)"
+
+Record `OPENSOP_DISABLE_AUTH=true` **only if** the operator explicitly answers
+yes. Otherwise leave it unset — login stays enforced (the default). Never set it
+for `self-host-public`; it is silently ignored there anyway because the
+relying-party domain is public.
+
+---
+
+## DECISION GATE 6 — LLM provider
 
 OpenSOP's `judgment` step type delegates decisions to an LLM. Ask the
 operator:
@@ -222,7 +244,7 @@ Record as `ANTHROPIC_API_KEY`.
 
 ---
 
-## DECISION GATE 6 — First admin email
+## DECISION GATE 7 — First admin email
 
 Ask the operator:
 
@@ -236,7 +258,7 @@ Validate that it looks like an email (contains `@`). If not, ask again.
 
 ---
 
-## DECISION GATE 7 — Confirm before proceeding
+## DECISION GATE 8 — Confirm before proceeding
 
 Print a summary of every choice the operator made, **without showing the
 values of any secret** (mask them as `[set]` or `[not set]`):
@@ -248,6 +270,7 @@ Port:                  <OPENSOP_PORT>
 Domain:                <DOMAIN or "localhost (local mode)">
 Base URL:              <OPENSOP_BASE_URL>
 Authentication:        <"passkeys only" or "passkeys + magic links">
+Login bypass:          <"DISABLED — no login required" or "off (login enforced)">
 LLM provider:          <"none" or "anthropic">
 First admin email:     <OPENSOP_BOOTSTRAP_EMAIL>
 RAILS_MASTER_KEY:      [will be generated]
@@ -341,6 +364,10 @@ OPENSOP_MAILER_MODE=send
 
 # Only if Anthropic LLM enabled:
 ANTHROPIC_API_KEY=<ANTHROPIC_API_KEY>
+
+# Only if the operator chose to disable login at Decision Gate 5
+# (local-dev / self-host-local only — never for self-host-public):
+OPENSOP_DISABLE_AUTH=true
 ```
 
 **For local-dev mode**, use these values instead:
@@ -519,9 +546,12 @@ First login:
 ```
 
 If magic links were enabled (RESEND_API_KEY set), the operator can instead request
-a sign-in link from the sign-in page. For local-dev or a trusted single-machine
-self-host, login can be skipped entirely with `OPENSOP_DISABLE_AUTH=true` in `.env`
-(ignored on public deployments — see `.env.example`).
+a sign-in link from the sign-in page.
+
+If the operator chose to disable login at Decision Gate 5 (`OPENSOP_DISABLE_AUTH=true`),
+there is no first-login step at all: opening the web UI signs them straight in as the
+bootstrap admin, with a red "Authentication disabled" banner shown. Skip the
+first-login URL above in that case.
 
 ```
 Stack management:
