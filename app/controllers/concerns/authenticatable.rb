@@ -6,8 +6,16 @@
 # `current_user` / `signed_in?` to the controller and views.
 #
 # Phase 4 hard-cutover: session-based passkey auth is now the only gate on
-# the admin UI. The cookie name is `:opensop_session`. There is no env-var
-# escape hatch — `require_authentication` always enforces.
+# the admin UI. The cookie name is `:opensop_session`.
+#
+# Guarded bypass: when OPENSOP_DISABLE_AUTH is set to a truthy value AND the
+# deployment is non-public (OPENSOP_RP_ID is unset or resolves to localhost /
+# 127.0.0.1), `current_user` falls back to the bootstrap-admin User via
+# `Opensop::AuthMode.bypass_user` when no valid session cookie is present.
+# A real session cookie always takes precedence over the bypass. No AuthSession
+# row is created and no cookie is set for bypass requests — auto-login is
+# memoized only for the duration of the request.
+# This bypass is OFF by default and silently ignored on public deployments.
 module Authenticatable
   extend ActiveSupport::Concern
 
@@ -25,6 +33,8 @@ module Authenticatable
       if session
         session.touch_usage!(expires_in: SESSION_TTL)
         session.user
+      elsif Opensop::AuthMode.bypass?
+        Opensop::AuthMode.bypass_user
       end
     end
   end
