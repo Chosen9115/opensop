@@ -1,0 +1,370 @@
+# maria-linkedin-post-approval.sop.yaml
+#
+# L1 mineralization scaffold — Darwin governance (see ~/.governance/mineralization.md)
+# This process is at L1: human-authored YAML, all judgment steps are human-gated,
+# no automated steps have been promoted from judgment without an explicit hardening pass.
+#
+# NO-AUTO-PUBLISH HARD INVARIANT
+# ───────────────────────────────
+# María's standing rule: NEVER auto-publish to LinkedIn. Every outbound post MUST pass
+# through an explicit human approval gate before going live, and a second human gate
+# confirming the post was manually placed on LinkedIn. The engine NEVER calls the
+# LinkedIn API directly — LinkedIn credentials are not wired (see GAPS.md).
+#
+# LinkedIn API credentials: NOT wired.
+# The publish-gate step (step 4) is intentionally human-manual until API creds exist.
+# A human reads the approved post, posts it on LinkedIn, then submits the gate with
+# the public URL. The publish_method enum records "manual" until API creds are added.
+#
+# n8n is plumbing inside step 2 only.
+# The n8n workflow "María — LinkedIn approval gate (organic)" (id 9DibaYwnFet5MTHh)
+# sends the draft to Slack as an approval card and forwards the Slack interactivity
+# callback. OpenSOP is the authoritative state machine — n8n is a side-effect inside
+# the request-slack-approval webhook step, not the SOP owner.
+#
+# Guardrail states (auditable by a human reviewer at any time):
+#   approval_requested
+#     → approved_pending_manual_publish  (decision == approve)
+#     → rejected_no_publish              (decision == reject)
+#       → published_url_logged           (URL captured + logged to marketing-gbrain)
+#         → metrics_24h_pending          (waiting 24 h after publish)
+#           → metrics_7d_pending         (waiting 7 d after publish)
+#             → complete
+#
+# Gaps tracked in GAPS.md (do not edit GAPS.md here — reference only):
+#   - N8N_MARIA_LINKEDIN_SUBMIT_URL env var must be set in production
+#   - N8N_MARIA_WEBHOOK_TOKEN env var must be set in production
+#   - MARKETING_GBRAIN_LOG_URL env var wires real gbrain logging (stub otherwise)
+#   - LinkedIn API creds not yet provisioned; publish step is manual
+#   - marketing-gbrain HTTP contract TBD
+
+opensop: "0.1"
+
+process:
+  name: maria-linkedin-post-approval
+  version: "1.0"
+  description: "End-to-end approval and tracking for a single Coba/María organic LinkedIn post"
+  owner: marketing-team
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: campaign_slug
+      type: string
+      required: true
+      description: "Campaign identifier, e.g. wed-sat-q2"
+    - name: post_id
+      type: string
+      required: true
+      description: "Unique post identifier, e.g. post-1-uber-activos"
+    - name: post_title
+      type: string
+      required: true
+    - name: post_body
+      type: string
+      required: true
+    - name: target_account
+      type: enum
+      values: [cobaremote-company, carlos-personal]
+      required: true
+      description: "LinkedIn account or page that will publish the post"
+    - name: proposed_publish_at
+      type: string
+      format: datetime
+      required: true
+      description: "ISO8601 datetime for the intended publish window"
+    - name: approval_channel
+      type: enum
+      values: [slack-maria, slack-coba-ops, manual]
+      required: true
+      description: "Which channel receives the Slack approval card"
+    - name: already_published_url
+      type: string
+      required: false
+      description: "Set when retro-fitting a post that was manually published before this process existed"
+
+  outputs:
+    - name: approval_status
+      type: enum
+      values: [approved, rejected]
+      from: steps.record-decision.outputs.decision
+    - name: rejection_reason
+      type: string
+      from: steps.record-decision.outputs.rejection_reason
+      required_if: "approval_status == 'rejected'"
+    - name: published_url
+      type: string
+      from: steps.capture-published-url.outputs.published_url
+    - name: metrics_24h
+      type: object
+      from: steps.record-24h-metrics.outputs.metrics
+    - name: metrics_7d
+      type: object
+      from: steps.record-7d-metrics.outputs.metrics
+    - name: final_status
+      type: string
+      from: steps.mark-complete.outputs.final_status
+
+  steps:
+    - id: validate-payload
+      name: "Validate process inputs"
+      type: automated
+      description: "Check all required fields, enum values, datetime format, body length, and retrofit URL"
+      inputs:
+        - name: campaign_slug
+          from: process.inputs.campaign_slug
+        - name: post_id
+          from: process.inputs.post_id
+        - name: post_title
+          from: process.inputs.post_title
+        - name: post_body
+          from: process.inputs.post_body
+        - name: target_account
+          from: process.inputs.target_account
+        - name: proposed_publish_at
+          from: process.inputs.proposed_publish_at
+        - name: approval_channel
+          from: process.inputs.approval_channel
+        - name: already_published_url
+          from: process.inputs.already_published_url
+      outputs:
+        - name: valid
+          type: boolean
+        - name: validation_notes
+          type: string
+        - name: is_retrofit
+          type: boolean
+      run: ./examples/steps/maria_validate_payload.rb
+
+    # ── NO-AUTO-PUBLISH GUARD ────────────────────────────────────────────────────
+    # Guardrail state: approval_requested
+    # At this point the draft has been validated and is being submitted to the
+    # approval channel via n8n. The engine pauses here (response_mode: callback)
+    # and will not advance until the n8n callback POST arrives at
+    # /sop/webhooks/maria-linkedin-approval.
+    # The post CANNOT be published while the engine is in this state.
+    # ────────────────────────────────────────────────────────────────────────────
+    - id: request-slack-approval
+      name: "Send draft to Slack for approval"
+      type: webhook
+      condition: "steps.validate-payload.outputs.valid == true"
+      description: "Posts the draft to the configured Slack channel via n8n and waits for a decision callback"
+      inputs:
+        - name: post_id
+          from: process.inputs.post_id
+        - name: post_title
+          from: process.inputs.post_title
+        - name: post_body
+          from: process.inputs.post_body
+        - name: target_account
+          from: process.inputs.target_account
+        - name: approval_channel
+          from: process.inputs.approval_channel
+        - name: proposed_publish_at
+          from: process.inputs.proposed_publish_at
+      outputs:
+        - name: approval_request_id
+          type: string
+        - name: slack_message_ts
+          type: string
+      webhook:
+        method: POST
+        url: "${N8N_MARIA_LINKEDIN_SUBMIT_URL}"
+        headers:
+          X-Maria-Source: opensop
+          Authorization: "Bearer ${N8N_MARIA_WEBHOOK_TOKEN}"
+        response_mode: callback
+        callback_path: /sop/webhooks/maria-linkedin-approval
+        poll_timeout: 3d
+
+    # ── BOUNDED JUDGMENT / APPROVAL POINT ────────────────────────────────────────
+    # Guardrail states after this step:
+    #   decision == approve → approved_pending_manual_publish
+    #   decision == reject  → rejected_no_publish
+    # This approval step is the L1 mineralization boundary: a human (or agent with
+    # human review) must make the publish decision. It cannot be automated without
+    # an explicit hardening pass per mineralization.md.
+    # ────────────────────────────────────────────────────────────────────────────
+    - id: record-decision
+      name: "Record approval decision"
+      type: approval
+      description: "Capture the approve/reject verdict, reason, and approver identity"
+      outputs:
+        - name: decision
+          type: enum
+          values: [approve, reject]
+        - name: rejection_reason
+          type: string
+          required_if: "decision == 'reject'"
+        - name: approver_handle
+          type: string
+          description: "Slack handle or email of the person or agent who decided"
+
+    # ── NO-AUTO-PUBLISH GUARD ────────────────────────────────────────────────────
+    # No-auto-publish guard. Human MUST publish on LinkedIn first, then submit this
+    # gate with the public URL. The engine NEVER calls LinkedIn directly —
+    # LinkedIn API credentials are not wired (see GAPS.md).
+    # If already_published_url was set on the process inputs (retrofit mode), the
+    # human may submit immediately with published=true and that URL.
+    # ────────────────────────────────────────────────────────────────────────────
+    - id: publish-gate
+      name: "Confirm manual LinkedIn publish"
+      type: approval
+      condition: "steps.record-decision.outputs.decision == 'approve'"
+      description: "Human publishes the post on LinkedIn manually, then submits this gate with the live URL"
+      outputs:
+        - name: published
+          type: boolean
+        - name: published_url
+          type: string
+          required_if: "published == true"
+        - name: publish_method
+          type: enum
+          values: [manual, api]
+          description: "Defaults to manual until LinkedIn API credentials are wired"
+
+    - id: capture-published-url
+      name: "Capture canonical published URL"
+      type: automated
+      condition: "steps.record-decision.outputs.decision == 'approve'"
+      description: "Resolves the final published URL — prefers retrofit_url if present, else manual_url from publish-gate"
+      inputs:
+        - name: manual_url
+          from: steps.publish-gate.outputs.published_url
+        - name: retrofit_url
+          from: process.inputs.already_published_url
+      outputs:
+        - name: published_url
+          type: string
+        - name: source
+          type: enum
+          values: [manual-publish, retrofit]
+      run: ./examples/steps/maria_capture_url.rb
+
+    # ── GUARDRAIL: published_url_logged ──────────────────────────────────────────
+    # Every datapoint must be logged to marketing-gbrain (María's standing rule).
+    # This step is the published_url_logged guardrail state: the URL and post
+    # metadata are committed to the gbrain log before metrics collection begins.
+    # ────────────────────────────────────────────────────────────────────────────
+    - id: log-to-gbrain
+      name: "Log publish event to marketing-gbrain"
+      type: automated
+      condition: "steps.record-decision.outputs.decision == 'approve'"
+      description: "Appends post metadata and published URL to the marketing-gbrain log"
+      inputs:
+        - name: published_url
+          from: steps.capture-published-url.outputs.published_url
+        - name: post_id
+          from: process.inputs.post_id
+        - name: campaign_slug
+          from: process.inputs.campaign_slug
+        - name: target_account
+          from: process.inputs.target_account
+        - name: decision
+          from: steps.record-decision.outputs.decision
+      outputs:
+        - name: logged
+          type: boolean
+        - name: gbrain_entry_id
+          type: string
+      run: ./examples/steps/maria_log_to_gbrain.rb
+
+    # ── GUARDRAIL: metrics_24h_pending ───────────────────────────────────────────
+    - id: wait-24h
+      name: "Wait 24 hours after publish"
+      type: wait
+      condition: "steps.record-decision.outputs.decision == 'approve'"
+      description: "Pause until 24 h have elapsed so LinkedIn impression data stabilises"
+      wait:
+        seconds: 86400
+
+    - id: record-24h-metrics
+      name: "Record 24-hour post metrics"
+      type: form
+      condition: "steps.record-decision.outputs.decision == 'approve'"
+      description: "Human or agent reads LinkedIn analytics and submits the 24 h snapshot"
+      inputs:
+        - name: published_url
+          from: steps.capture-published-url.outputs.published_url
+        - name: post_id
+          from: process.inputs.post_id
+      outputs:
+        - name: metrics
+          type: object
+          schema:
+            impressions: number
+            reactions: number
+            comments: number
+            reshares: number
+            captured_at: string
+        - name: captured_by
+          type: string
+      timeout: 3d
+      on_timeout: notify-and-wait
+
+    # ── GUARDRAIL: metrics_7d_pending ────────────────────────────────────────────
+    - id: wait-7d
+      name: "Wait 7 days after publish"
+      type: wait
+      condition: "steps.record-decision.outputs.decision == 'approve'"
+      description: "Pause until 7 d have elapsed for the full organic-reach window"
+      wait:
+        seconds: 604800
+
+    - id: record-7d-metrics
+      name: "Record 7-day post metrics"
+      type: form
+      condition: "steps.record-decision.outputs.decision == 'approve'"
+      description: "Human or agent reads LinkedIn analytics and submits the 7 d snapshot"
+      inputs:
+        - name: published_url
+          from: steps.capture-published-url.outputs.published_url
+        - name: post_id
+          from: process.inputs.post_id
+      outputs:
+        - name: metrics
+          type: object
+          schema:
+            impressions: number
+            reactions: number
+            comments: number
+            reshares: number
+            captured_at: string
+        - name: captured_by
+          type: string
+      timeout: 10d
+      on_timeout: notify-and-wait
+
+    - id: mark-complete
+      name: "Mark process complete"
+      type: automated
+      description: "Emit the terminal final_status regardless of approve/reject path"
+      inputs:
+        - name: decision
+          from: steps.record-decision.outputs.decision
+        - name: published_url
+          from: steps.capture-published-url.outputs.published_url
+          default: null
+        - name: metrics_24h
+          from: steps.record-24h-metrics.outputs.metrics
+          default: null
+        - name: metrics_7d
+          from: steps.record-7d-metrics.outputs.metrics
+          default: null
+      outputs:
+        - name: final_status
+          type: enum
+          values: [complete, rejected_no_publish]
+      run: ./examples/steps/maria_mark_complete.rb
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#coba-ops"
+
+  tags: [marketing, linkedin, organic, coba, maria]
+
+  sla:
+    target: 14d
+    warning: 10d
