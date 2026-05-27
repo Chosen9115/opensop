@@ -4,7 +4,7 @@ RSpec.describe "v0.2 llm step end-to-end", type: :request do
   before do
     # Load the smoke process into the test DB
     Opensop::Registry.load_file(
-      Rails.root.join("processes/v02-smoke-llm.sop.yaml")
+      Rails.root.join("spec/fixtures/processes/v02-smoke-llm.sop.yaml")
     )
 
     # Swap in the stub provider — no network calls

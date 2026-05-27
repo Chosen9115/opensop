@@ -13,7 +13,7 @@ RSpec.describe "v0.2 loop + llm smoke end-to-end", type: :request do
 
   before do
     Opensop::Registry.load_file(
-      Rails.root.join("processes/v02-smoke-loop-llm.sop.yaml")
+      Rails.root.join("spec/fixtures/processes/v02-smoke-loop-llm.sop.yaml")
     )
 
     # Each call to provider_resolver.(model) returns a fresh TestStub bound
