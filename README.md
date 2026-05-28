@@ -151,7 +151,9 @@ GET  /sop/:name/:id/steps               List step states
 POST /sop/:name/:id/steps/:step/submit  Advance a step
 POST /sop/:name/:id/cancel              Cancel an instance
 GET  /sop/instances                     List all instances
+GET  /sop/metrics                       Process metrics
 POST /sop/webhooks/:callback_id         Receive webhook callbacks
+POST /sop/triggers/:name                Webhook-triggered process start
 ```
 
 Auth: set `OPENSOP_API_TOKEN`, send `X-SOP-Token: <value>` on every request. Full reference in [`docs/API.md`](./docs/API.md).
@@ -228,9 +230,9 @@ bin/rails server           # http://localhost:3000
 
 OpenSOP is at MVP per [`SPEC.md`](./SPEC.md) §8. Honest accounting:
 
-- **Implemented:** YAML parser, instance executor, REST API, admin UI, RSpec coverage. `form`, `automated`, and `notification` step types are real.
-- **Stubbed** (still callable, but no I/O): `judgment`, `approval`, `webhook`, `subprocess`, `wait`. State transitions work; side effects don't yet.
-- **Planned next:** LLM-backed judgment, real outbound webhook delivery, Process Designer UI, metrics and constraint detection.
+- **Implemented:** YAML parser, instance executor, REST API, admin UI, RSpec coverage. `form`, `automated`, `notification`, and `webhook` step types are real. Third-party webhook triggers (`trigger: type: webhook`) are real — HMAC-verified, with `input_mapping` templating.
+- **Stubbed** (still callable, pauses instance at a wait state): `judgment` (LLM router not yet wired), `subprocess`, `wait` (timer not yet real). `approval` is real for the pause-and-decide flow; the human gate works, the LLM escalation path doesn't.
+- **Planned next:** LLM-backed judgment router, subprocess execution, real `wait` timers, Process Designer UI, metrics and constraint detection.
 
 ---
 
