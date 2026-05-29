@@ -1,0 +1,51 @@
+opensop: "0.1"
+
+process:
+  name: subprocess-demo
+  version: "1.0"
+  description: "Structural demo of the subprocess step type. The runtime currently parses subprocess steps but pauses without spawning the child instance — see README Status section. Useful for inspecting the schema; not yet useful for actual execution."
+
+  trigger:
+    type: api
+
+  inputs: []
+
+  outputs:
+    - name: lead_name
+      type: string
+      from: steps.prepare-inputs.outputs.lead_name
+    - name: lead_email
+      type: string
+      from: steps.prepare-inputs.outputs.lead_email
+    - name: source
+      type: string
+      from: steps.prepare-inputs.outputs.source
+
+  steps:
+    - id: prepare-inputs
+      name: "Prepare lead inputs"
+      type: automated
+      description: "Run a shell script that emits a fixed lead payload for demo purposes"
+      run: ./examples/scripts/prepare-lead-inputs.sh
+      outputs:
+        - name: lead_name
+          type: string
+        - name: lead_email
+          type: string
+        - name: source
+          type: string
+
+    - id: run-lead-qualification
+      name: "Run lead qualification subprocess"
+      type: subprocess
+      description: "Hand the prepared inputs to the lead-qualification process"
+      process: lead-qualification
+      inputs:
+        - name: lead_name
+          from: steps.prepare-inputs.outputs.lead_name
+        - name: lead_email
+          from: steps.prepare-inputs.outputs.lead_email
+        - name: source
+          from: steps.prepare-inputs.outputs.source
+
+  tags: [demo, subprocess]

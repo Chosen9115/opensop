@@ -2,7 +2,7 @@ en:
   opensop:
     app:
       name: "OpenSOP"
-      tagline: "Define your processes. Get your API."
+      tagline: "The open standard for executable processes."
 
     auth:
       sign_in:

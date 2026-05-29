@@ -1,0 +1,180 @@
+# Demo: Release & Deploy
+# Step types demonstrated: form, automated, approval, webhook, notification
+# Status in v0.1: mixed (form + automated fully executable; approval is stubbed;
+#   webhook fires but ${DEPLOY_HOOK_URL} must be set — see note below)
+#
+# WEBHOOK NOTE: The deploy webhook step uses ${DEPLOY_HOOK_URL} as a placeholder.
+# In v0.1 the webhook step IS executable, but you must set DEPLOY_HOOK_URL in
+# your environment for the call to reach a real target. Without it the step will
+# error. For demo purposes, point it at a request-bin or webhook.site URL.
+#
+# APPROVAL NOTE: The `approval` step type is recognized and stored, but the
+# approval gate UI is not yet wired in v0.1. Instances pause at that step
+# waiting for a manual `submit` API call with { "approved": true }.
+
+opensop: "0.1"
+
+process:
+  name: release-deploy
+  version: "1.0"
+  description: "Release engineer fills release notes; automated stamping produces version + build ID; human approves; deploy webhook fires; success is announced."
+  owner: platform-team
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: service
+      type: string
+      required: true
+      description: "Service name being released (e.g. api-gateway)"
+    - name: base_version
+      type: string
+      required: true
+      description: "Current semver version to increment from (e.g. 1.4.2)"
+    - name: release_engineer
+      type: string
+      required: true
+    - name: target_environment
+      type: enum
+      values: [staging, production]
+      required: true
+
+  outputs:
+    - name: version
+      type: string
+      from: steps.stamp-release.outputs.version
+    - name: artifact_tag
+      type: string
+      from: steps.stamp-release.outputs.artifact_tag
+    - name: deploy_status
+      type: string
+      from: steps.trigger-deploy.outputs.deploy_status
+
+  steps:
+    - id: fill-release-notes
+      name: "Fill release notes"
+      type: form
+      description: "Release engineer provides a summary of changes, linked PRs, and rollback plan"
+      inputs:
+        - name: service
+          from: process.inputs.service
+        - name: base_version
+          from: process.inputs.base_version
+        - name: release_engineer
+          from: process.inputs.release_engineer
+      outputs:
+        - name: release_notes
+          type: string
+        - name: linked_prs
+          type: string[]
+        - name: rollback_plan
+          type: string
+        - name: breaking_changes
+          type: boolean
+      timeout: 4h
+      on_timeout: notify-and-wait
+
+    - id: stamp-release
+      name: "Stamp version and build"
+      type: automated
+      description: "Compute next semver version, build ID, and artifact tag from base version and release notes"
+      inputs:
+        - name: service
+          from: process.inputs.service
+        - name: release_notes
+          from: steps.fill-release-notes.outputs.release_notes
+        - name: base_version
+          from: process.inputs.base_version
+      outputs:
+        - name: version
+          type: string
+        - name: build_id
+          type: string
+        - name: artifact_tag
+          type: string
+      run: ./examples/steps/stamp-release.rb
+      retry:
+        max: 2
+        backoff: exponential
+
+    - id: approve-deploy
+      name: "Approve deploy to target environment"
+      type: approval
+      description: "Release engineer or platform lead approves before the deploy webhook fires"
+      inputs:
+        - name: service
+          from: process.inputs.service
+        - name: version
+          from: steps.stamp-release.outputs.version
+        - name: artifact_tag
+          from: steps.stamp-release.outputs.artifact_tag
+        - name: target_environment
+          from: process.inputs.target_environment
+        - name: release_notes
+          from: steps.fill-release-notes.outputs.release_notes
+        - name: breaking_changes
+          from: steps.fill-release-notes.outputs.breaking_changes
+      outputs:
+        - name: approved
+          type: boolean
+        - name: approver_notes
+          type: string
+      timeout: 2h
+      on_timeout: escalate
+
+    - id: trigger-deploy
+      name: "Trigger deploy webhook"
+      type: webhook
+      description: "Fire the deploy hook and wait for a synchronous status response"
+      condition: "steps.approve-deploy.outputs.approved == true"
+      inputs:
+        - name: service
+          from: process.inputs.service
+        - name: artifact_tag
+          from: steps.stamp-release.outputs.artifact_tag
+        - name: version
+          from: steps.stamp-release.outputs.version
+        - name: target_environment
+          from: process.inputs.target_environment
+        - name: build_id
+          from: steps.stamp-release.outputs.build_id
+      outputs:
+        - name: deploy_status
+          type: enum
+          values: [success, failed, rollback]
+        - name: deploy_url
+          type: string
+      webhook:
+        method: POST
+        url: "${DEPLOY_HOOK_URL}"
+        headers:
+          Authorization: "Bearer ${DEPLOY_HOOK_SECRET}"
+          Content-Type: application/json
+        response_mode: sync
+
+    - id: announce-release
+      name: "Announce successful release"
+      type: notification
+      condition: "steps.trigger-deploy.outputs.deploy_status == 'success'"
+      inputs:
+        - name: service
+          from: process.inputs.service
+        - name: version
+          from: steps.stamp-release.outputs.version
+        - name: artifact_tag
+          from: steps.stamp-release.outputs.artifact_tag
+        - name: target_environment
+          from: process.inputs.target_environment
+        - name: release_engineer
+          from: process.inputs.release_engineer
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#platform-alerts"
+
+  tags: [devops, release, deployment, cicd]
+  sla:
+    target: 2h
+    warning: 1h

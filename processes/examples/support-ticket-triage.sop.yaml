@@ -1,0 +1,154 @@
+# Demo: Support Ticket Triage
+# Step types demonstrated: form, automated, judgment, notification
+# Status in v0.1: mixed (form + automated fully executable; judgment is stubbed — state transitions only)
+#
+# The `automated` categorizer step runs ./steps/categorize-ticket.rb which reads
+# JSON from stdin and emits category + urgency to stdout. Fully deterministic.
+# The `judgment` step is recognized by the parser but the LLM judgment router is
+# not yet wired in v0.1 — instances pause at that step awaiting a manual submit.
+
+opensop: "0.1"
+
+process:
+  name: support-ticket-triage
+  version: "1.0"
+  description: "Inbound support ticket is categorized by a script, triaged by judgment, and routed to the right queue with assignee notification."
+  owner: support-team
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: requester_email
+      type: string
+      format: email
+      required: true
+    - name: requester_name
+      type: string
+      required: true
+
+  outputs:
+    - name: ticket_id
+      type: string
+      from: steps.collect-ticket.outputs.ticket_id
+    - name: category
+      type: string
+      from: steps.categorize.outputs.category
+    - name: priority
+      type: string
+      from: steps.triage.outputs.priority
+    - name: assigned_queue
+      type: string
+      from: steps.triage.outputs.assigned_queue
+
+  steps:
+    - id: collect-ticket
+      name: "Collect ticket details"
+      type: form
+      description: "Requester or agent provides subject, body, and channel of contact"
+      inputs:
+        - name: requester_name
+          from: process.inputs.requester_name
+        - name: requester_email
+          from: process.inputs.requester_email
+      outputs:
+        - name: ticket_id
+          type: string
+        - name: subject
+          type: string
+        - name: body
+          type: string
+        - name: channel
+          type: enum
+          values: [email, chat, phone, api]
+        - name: product_area
+          type: enum
+          values: [payments, onboarding, reporting, integrations, other]
+      timeout: 1h
+      on_timeout: escalate
+
+    - id: categorize
+      name: "Categorize ticket"
+      type: automated
+      description: "Extract category and urgency from subject and body using keyword analysis"
+      inputs:
+        - name: subject
+          from: steps.collect-ticket.outputs.subject
+        - name: body
+          from: steps.collect-ticket.outputs.body
+        - name: channel
+          from: steps.collect-ticket.outputs.channel
+      outputs:
+        - name: category
+          type: enum
+          values: [billing, technical, account, feature_request, other]
+        - name: urgency
+          type: enum
+          values: [critical, high, normal, low]
+        - name: word_count
+          type: number
+      run: ./examples/steps/categorize-ticket.rb
+      retry:
+        max: 2
+        backoff: exponential
+
+    - id: triage
+      name: "Determine priority and queue"
+      type: judgment
+      description: "Assess the full ticket context (category, urgency, product area, word count) and determine priority level and routing queue"
+      inputs:
+        - name: subject
+          from: steps.collect-ticket.outputs.subject
+        - name: body
+          from: steps.collect-ticket.outputs.body
+        - name: category
+          from: steps.categorize.outputs.category
+        - name: urgency
+          from: steps.categorize.outputs.urgency
+        - name: product_area
+          from: steps.collect-ticket.outputs.product_area
+        - name: word_count
+          from: steps.categorize.outputs.word_count
+      outputs:
+        - name: priority
+          type: enum
+          values: [P1, P2, P3, P4]
+        - name: assigned_queue
+          type: enum
+          values: [tier1, tier2, billing, escalations, product]
+        - name: triage_notes
+          type: string
+        - name: suggested_response
+          type: string
+      judgment:
+        allow_agent: true
+        require_human_review: false
+        confidence_threshold: 0.85
+        escalation: queue
+
+    - id: notify-assignee
+      name: "Notify assigned queue"
+      type: notification
+      inputs:
+        - name: ticket_id
+          from: steps.collect-ticket.outputs.ticket_id
+        - name: requester_email
+          from: process.inputs.requester_email
+        - name: priority
+          from: steps.triage.outputs.priority
+        - name: assigned_queue
+          from: steps.triage.outputs.assigned_queue
+        - name: category
+          from: steps.categorize.outputs.category
+        - name: subject
+          from: steps.collect-ticket.outputs.subject
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#support-ops"
+
+  tags: [support, triage, customer-service]
+  sla:
+    target: 4h
+    warning: 2h
