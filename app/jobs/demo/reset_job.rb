@@ -10,10 +10,9 @@ module Demo
   # Behaviour:
   #   - No-op when DEMO_MODE is not enabled (safe to leave in recurring.yml
   #     on non-demo deployments — it just logs and exits).
-  #   - In a single transaction: destroys all Sop::Instance rows (which
-  #     cascades to Sop::Step, Sop::Event, and Sop::Callback via dependent:
-  #     :destroy defined on Sop::Instance) and then calls Demo::SeedLoader.call
-  #     to reload process definitions and re-verify the demo token.
+  #   - In a single transaction: destroys all Sop::Instance rows, purges
+  #     Sop::Process registrations, and calls Demo::SeedLoader.call to
+  #     reload definitions cleanly from processes/examples/.
   #   - Logs a one-liner with cleared/reseeded counts so the job appears in
   #     Solid Queue's finished-job log and the Rails structured log.
   class ResetJob < ApplicationJob
@@ -26,6 +25,7 @@ module Demo
       end
 
       cleared = 0
+      processes_cleared = 0
       seed_result = nil
 
       ActiveRecord::Base.transaction do
@@ -38,11 +38,19 @@ module Demo
         Sop::Step.delete_all
         cleared = Sop::Instance.delete_all
 
+        # Purge process registrations too — without this, stale entries from
+        # prior mis-seedings survive every reset. Demo::SeedLoader upserts
+        # by name rather than replacing, so a Sop::Process row registered by
+        # a previous (broader) seed glob stays in the table forever even after
+        # the underlying YAML file moves out of the seeded path. Delete-all
+        # here guarantees SeedLoader.call below reseeds from a clean slate.
+        processes_cleared = Sop::Process.delete_all
+
         seed_result = Demo::SeedLoader.call
       end
 
       Rails.logger.info(
-        "[demo-reset] cleared #{cleared} instances, " \
+        "[demo-reset] cleared #{cleared} instances, #{processes_cleared} stale processes; " \
         "reseeded #{seed_result.processes_loaded} processes"
       )
     end
