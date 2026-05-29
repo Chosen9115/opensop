@@ -86,47 +86,68 @@ You make your processes the moat — reliable, auditable, versioned across teams
 
 ## Define once, get the API
 
-The YAML:
+The morning-briefing process from the section above, as YAML:
 
 ```yaml
 opensop: "0.1"
 process:
-  name: customer-onboarding
+  name: morning-briefing
   version: "1.0"
-  trigger: { type: api }
+  trigger: { type: schedule, cron: "50 7 * * 1-5" }
   inputs:
-    - { name: company_name, type: string, required: true }
+    - { name: date, type: string, format: date, required: true }
   steps:
-    - id: collect-details
-      type: form
-      outputs:
-        - { name: contact_email, type: string, format: email }
-
-    - id: provision-account
+    - id: fetch-slack
       type: automated
-      run: ./scripts/provision.rb
-      inputs:
-        - { name: email, from: steps.collect-details.outputs.contact_email }
+      run: ./scripts/fetch-slack.sh
       outputs:
-        - { name: account_id, type: string }
+        - { name: success, type: boolean }
+        - { name: unread_count, type: number }
 
-    - id: send-welcome
+    - id: fetch-gmail
+      type: automated
+      run: ./scripts/fetch-gmail.sh
+      outputs:
+        - { name: success, type: boolean }
+
+    - id: fetch-calendar
+      type: automated
+      run: ./scripts/fetch-calendar.sh
+      outputs:
+        - { name: success, type: boolean }
+        - { name: events, type: object }
+
+    - id: synthesize
+      type: llm
+      model: claude-opus-4-7
+      condition: |
+        steps.fetch-slack.outputs.success == true &&
+        steps.fetch-gmail.outputs.success == true &&
+        steps.fetch-calendar.outputs.success == true
+      prompt: "Synthesize a 200-word brief from these sources..."
+      outputs:
+        - { name: brief, type: string }
+
+    - id: deliver
       type: notification
-      inputs:
-        - { name: account_id, from: steps.provision-account.outputs.account_id }
+      channel: slack
+      to: "#daily-briefings"
+      body: "{{ steps.synthesize.outputs.brief }}"
 ```
+
+The `condition:` on the synthesize step is what makes "the agent can't laundery missing data" mechanical: if any fetch returned `success: false`, the LLM is never asked to fill the gap. The instance pauses; the receipt shows which fetch failed; the brief is honestly partial.
 
 The API (auto-generated, no glue code):
 
 ```bash
-$ curl -X POST localhost:3000/sop/customer-onboarding/start \
+$ curl -X POST localhost:3000/sop/morning-briefing/start \
     -H "X-SOP-Token: $TOKEN" \
-    -d '{"company_name": "Acme"}'
+    -d '{"date": "2026-05-29"}'
 
 { "instance_id": "01HX...", "state": "running" }
 ```
 
-Humans and agents drive it the same way. A human submits the form via the admin UI. An agent submits via `POST /sop/customer-onboarding/<id>/steps/collect-details/submit`. Same endpoint. Same state. Same audit log.
+Humans and agents drive it the same way. An agent triggers the schedule; a human can run it on demand via the admin UI; both produce the same receipt against the same audit log.
 
 ---
 
@@ -211,9 +232,9 @@ Auth: set `OPENSOP_API_TOKEN`, send `X-SOP-Token: <value>` on every request. Adm
 
 [Coba](https://coba.ai) runs internal operations and scheduled engineering agents on OpenSOP. Improvements that come out of that work flow upstream first.
 
-We use OpenSOP to harness our own army of agents — running development operations and internal admin workflows. Reliably.
+**We use OpenSOP to harness our own army of agents** — running development operations and internal admin workflows. Reliably. `opensop-worker` is a Rust daemon scheduling 11 specialized agents across our Rails projects. They review PRs, bump dependencies, resolve conflicts, re-run CI, generate `AGENTS.md` files, write release notes, and handle the small engineering chores humans usually defer or forget. Each job is a typed `.sop.yaml` process — named steps, bounded inputs and outputs, structured prompts, parsed responses, size caps, git diff checks, append-only receipts. **The agents do the creative work. OpenSOP provides the rails.**
 
-`opensop-worker` is one of them: a Rust daemon scheduling 11 specialized agents across our Rails projects. The agents review PRs, bump dependencies, resolve conflicts, re-run CI, generate `AGENTS.md` files, write release notes, and handle small engineering chores humans usually defer or forget. Each job is a typed process with named steps, bounded inputs and outputs, structured prompts, parsed responses, size caps, git diff checks, and append-only receipts. **The agents do the creative work. OpenSOP provides the rails.**
+The morning-briefing process from earlier in this doc is another one — it runs every weekday at 7:50 UTC, fetches from five sources, synthesizes only when the deterministic fetches succeed, and delivers to Slack. Same shape: agent + harness.
 
 ---
 
