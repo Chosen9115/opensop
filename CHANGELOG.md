@@ -2,6 +2,32 @@
 
 All notable changes to OpenSOP. Format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — 2026-05-26
+
+### Added — self-host
+
+- **One-command Docker Compose install.** Two paths share the same stack:
+  - **Script-driven:** `curl -fsSL .../scripts/install.sh | bash` — generates `RAILS_MASTER_KEY`, `SECRET_KEY_BASE`, `OPENSOP_API_TOKEN`, and a Postgres password; writes `.env` (mode 600); brings the stack up; polls `/up`; smoke-tests `/sop/`. (#49)
+  - **Agent-driven:** Point Claude Code or Cursor at `INSTALL_FOR_AGENTS.md` — a machine-readable contract with mandatory decision-gate pauses for mode (local-dev / self-host-local / public), auth config, LLM integration, and first admin. (#49)
+- **`OPENSOP_DISABLE_AUTH`** — guarded login-bypass for local-dev and trusted single-machine installs. When set, the admin UI auto-authenticates as the bootstrap admin without a passkey ceremony. Silently ignored when `OPENSOP_RP_ID` is a real domain, so public deployments always stay behind auth. A red banner in the admin UI and a loud boot-log warning surface whenever the bypass is active. (#49)
+- **Makefile** — 13 targets for ongoing ops: `setup`, `up`, `down`, `logs`, `shell`, `console`, `health`, `backup`, `rotate-token`, `rotate-master-key`, `uninstall`. Includes cross-platform `sed` handling (BSD vs GNU). (#49)
+
+### Fixed — self-host
+
+- **Solid Cache / Queue databases weren't wired in Compose.** Only `DATABASE_URL` was forwarded to the app container; `CACHE_DATABASE_URL` and `QUEUE_DATABASE_URL` were unset, so `db:prepare` fell back to a local socket and aborted under `bash -e`, crash-looping the container. Fixed by pointing them at dedicated databases on the same `db` service. (#49)
+- **`SOLID_QUEUE_IN_PUMA` was hardcoded `true` in Compose**, overriding `.env`. In `local-dev` mode (`RAILS_ENV=development`) the Solid Queue tables are never migrated, so the in-Puma supervisor crashed Puma on boot. Compose now honors the env var; `install.sh` writes `SOLID_QUEUE_IN_PUMA=false` for local-dev. (#49)
+
+### Fixed — CI
+
+- **GitHub Actions deploy job skipped when `FLY_API_TOKEN` is unset.** The job previously ran and failed at the auth step. Now exits early with a warning so the rest of CI isn't blocked on deploys from forks or branches without the secret. (#45)
+
+### Maintenance
+
+- **Process library curated for fresh installs.** A fresh `db:seed` previously registered everything under `processes/` — including internal engine smoke-test fixtures and undocumented AppSignal worker definitions that operators have no use for. Trimmed to the two README-documented examples (`customer-onboarding`, `lead-qualification`). Smoke-test fixtures moved to `spec/fixtures/processes/`; the fork convention (drop `processes/<your-org>/` and it auto-loads) is unchanged. (#50)
+- **Dependabot bumps:** `pagy` 43.5.5 (#46), `bootsnap` 1.24.5 (#47).
+
+---
+
 ## [Unreleased] — 2026-05-19
 
 The big shift this week was the **passkey admin auth migration shipping to production** — see the section below for the full migration guide. Everything in this entry is on top of that.

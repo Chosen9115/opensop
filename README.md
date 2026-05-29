@@ -246,7 +246,9 @@ GET  /sop/:name/:id/steps               List step states
 POST /sop/:name/:id/steps/:step/submit  Advance a step
 POST /sop/:name/:id/cancel              Cancel an instance
 GET  /sop/instances                     List all instances
+GET  /sop/metrics                       Process metrics
 POST /sop/webhooks/:callback_id         Receive webhook callbacks
+POST /sop/triggers/:name                Webhook-triggered process start
 ```
 
 Auth: set `OPENSOP_API_TOKEN`, send `X-SOP-Token: <value>` on every request. Admin UI uses passkeys (WebAuthn). Full reference in [`docs/API.md`](./docs/API.md); first-admin bootstrap in [`INSTALL.md`](./INSTALL.md).
@@ -267,9 +269,9 @@ The morning-briefing process from earlier in this doc is another one — it runs
 
 OpenSOP is at MVP per [`SPEC.md`](./SPEC.md) §8. Honest accounting:
 
-- **Real and exercised in production**: YAML parser, instance executor, REST API, admin UI, RSpec coverage, audit-trail receipts. The following step types execute fully end-to-end: `form`, `automated`, `webhook` (sync + callback modes), `loop`, `llm`.
+- **Real and exercised in production**: YAML parser, instance executor, REST API, admin UI, RSpec coverage, audit-trail receipts. The following step types execute fully end-to-end: `form`, `automated`, `webhook` (sync + callback modes), `loop`, `llm`. Third-party webhook triggers (`trigger: type: webhook`) are also real — HMAC-verified, with `input_mapping` templating.
 - **Partial**: `judgment` (LLM routing wired via the CLI; server-side LLM router pending), `approval` (state transitions work; no human-facing approval queue UI yet), `notification` (state machine + parsing complete; the executor returns `notified: true` without actually dispatching — wire your channel adapters before relying on it), `subprocess` (parses; doesn't yet spawn the child instance), `wait` (returns immediately for `seconds:` durations; long timer support tracked).
-- **Planned next**: `webhook` poll-mode response, replay protection for inbound triggers, Process Designer UI, metrics + constraint detection, embedding-based `suggest` once catalogs cross ~150 entries.
+- **Planned next**: `webhook` poll-mode response, replay protection for inbound triggers, LLM-backed judgment router, subprocess execution, real `wait` timers, Process Designer UI, metrics + constraint detection, embedding-based `suggest` once catalogs cross ~150 entries.
 
 ---
 
