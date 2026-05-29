@@ -176,26 +176,26 @@ Humans and agents drive it the same way. An agent triggers the schedule; a human
 
 ---
 
-## Which runtime fits your work?
+## One runtime. One CLI.
 
-Two runtimes, one spec. Both consume the same `.sop.yaml` files and produce the same receipts. The difference is lifetime and audience:
+The Rails app is the runtime — it executes processes, stores state, and owns the audit log. The CLI is a thin HTTP client that talks to it:
 
-| | **Hosted runtime** (this repo) | **Portable runtime** ([`opensop-cli`](https://github.com/Chosen9115/opensop-cli)) |
+| | **Hosted runtime** (this repo) | **CLI client** ([`opensop-cli`](https://github.com/Chosen9115/opensop-cli)) |
 |---|---|---|
-| **Best for** | Multi-team workflows: DDQs, customer onboarding, expense approval, release deploys, week-long async flows | Agent-embedded skills: cron-driven routines, CI checks, mineralized agent procedures |
-| **Lifetime** | Always-on Rails app | Ephemeral — invoked, executes, exits |
-| **State** | Central Postgres + dashboard | Per-workdir `.opensop/` directory |
-| **Async patterns** | Native — `wait`, approvals, callback webhooks, escalations | Synchronous; long-running async hands off to a hosted runtime |
-| **Audience** | Humans + teams who need a dashboard | Single agents who need a contract |
-| **Install** | `docker compose up` (this repo) | `curl \| sh` (the CLI repo) |
+| **What it is** | The runtime — processes execute here, state lives here, the audit log accumulates here | A bash wrapper around the `/sop/*` HTTP endpoints; one file, deps are `curl` + `jq` |
+| **Best for** | Self-hosting OpenSOP for your team — DDQs, customer onboarding, expense approval, multi-actor flows | Talking to any OpenSOP server from the terminal — yours, ours, the public demo |
+| **State** | PostgreSQL + admin UI dashboard | Tiny `~/.opensop/instances.tsv` cache for id→name lookups; real state lives on whatever server you point at |
+| **Install** | `docker compose up` (this repo) | `curl ... \| sh` ([the CLI repo](https://github.com/Chosen9115/opensop-cli)) |
 
-Most stacks end up using both. An agent runs a mineralized skill locally on the portable runtime; when the result needs to be visible across the team, `opensop push` syncs the receipts to the hosted dashboard. The spec is the wire format; the runtimes coexist.
+The same `.sop.yaml` serves both sides: you register it with the runtime once, and the CLI is how you interact with it from a terminal or a script. The `--local` flag on the CLI just points `OPENSOP_URL` at `http://localhost:3000` — it is not a separate execution engine.
+
+A true portable runtime (local execution, no server required) is on the roadmap as v0.5 but does not exist yet. If that is what you need, watch that milestone.
 
 ---
 
 ## The companion CLI
 
-[`opensop-cli`](https://github.com/Chosen9115/opensop-cli) is a single-file bash client that talks to any OpenSOP runtime. It's also where most agents start their work:
+[`opensop-cli`](https://github.com/Chosen9115/opensop-cli) is a single-file bash client that talks to any OpenSOP server. Agents and humans use it to discover, trigger, and inspect processes without leaving the terminal:
 
 ```bash
 opensop search "qualify a sales lead"          # ranked text retrieval over registered processes
