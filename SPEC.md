@@ -1156,7 +1156,7 @@ The UI adds convenience (visual builder, drag-and-drop, dashboards) but introduc
 
 **Project name:** OpenSOP
 **Domain:** opensop.ai
-**Tagline:** "Define your processes. Get your API."
+**Tagline:** "The open standard for executable processes."
 **Repo:** `Chosen9115/opensop`
 **License:** Apache 2.0 (permissive, enterprise-friendly, patent grant)
 

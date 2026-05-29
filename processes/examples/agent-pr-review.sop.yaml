@@ -1,0 +1,177 @@
+# Demo: Agent PR Review
+# Step types demonstrated: form, judgment, automated, notification
+# Status in v0.1: mixed (form + automated fully executable; judgment is stubbed — state transitions only)
+#
+# AGENT HARNESS PATTERN: This process demonstrates how OpenSOP wraps an LLM
+# code-review call inside a typed, auditable gate. The `judgment` step receives
+# the PR diff and metadata as structured inputs, emits a typed decision
+# (approve | request_changes | comment), and records confidence + decided_by.
+# Humans can always override via POST /sop/agent-pr-review/{id}/steps/review-pr/submit.
+#
+# GITHUB INTEGRATION NOTE: Real GitHub comment posting (the `post-comment` step)
+# is out of scope for v0.1. The step runs ./steps/post-pr-comment.rb which
+# simulates a successful post to stdout without making any real API calls.
+# Wire a real GitHub token and API call when hardening for production.
+
+opensop: "0.1"
+
+process:
+  name: agent-pr-review
+  version: "1.0"
+  description: "An agent reviews a pull request diff and emits a typed decision (approve, request_changes, or comment); a stub posts the review; the author is notified."
+  owner: platform-team
+
+  trigger:
+    type: api
+
+  inputs:
+    - name: pr_url
+      type: string
+      required: true
+      description: "Full GitHub PR URL (e.g. https://github.com/org/repo/pull/42)"
+    - name: repo
+      type: string
+      required: true
+      description: "Repository slug (e.g. acme/api-gateway)"
+    - name: base_branch
+      type: string
+      required: true
+      description: "Target branch the PR merges into (e.g. main)"
+    - name: author_email
+      type: string
+      format: email
+      required: true
+      description: "PR author email for notification"
+    - name: reviewer_context
+      type: string
+      description: "Optional instructions or focus areas for the review agent"
+
+  outputs:
+    - name: review_decision
+      type: string
+      from: steps.review-pr.outputs.review_decision
+    - name: summary
+      type: string
+      from: steps.review-pr.outputs.summary
+    - name: comment_url
+      type: string
+      from: steps.post-comment.outputs.comment_url
+
+  steps:
+    - id: collect-pr-details
+      name: "Collect PR details and diff"
+      type: form
+      description: "Agent or engineer provides the diff and metadata needed for review"
+      inputs:
+        - name: pr_url
+          from: process.inputs.pr_url
+        - name: repo
+          from: process.inputs.repo
+        - name: base_branch
+          from: process.inputs.base_branch
+      outputs:
+        - name: title
+          type: string
+        - name: description
+          type: string
+        - name: diff
+          type: string
+          description: "Full unified diff of the PR (git diff output)"
+        - name: files_changed
+          type: number
+        - name: lines_added
+          type: number
+        - name: lines_removed
+          type: number
+      timeout: 30m
+      on_timeout: notify-and-wait
+
+    - id: review-pr
+      name: "Agent code review"
+      type: judgment
+      description: "LLM reviews the PR diff for correctness, style, security issues, and test coverage; emits a typed decision with line-level comments"
+      inputs:
+        - name: pr_url
+          from: process.inputs.pr_url
+        - name: repo
+          from: process.inputs.repo
+        - name: base_branch
+          from: process.inputs.base_branch
+        - name: title
+          from: steps.collect-pr-details.outputs.title
+        - name: description
+          from: steps.collect-pr-details.outputs.description
+        - name: diff
+          from: steps.collect-pr-details.outputs.diff
+        - name: files_changed
+          from: steps.collect-pr-details.outputs.files_changed
+        - name: reviewer_context
+          from: process.inputs.reviewer_context
+      outputs:
+        - name: review_decision
+          type: enum
+          values: [approve, request_changes, comment]
+        - name: summary
+          type: string
+          description: "High-level review summary (1-3 paragraphs)"
+        - name: line_comments
+          type: string[]
+          description: "Array of file:line:comment strings for specific feedback"
+        - name: security_flags
+          type: string[]
+          description: "Any security concerns identified"
+        - name: test_coverage_ok
+          type: boolean
+      judgment:
+        allow_agent: true
+        require_human_review: false
+        confidence_threshold: 0.80
+        escalation: manual
+
+    - id: post-comment
+      name: "Post review comment (demo stub)"
+      type: automated
+      description: "Simulates posting the review to GitHub. In production, replace this script with a real GitHub API call. See NOTE in file header."
+      inputs:
+        - name: pr_url
+          from: process.inputs.pr_url
+        - name: review_decision
+          from: steps.review-pr.outputs.review_decision
+        - name: summary
+          from: steps.review-pr.outputs.summary
+        - name: line_comments
+          from: steps.review-pr.outputs.line_comments
+      outputs:
+        - name: comment_posted
+          type: boolean
+        - name: comment_url
+          type: string
+      run: ./examples/steps/post-pr-comment.rb
+      retry:
+        max: 2
+        backoff: exponential
+
+    - id: notify-author
+      name: "Notify PR author"
+      type: notification
+      inputs:
+        - name: author_email
+          from: process.inputs.author_email
+        - name: pr_url
+          from: process.inputs.pr_url
+        - name: review_decision
+          from: steps.review-pr.outputs.review_decision
+        - name: comment_url
+          from: steps.post-comment.outputs.comment_url
+        - name: summary
+          from: steps.review-pr.outputs.summary
+
+  on_error:
+    notify:
+      channel: slack
+      target: "#platform-alerts"
+
+  tags: [developer-tooling, code-review, agent-harness, ai]
+  sla:
+    target: 30m
+    warning: 15m

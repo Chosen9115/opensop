@@ -1,0 +1,59 @@
+opensop: "0.1"
+process:
+  name: morning-briefing
+  version: "1.0"
+  description: "Daily morning briefing from Slack, Gmail, Calendar. Synthesizes only when all deterministic fetches succeeded."
+  trigger:
+    type: schedule
+    cron: "50 7 * * 1-5"
+  inputs:
+    - { name: date, type: string, format: date, required: true }
+  steps:
+    - id: fetch-slack
+      name: Fetch Slack
+      type: automated
+      run: ./scripts/fetch-slack.sh
+      outputs:
+        - { name: success, type: boolean }
+        - { name: unread_count, type: number }
+
+    - id: fetch-gmail
+      name: Fetch Gmail
+      type: automated
+      run: ./scripts/fetch-gmail.sh
+      outputs:
+        - { name: success, type: boolean }
+
+    - id: fetch-calendar
+      name: Fetch Calendar
+      type: automated
+      run: ./scripts/fetch-calendar.sh
+      outputs:
+        - { name: success, type: boolean }
+        - { name: events, type: object }
+
+    - id: synthesize
+      name: Synthesize brief
+      type: llm
+      model: claude-opus-4-7
+      expected_output_schema:
+        brief: string
+      condition: |
+        steps.fetch-slack.outputs.success == true &&
+        steps.fetch-gmail.outputs.success == true &&
+        steps.fetch-calendar.outputs.success == true
+      prompt: |
+        Synthesize a 200-word morning briefing from these sources:
+        - Slack DMs: {{ steps.fetch-slack.outputs.unread_count }} unread
+        - Gmail: confirmed fetched
+        - Calendar events: {{ steps.fetch-calendar.outputs.events }}
+        Be honest about gaps. Don't invent data.
+      outputs:
+        - { name: brief, type: string }
+
+    - id: deliver
+      name: Deliver to Slack
+      type: notification
+      channel: slack
+      to: "#daily-briefings"
+      body: "{{ steps.synthesize.outputs.brief }}"
