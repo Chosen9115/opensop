@@ -78,7 +78,7 @@ You hand your agents a process library they all consume the same way.
 
 You make your processes the moat — reliable, auditable, versioned across teams.
 
-- **~10× faster MTTR on production bugs.** When a customer reports a parsing bug, you don't `fly logs | grep | reconstruct`. You query `step_states` for that instance. Inputs, outputs, retries, durations — every step's full state lives queryably.
+- **~10× faster MTTR on production bugs.** When a customer reports a parsing bug, you don't `fly logs | grep | reconstruct`. You query `sop_steps` for that instance. Inputs, outputs, retries, durations — every step's full state lives queryably.
 - **One artifact is the runbook, the API, and the onboarding doc.** `parse-customer-ddq.sop.yaml` is the spec, the executable contract, and the doc you hand to a new ops person. No three-source drift.
 - **5% silent error doesn't compound.** Every run is logged; every drift is visible; every regression is replayable.
 
@@ -98,6 +98,7 @@ process:
     - { name: date, type: string, format: date, required: true }
   steps:
     - id: fetch-slack
+      name: Fetch Slack
       type: automated
       run: ./scripts/fetch-slack.sh
       outputs:
@@ -105,12 +106,14 @@ process:
         - { name: unread_count, type: number }
 
     - id: fetch-gmail
+      name: Fetch Gmail
       type: automated
       run: ./scripts/fetch-gmail.sh
       outputs:
         - { name: success, type: boolean }
 
     - id: fetch-calendar
+      name: Fetch Calendar
       type: automated
       run: ./scripts/fetch-calendar.sh
       outputs:
@@ -118,8 +121,11 @@ process:
         - { name: events, type: object }
 
     - id: synthesize
+      name: Synthesize brief
       type: llm
       model: claude-opus-4-7
+      expected_output_schema:
+        brief: string
       condition: |
         steps.fetch-slack.outputs.success == true &&
         steps.fetch-gmail.outputs.success == true &&
@@ -129,6 +135,7 @@ process:
         - { name: brief, type: string }
 
     - id: deliver
+      name: Deliver to Slack
       type: notification
       channel: slack
       to: "#daily-briefings"
@@ -197,7 +204,7 @@ Ten step types, strict semantics:
 | `automated` | Run a script (any language, detected by extension) |
 | `judgment` | LLM or human decision with confidence threshold and escalation |
 | `approval` | Binary gate — a human must approve or reject |
-| `webhook` | Outbound HTTP call (sync, callback, or poll) |
+| `webhook` | Outbound HTTP call (sync or callback; poll mode parses but is not yet implemented) |
 | `subprocess` | Start another OpenSOP process |
 | `notification` | Fire-and-forget message (email, Slack, SMS) |
 | `loop` | Iterate over a list, accumulating outputs |
@@ -242,8 +249,8 @@ The morning-briefing process from earlier in this doc is another one — it runs
 
 OpenSOP is at MVP per [`SPEC.md`](./SPEC.md) §8. Honest accounting:
 
-- **Real and exercised in production**: YAML parser, instance executor, REST API, admin UI, RSpec coverage, audit-trail receipts. The following step types execute fully end-to-end: `form`, `automated`, `notification`, `webhook` (sync + callback modes), `loop`, `llm`.
-- **Partial**: `judgment` (LLM routing wired via the CLI; server-side LLM router pending), `approval` (state transitions work; no human-facing approval queue UI yet), `subprocess` (parses; doesn't yet spawn the child instance), `wait` (returns immediately for `seconds:` durations; long timer support tracked).
+- **Real and exercised in production**: YAML parser, instance executor, REST API, admin UI, RSpec coverage, audit-trail receipts. The following step types execute fully end-to-end: `form`, `automated`, `webhook` (sync + callback modes), `loop`, `llm`.
+- **Partial**: `judgment` (LLM routing wired via the CLI; server-side LLM router pending), `approval` (state transitions work; no human-facing approval queue UI yet), `notification` (state machine + parsing complete; the executor returns `notified: true` without actually dispatching — wire your channel adapters before relying on it), `subprocess` (parses; doesn't yet spawn the child instance), `wait` (returns immediately for `seconds:` durations; long timer support tracked).
 - **Planned next**: `webhook` poll-mode response, replay protection for inbound triggers, Process Designer UI, metrics + constraint detection, embedding-based `suggest` once catalogs cross ~150 entries.
 
 ---
