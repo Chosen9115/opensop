@@ -8,13 +8,11 @@
 
 **OpenAPI describes APIs. OpenSOP describes the work behind them.**
 
-OpenSOP is not a no-code workflow builder. It is not an LLM orchestration framework. It is not a BPM tool with a new paintjob. It is a specification format with a reference runtime: define a process in YAML, get a typed REST API, collect append-only receipts. That's the full contract.
+---
 
-A customer reports a bad parse at 2 a.m. You open the logs. Nothing useful. The engineer who wrote the script left six months ago. The Notion runbook is two product cycles stale.
+## Why we built OpenSOP
 
-This is a process-storage problem, not a debugging problem. The process lived in three disconnected places — a Notion doc, a Slack thread, and three engineers' heads — and none of them were queryable. Humans forget them. Agents improvise around them. The process drifts.
-
-OpenSOP collapses all three into one artifact. Write the process in YAML. Get a typed REST API for free. Humans submit forms; agents POST JSON; both drive the same endpoints, against the same state, with the same audit log.
+We got tired of agents claiming they did things when they hadn't, and noticed most of what we'd asked them to do was deterministic in the first place. OpenSOP runs the deterministic parts on a code runtime — auditable, reliable, cheaper than tokens — and reserves agents for what genuinely needs intelligence.
 
 ---
 
@@ -40,18 +38,6 @@ Working OpenSOP at `http://localhost:3000` in about 90 seconds. For manual setup
 
 ---
 
-## What changes when you use OpenSOP
-
-Three places where it pays off, in order of leverage:
-
-- **Pre-deploy gates that block regressions before they merge.** A `condition:` on a `webhook` step ("only deploy if the test suite returned green") is one YAML line. Engineering finds out about regressions before reverting, not after.
-- **~10× faster MTTR on production bugs.** When a customer reports a parsing bug, you don't `fly logs | grep | reconstruct`. You query `step_states` for that instance. Inputs, outputs, retries, durations — every step's full state lives queryably in SQLite/Postgres.
-- **One artifact is the runbook, the API, and the onboarding doc.** `parse-customer-ddq.sop.yaml` is the spec, the executable contract, and the doc you hand to a new ops person. No more three-source drift.
-
-LLMs are good at judgment, synthesis, and code generation. They are bad at staying inside operational boundaries. **OpenSOP keeps the creative part narrow.** Each agentic workflow is a named process with typed inputs, explicit outputs, structured prompts, schema validation, size caps, critical-path exclusions, and ground-truth checks before side effects. The LLM does the part it's good at. The runtime catches schema drift, hallucinated files, scope creep, and unsafe changes before they touch production.
-
----
-
 ## Agents plan. The runtime runs.
 
 We built OpenSOP because we got tired of agents saying they did things when they didn't. We wanted to audit their work — and then noticed something else: most of what we were asking agents to do was deterministic. CLI calls. File reads. Data fetches. **What's better than an agent at deterministic work than an actual code runtime? Cheaper than tokens, faster than an agent, consistent and reliable.**
@@ -65,6 +51,36 @@ Without a harness, the Calendar API times out at 7:51:34. The agent doesn't say 
 With OpenSOP, that briefing is a process. Five steps, each a deterministic CLI fetch with a required `success: true` output. Calendar fails at step three; the runtime stops. It does not ask the LLM to fill the gap. You get back exactly what was collected — _"Slack ✓ (3 unread DMs), Gmail ✓ (14 threads), Calendar unavailable at 07:51:34, Notion + Circleback skipped, synthesis not run"_ — with a receipt. Honest, partial, useful.
 
 Better yet: **agents can write the process for you.** A new `.sop.yaml` takes seconds with the right prompt. **Create, test, audit, iterate, improve, cement** — now you have a process that runs without an agent in the loop. Auditability is the superpower; reliability is the moat. Your processes — not the agent, not the model — are what compound.
+
+---
+
+## What you get
+
+Three shapes of value depending on what you bring:
+
+### As an agent author
+
+You mineralize a `SKILLS.md` or a markdown runbook into a `.sop.yaml`. The agent helps you write it; the runtime helps you trust it.
+
+- **Stop re-deriving the same plan.** Once the process is registered, your agent invokes it instead of rebuilding it from scratch every session.
+- **Every run produces a receipt.** Step inputs, outputs, retries, durations — queryable in SQLite or Postgres. No more "I think it ran."
+- **Cheaper per execution.** The deterministic bits run as code, not as LLM calls. Tokens stay reserved for the parts that need intelligence.
+
+### As a team
+
+You hand your agents a process library they all consume the same way.
+
+- **One contract for humans and agents.** Humans submit forms; agents POST JSON; both drive the same endpoints, against the same state, with the same audit log.
+- **Pre-deploy gates that block regressions before they merge.** A `condition:` on a `webhook` step ("only deploy if the test suite returned green") is one YAML line. Engineering finds out about regressions before reverting, not after.
+- **Portable and hosted runtimes share the same `.sop.yaml`.** Use the CLI for agent-embedded work; the dashboard for team visibility. Same artifact, same receipts.
+
+### As an organization
+
+You make your processes the moat — reliable, auditable, versioned across teams.
+
+- **~10× faster MTTR on production bugs.** When a customer reports a parsing bug, you don't `fly logs | grep | reconstruct`. You query `step_states` for that instance. Inputs, outputs, retries, durations — every step's full state lives queryably.
+- **One artifact is the runbook, the API, and the onboarding doc.** `parse-customer-ddq.sop.yaml` is the spec, the executable contract, and the doc you hand to a new ops person. No three-source drift.
+- **5% silent error doesn't compound.** Every run is logged; every drift is visible; every regression is replayable.
 
 ---
 
