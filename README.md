@@ -54,6 +54,24 @@ Better yet: **agents can write the process for you.** A new `.sop.yaml` takes se
 
 ---
 
+## Real-world proof: gbrain, mineralized
+
+To stress-test the "agents plan, runtime runs" thesis, we OpenSOPized six workflows from [gbrain](https://github.com/garrytan/gbrain) (Garry Tan's open-source knowledge brain for agents). The mineralization recovered the deterministic work and left the LLM with just the judgment.
+
+| Process | Steps | LLM steps | Deterministic steps |
+|---|---|---|---|
+| `gbrain-meeting-ingest` | 8 | 1 | 7 |
+| `gbrain-data-research-tracker` | 9 | 1–2 | 7–8 |
+| `gbrain-dream-consolidation-audit` | 7 | 1 | 6 |
+| `gbrain-skill-authoring` | 9 | 2 | 7 |
+| `gbrain-retrieval-regression` | 10 | 1 | 9 |
+| `gbrain-upgrade-migration` | 14 | 1 | 13 |
+| **Total across 6 processes** | **57** | **~7** | **~50** |
+
+**~88% of agent operations moved from LLM calls to deterministic code.** Most "agent decisions" weren't really decisions — they were CLI calls or data fetches dressed up as cognitive work. OpenSOP recovers that surface for the runtime: cheaper per execution, auditable, reliable. The LLM keeps the ~12% that actually required judgment.
+
+---
+
 ## What you get
 
 Three shapes of value depending on what you bring:
