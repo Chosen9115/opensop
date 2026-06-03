@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# opensop-local — a portable, auditable, server-less OpenSOP runtime.
+#
+# No Rails, no daemon, no network. Reads a JSON process definition, runs its
+# steps in order locally, threads a shared JSON context between them, and
+# writes an append-only on-disk receipt for every step. Depends only on bash
+# and jq — runs anywhere either exists.
+#
+# Process format (.sop.json):
+#   {
+#     "name": "greet",
+#     "version": "1.0",
+#     "description": "...",
+#     "inputs":  { "today": "" },
+#     "steps": [
+#       { "id": "scan", "type": "automated", "run": "steps/scan.sh",
+#         "description": "list overdue friends" },
+#       { "id": "surface", "type": "shell",
+#         "run": "jq -r '.scan.overdue[]' <<< \"$OSL_CONTEXT\"" }
+#     ]
+#   }
+#
+# Each step receives the full accumulated context as JSON: on stdin AND in the
+# env var OSL_CONTEXT. Context = process inputs + every prior step's output,
+# keyed by step id. A step prints a JSON object to stdout; that object is
+# merged into context under the step's id. Non-JSON stdout is stored as
+# {"stdout": "..."}. A non-zero exit fails the step (and the run, unless
+# "continue_on_error": true).
+#
+# Audit: $OPENSOP_LOCAL_HOME/runs/<run_id>/  (default ~/.opensop-local)
+#   manifest.json   — process, inputs, status, timings
+#   audit.jsonl     — one receipt line per step (inputs hash, output, status, ts)
+#   context.json    — final accumulated context
+set -uo pipefail
+
+OSL_HOME="${OPENSOP_LOCAL_HOME:-$HOME/.opensop-local}"
+OSL_VERSION="0.1.0"
+
+die() { echo "opensop-local: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"; }
+need jq
+
+# Portable UTC timestamp (no GNU-only flags).
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# A run id that's sortable and unique-enough without Math.random/uuid deps.
+gen_run_id() { echo "$(date -u +%Y%m%dT%H%M%SZ)-$$"; }
+
+# ── run ────────────────────────────────────────────────────────────────────
+cmd_run() {
+  local proc_file="${1:-}"; shift || true
+  [ -n "$proc_file" ] && [ -f "$proc_file" ] || die "usage: opensop-local run <process.sop.json> [--input k=v ...]"
+  jq -e . "$proc_file" >/dev/null 2>&1 || die "process file is not valid JSON: $proc_file"
+
+  local proc_dir; proc_dir="$(cd "$(dirname "$proc_file")" && pwd)"
+  local name; name="$(jq -r '.name // "unnamed"' "$proc_file")"
+
+  # Seed context from declared inputs (defaults), then apply --input overrides.
+  local ctx; ctx="$(jq -c '(.inputs // {})' "$proc_file")"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --input) local kv="${2:-}"; shift 2 || die "--input needs k=v"
+        local k="${kv%%=*}" v="${kv#*=}"
+        ctx="$(jq -c --arg k "$k" --arg v "$v" '.[$k]=$v' <<<"$ctx")" ;;
+      *) die "unknown arg: $1" ;;
+    esac
+  done
+
+  local run_id; run_id="$(gen_run_id)"
+  local run_dir="$OSL_HOME/runs/$run_id"
+  mkdir -p "$run_dir"
+  local audit="$run_dir/audit.jsonl"
+  local started; started="$(now)"
+
+  jq -nc --arg n "$name" --arg p "$proc_file" --arg id "$run_id" --arg t "$started" \
+     --argjson inp "$ctx" \
+     '{run_id:$id, process:$n, process_file:$p, started_at:$t, status:"running", inputs:$inp}' \
+     > "$run_dir/manifest.json"
+
+  echo "▶ run $run_id  ($name)" >&2
+  local n_steps; n_steps="$(jq '.steps | length' "$proc_file")"
+  local run_status="completed"
+
+  local i=0
+  while [ "$i" -lt "$n_steps" ]; do
+    local step; step="$(jq -c ".steps[$i]" "$proc_file")"
+    local sid stype srun scont
+    sid="$(jq -r '.id' <<<"$step")"; [ "$sid" = null ] && sid="step-$i"
+    stype="$(jq -r '.type // "automated"' <<<"$step")"
+    srun="$(jq -r '.run // ""' <<<"$step")"
+    scont="$(jq -r '.continue_on_error // false' <<<"$step")"
+
+    local s_started; s_started="$(now)"
+    echo "  • [$sid] ($stype) ..." >&2
+
+    # Reset explicitly each iteration — `local out_raw rc` alone does NOT clear
+    # prior values on later loop passes (bash: re-`local` without `=` keeps the
+    # old value), which would leak one step's output/rc into the next.
+    local out_raw="" rc=0
+    case "$stype" in
+      automated)
+        # Resolve `run` path: absolute, then relative to process dir, then to
+        # its parent (supports the processes/ + steps/ sibling layout).
+        local script="$srun"
+        if [[ "$script" = /* ]]; then :
+        elif [ -f "$proc_dir/$script" ]; then script="$proc_dir/$script"
+        elif [ -f "$(cd "$proc_dir/.." 2>/dev/null && pwd)/$script" ]; then script="$(cd "$proc_dir/.." && pwd)/$script"
+        else script="$proc_dir/$script"; fi
+        if [ ! -f "$script" ]; then
+          out_raw="step script not found: $script"; rc=127
+        else
+          out_raw="$(OSL_CONTEXT="$ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" \
+                     bash "$script" <<<"$ctx" 2>>"$run_dir/$sid.stderr.log")"; rc=$?
+        fi ;;
+      shell)
+        out_raw="$(OSL_CONTEXT="$ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" \
+                   bash -c "$srun" <<<"$ctx" 2>>"$run_dir/$sid.stderr.log")"; rc=$? ;;
+      noop)
+        out_raw="{}"; rc=0 ;;
+      *)
+        out_raw="unsupported step type: $stype"; rc=2 ;;
+    esac
+
+    # Normalize step output → JSON object stored under the step id.
+    local out_json
+    if jq -e . >/dev/null 2>&1 <<<"$out_raw"; then
+      out_json="$(jq -c 'if type=="object" then . else {value:.} end' <<<"$out_raw")"
+    else
+      out_json="$(jq -nc --arg s "$out_raw" '{stdout:$s}')"
+    fi
+
+    local s_ended; s_ended="$(now)"
+    local sstatus; [ "$rc" -eq 0 ] && sstatus="completed" || sstatus="failed"
+
+    # Receipt line — the audit trail.
+    jq -nc \
+      --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg st "$sstatus" \
+      --argjson rc "$rc" --arg a "$s_started" --arg b "$s_ended" \
+      --argjson inhash "$(jq -nc --arg c "$ctx" '$c|length')" \
+      --argjson out "$out_json" \
+      '{run_id:$rid, step:$sid, type:$t, status:$st, exit_code:$rc, started_at:$a, ended_at:$b, context_bytes:$inhash, output:$out}' \
+      >> "$audit"
+
+    if [ "$rc" -eq 0 ]; then
+      ctx="$(jq -c --arg id "$sid" --argjson o "$out_json" '.[$id]=$o' <<<"$ctx")"
+    else
+      echo "    ✗ [$sid] failed (exit $rc): $(jq -rc '.stdout // .' <<<"$out_json" | head -c 200)" >&2
+      if [ "$scont" != "true" ]; then run_status="failed"; break; fi
+      ctx="$(jq -c --arg id "$sid" --argjson o "$out_json" '.[$id]=$o' <<<"$ctx")"
+    fi
+    i=$((i+1))
+  done
+
+  local ended; ended="$(now)"
+  echo "$ctx" > "$run_dir/context.json"
+  jq -c --arg s "$run_status" --arg e "$ended" '.status=$s | .ended_at=$e' \
+     "$run_dir/manifest.json" > "$run_dir/manifest.json.tmp" && mv "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
+
+  if [ "$run_status" = completed ]; then echo "✓ run $run_id completed" >&2; else echo "✗ run $run_id failed" >&2; fi
+  echo "$run_dir"
+  [ "$run_status" = completed ]
+}
+
+# ── inspection ───────────────────────────────────────────────────────────────
+cmd_list() {
+  local dir="${1:-.}"
+  find "$dir" -maxdepth 2 -name '*.sop.json' 2>/dev/null | while read -r f; do
+    printf "%-30s %s\n" "$(jq -r '.name // "?"' "$f")" "$f"
+  done
+}
+cmd_runs() {
+  [ -d "$OSL_HOME/runs" ] || { echo "(no runs yet)"; return; }
+  for d in "$OSL_HOME"/runs/*/; do
+    [ -f "$d/manifest.json" ] || continue
+    jq -r '"\(.run_id)\t\(.status)\t\(.process)\t\(.started_at)"' "$d/manifest.json"
+  done | sort
+}
+cmd_show() {
+  local rid="${1:-}"; [ -n "$rid" ] || die "usage: opensop-local show <run_id>"
+  local d="$OSL_HOME/runs/$rid"
+  [ -d "$d" ] || die "no such run: $rid"
+  echo "── manifest ──"; jq . "$d/manifest.json"
+  echo "── audit (per-step receipts) ──"; jq -c . "$d/audit.jsonl" 2>/dev/null
+}
+
+# ── optional: convert a .sop.yaml to .sop.json IF a yaml parser exists ──────
+cmd_import_yaml() {
+  local y="${1:-}"; [ -f "$y" ] || die "usage: opensop-local import-yaml <process.sop.yaml>"
+  local out="${y%.yaml}.json"
+  if command -v yq >/dev/null 2>&1; then
+    yq -o=json '.' "$y" > "$out"
+  elif python3 -c 'import yaml' >/dev/null 2>&1; then
+    python3 -c 'import sys,yaml,json; json.dump(yaml.safe_load(open(sys.argv[1])), open(sys.argv[2],"w"), indent=2)' "$y" "$out"
+  else
+    die "no YAML parser available (need yq or python3+PyYAML). Author the process as .sop.json instead."
+  fi
+  echo "$out"
+}
+
+cmd_help() {
+  cat <<EOF
+opensop-local $OSL_VERSION — portable, server-less, auditable OpenSOP runtime (bash + jq)
+
+USAGE
+  opensop-local run <process.sop.json> [--input k=v ...]   Run a process locally
+  opensop-local list [dir]                                  List .sop.json processes
+  opensop-local runs                                        List past runs
+  opensop-local show <run_id>                               Show a run's manifest + receipts
+  opensop-local import-yaml <process.sop.yaml>              Convert YAML→JSON (if a parser exists)
+  opensop-local version | help
+
+STORE        \$OPENSOP_LOCAL_HOME (default ~/.opensop-local)
+STEP TYPES   automated (run a script), shell (inline command), noop
+CONTEXT      each step gets the accumulated JSON context on stdin and in \$OSL_CONTEXT;
+             its JSON stdout is merged back under the step id.
+EOF
+}
+
+case "${1:-help}" in
+  run) shift; cmd_run "$@" ;;
+  list) shift; cmd_list "$@" ;;
+  runs) shift; cmd_runs "$@" ;;
+  show) shift; cmd_show "$@" ;;
+  import-yaml) shift; cmd_import_yaml "$@" ;;
+  version|-v|--version) echo "$OSL_VERSION" ;;
+  help|-h|--help) cmd_help ;;
+  *) die "unknown command: $1 (try: opensop-local help)" ;;
+esac
