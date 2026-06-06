@@ -6,6 +6,26 @@ OpenSOP is an open standard and runtime for defining business processes (SOPs) a
 
 ---
 
+## Commands
+
+```bash
+bin/setup                                            # initial setup (deps + DB + git hooks)
+bin/dev                                              # boot the app (Rails + tailwindcss:watch via Procfile.dev)
+bin/rails s                                          # rails server only
+bin/jobs                                             # Solid Queue worker
+bin/rails opensop:load_processes                     # sync processes/ from disk into DB
+bundle exec rspec                                    # full test suite
+bundle exec rspec spec/requests/sop/                 # /sop/* API specs only
+bin/rubocop                                          # lint
+bin/brakeman                                         # static security scan
+bin/bundler-audit                                    # dep CVE check
+bin/ci                                               # run the full CI suite locally
+bin/rails console                                    # repl with engine loaded
+bin/deploy                                           # deploy to Fly.io
+```
+
+---
+
 ## How work happens on this project
 
 These four rules apply to every non-trivial task. Trivial = typos, copy edits, single-line config, comment fixes, obviously-safe one-file changes. Anything else follows the workflow below.
@@ -138,3 +158,13 @@ POST /sop/triggers/:name                   Webhook-triggered process start
 - **Idempotent seeds.** `db/seeds.rb` calls `Opensop::Registry.load_all`, which upserts process definitions from disk. Safe to re-run on every deploy.
 - **Implementation order for cross-cutting work:** models / migrations → policies (when added) → controllers → services / step executors → views / Stimulus / Tailwind → tests
 - **Production secrets come from platform env vars, not Rails encrypted credentials.** `SECRET_KEY_BASE`, `OPENSOP_API_TOKEN`, `OPENSOP_UI_USER`/`OPENSOP_UI_PASSWORD` are set directly via the platform's secret store. `RAILS_MASTER_KEY` is only needed if a fork puts something in `credentials.yml.enc` that the app actually reads.
+
+---
+
+## Footguns
+
+- **Never `eval` user-authored expressions.** `Opensop::ConditionEvaluator` is the only safe path. No `eval`, no `instance_eval`, no `system` with interpolated input. Enforced by code review.
+- **Process YAML is the API contract.** Schema changes to `processes/*.sop.yaml` are public-API-breaking. Either gate behind the format version, or write a migration in the registry loader.
+- **Don't fight the `Sop::` / `Opensop::` split.** Models live in `Sop::` (avoids Ruby's top-level `::Process`); services live in `Opensop::`. Reversing it breaks the autoloader.
+- **Step executors must be idempotent on retry.** Background-driven steps can re-run; assume so.
+- **`db/seeds.rb` is idempotent by design** via `Opensop::Registry.load_all`, which upserts from `processes/`. Don't add raw inserts that aren't idempotent.
