@@ -121,6 +121,32 @@ RSpec.describe Opensop::DefinitionParser do
           .to raise_error(described_class::InvalidDefinition, /webhook\.url/)
       end
 
+      it "rejects a webhook step with url + method but missing response_mode" do
+        hash = minimal_process("steps" => [ {
+          "id" => "w", "name" => "W", "type" => "webhook",
+          "webhook" => { "method" => "POST", "url" => "https://example.com/hook" }
+        } ])
+        expect { described_class.call(hash) }
+          .to raise_error(described_class::InvalidDefinition, /webhook\.response_mode/)
+      end
+
+      it "rejects a webhook step with an invalid response_mode value" do
+        hash = minimal_process("steps" => [ {
+          "id" => "w", "name" => "W", "type" => "webhook",
+          "webhook" => { "method" => "POST", "url" => "https://example.com/hook", "response_mode" => "fire_and_forget" }
+        } ])
+        expect { described_class.call(hash) }
+          .to raise_error(described_class::InvalidDefinition, /webhook\.response_mode/)
+      end
+
+      it "accepts a webhook step with all required fields" do
+        hash = minimal_process("steps" => [ {
+          "id" => "w", "name" => "W", "type" => "webhook",
+          "webhook" => { "method" => "POST", "url" => "https://example.com/hook", "response_mode" => "sync" }
+        } ])
+        expect { described_class.call(hash) }.not_to raise_error
+      end
+
       it "rejects a subprocess step missing `process:`" do
         hash = minimal_process("steps" => [ { "id" => "s", "name" => "S", "type" => "subprocess" } ])
         expect { described_class.call(hash) }

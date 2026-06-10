@@ -538,7 +538,7 @@ the API.
     headers:
       Authorization: "Bearer ${env.COMPLIANCE_API_KEY}"
     body_template: steps/compliance-payload.json   # optional; else inputs used
-    response_mode: callback                         # sync | callback | poll
+    response_mode: callback                         # REQUIRED — sync | callback | poll
     poll_timeout: 7d
   inputs:
     - name: business_record
@@ -550,6 +550,17 @@ the API.
       type: enum
       values: [pending, approved, rejected]
 ```
+
+**`webhook` block fields:**
+
+| Field | Required | Description |
+|---|---|---|
+| `url` | Yes | Outbound request URL. Supports `${env.X}`, `${inputs.X}`, `${callback_url}`. |
+| `method` | Yes | HTTP verb: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`. |
+| `response_mode` | **Yes** | How the step handles the response. Must be one of `sync`, `callback`, or `poll`. No default — omitting this field is a parse error. |
+| `headers` | No | Key/value map of request headers. Values support template interpolation. |
+| `body_template` | No | Path to a JSON body template under `processes/`. If omitted, step inputs are sent as JSON. |
+| `poll_timeout` | No | Expiry for callback/poll waiting (e.g. `7d`, `2h`). |
 
 **Response modes:**
 
