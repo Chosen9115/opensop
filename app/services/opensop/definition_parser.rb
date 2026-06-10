@@ -3,13 +3,13 @@
 require "yaml"
 
 module Opensop
-  # Parses and validates an OpenSOP process definition (version 0.1 or 0.2).
+  # Parses and validates an OpenSOP process definition (version 0.1, 0.2, or 0.6).
   #
   # Does NOT persist anything — it simply returns a validated hash
   # ready to be stored in Sop::Process#definition.
   class DefinitionParser
     SPEC_VERSION = "0.1"
-    SUPPORTED_SPEC_VERSIONS = %w[0.1 0.2].freeze
+    SUPPORTED_SPEC_VERSIONS = %w[0.1 0.2 0.6].freeze
     STEP_TYPES = %w[form automated judgment approval webhook subprocess notification wait llm loop].freeze
     AUTOMATED_VALIDATION_MODES = %w[lenient strict].freeze
     TRIGGER_TYPES = %w[api webhook schedule manual interval].freeze
