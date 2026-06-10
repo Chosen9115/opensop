@@ -34,7 +34,9 @@ module Opensop
 
       def call(step, instance, definition)
         config = definition["webhook"] || {}
-        mode = (config["response_mode"] || "callback").to_s.downcase
+        # response_mode is REQUIRED by the definition parser (see Opensop::DefinitionParser#validate_webhook!).
+        # A definition that reaches here without it has bypassed parsing — treat as a hard fail.
+        mode = config["response_mode"].to_s.downcase
 
         unless ALLOWED_MODES.include?(mode)
           raise StepFailure, "unknown response_mode: #{mode.inspect} (must be one of #{ALLOWED_MODES.inspect})"
