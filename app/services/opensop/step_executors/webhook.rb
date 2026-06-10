@@ -19,7 +19,7 @@ module Opensop
     #       headers:
     #         Authorization: "Bearer ${env.PROVIDER_API_KEY}"
     #         Content-Type: "application/json"
-    #       body_template: ./coba/steps/payload.json   # optional; else inputs used
+    #       body_template: ./steps/payload.json   # optional; else inputs used
     #       response_mode: callback                    # sync | callback | poll
     #       poll_timeout: 7d                           # callback mode only
     #

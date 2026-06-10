@@ -449,6 +449,27 @@ RSpec.describe Opensop::DefinitionParser do
       end
     end
 
+    describe "spec version gate" do
+      it "accepts opensop: '0.6'" do
+        hash = {
+          "opensop" => "0.6",
+          "process" => { "name" => "v06-proc", "version" => "1.0", "steps" => [] }
+        }
+        result = described_class.call(hash)
+        expect(result.ok?).to be true
+        expect(result.value["opensop"]).to eq("0.6")
+      end
+
+      it "rejects an unknown version (e.g. '9.9')" do
+        hash = {
+          "opensop" => "9.9",
+          "process" => { "name" => "bad-proc", "version" => "1.0", "steps" => [] }
+        }
+        expect { described_class.call(hash) }
+          .to raise_error(described_class::InvalidDefinition, /unsupported version/)
+      end
+    end
+
     describe "v0.2 loop step" do
       def v02_process(steps:, extra_process: {})
         {
