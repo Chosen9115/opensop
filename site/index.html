@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenSOP — Processes are infrastructure</title>
+  <meta name="description" content="OpenSOP is the missing primitive for agentic processes: declare, version, fork, run, and audit a process as a file in your repo. Local-first. No server required." />
+  <meta property="og:title" content="OpenSOP — Processes are infrastructure" />
+  <meta property="og:description" content="Terraform is to cloud resources what OpenSOP is to agentic processes. A process you can declare, version, fork, run, and audit." />
+  <meta property="og:type" content="website" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Newsreader:ital,opsz,wght@0,6..72,300..600;1,6..72,300..600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="./style.css" />
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.14/dist/lenis.min.js"></script>
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js" } }
+  </script>
+</head>
+<body data-chapter="prologue">
+
+  <canvas id="paint" aria-hidden="true"></canvas>
+
+  <header class="masthead">
+    <a class="wordmark" href="#prologue">Open<em>SOP</em></a>
+    <nav class="masthead-links">
+      <a href="https://github.com/Chosen9115/opensop/blob/main/MANIFESTO.md">Manifesto</a>
+      <a href="https://github.com/Chosen9115/opensop/blob/main/SPEC.md">Spec</a>
+      <a class="gh" href="https://github.com/Chosen9115/opensop">GitHub&nbsp;↗</a>
+    </nav>
+  </header>
+
+  <aside class="rail" aria-hidden="true">
+    <div class="rail-line"><div class="rail-fill"></div></div>
+    <div class="rail-numeral" id="rail-numeral">○</div>
+  </aside>
+
+  <main>
+
+    <!-- ──────────── PROLOGUE ──────────── -->
+    <section class="scene hero" id="prologue" data-palette="prologue">
+      <p class="eyebrow reveal">An open standard for agentic processes</p>
+      <h1 class="hero-title">
+        <span class="l"><span>Processes</span></span>
+        <span class="l"><span>are</span></span>
+        <span class="l"><span><em>infrastructure.</em></span></span>
+      </h1>
+      <p class="hero-sub reveal">
+        We version our code, our schemas, our infra. The processes that actually run the
+        business still live in wikis, in someone's head — or get re-derived from scratch
+        by an agent on every run.
+      </p>
+      <p class="hero-thesis reveal">Terraform is to cloud resources<br />what OpenSOP is to agentic processes.</p>
+      <div class="scroll-cue reveal">
+        <span>Five chapters, one thesis</span>
+        <div class="cue-line"></div>
+      </div>
+    </section>
+
+    <!-- ──────────── CHAPTER I ──────────── -->
+    <section class="scene chapter" id="forgetting" data-palette="night" data-numeral="I">
+      <div class="numeral" aria-hidden="true">I</div>
+      <p class="chapter-kicker reveal">Chapter one</p>
+      <h2 class="chapter-title">
+        <span class="l"><span>The</span></span>
+        <span class="l"><span><em>forgetting</em></span></span>
+      </h2>
+      <div class="chapter-body">
+        <p class="lede reveal">Agents are good at <em>doing</em> steps — and bad at <em>remembering which steps</em>.</p>
+        <p class="reveal">
+          Left alone, an agent re-invents the procedure every time: slowly, inconsistently,
+          unauditably. How a lead gets qualified, how an invoice gets approved, how an
+          incident gets handled — re-derived every morning, by something with no memory
+          of yesterday.
+        </p>
+        <p class="reveal">That's not a knowledge problem. It's a <strong>missing primitive</strong>.</p>
+      </div>
+    </section>
+
+    <!-- ──────────── CHAPTER II ──────────── -->
+    <section class="scene chapter" id="lie" data-palette="ember" data-numeral="II">
+      <div class="numeral" aria-hidden="true">II</div>
+      <p class="chapter-kicker reveal">Chapter two</p>
+      <h2 class="chapter-title">
+        <span class="l"><span>The lie at</span></span>
+        <span class="l"><span><em>7:51:34</em></span></span>
+      </h2>
+      <div class="chapter-body">
+        <p class="reveal">
+          A morning briefing. Pull Slack, Gmail, Calendar, Notion — then synthesize.
+          At <span class="stamp">7:51:34</span> the Calendar fetch times out.
+        </p>
+        <p class="reveal">The agent doesn't say that. It says —</p>
+        <blockquote class="false-quote reveal">
+          <p>“Your schedule looks clear this&nbsp;morning.”</p>
+        </blockquote>
+        <p class="beat reveal">You had two meetings.</p>
+        <p class="reveal">
+          When a step fails, an unharnessed agent fills the gap with confident-sounding
+          prose. The failure isn't loud. <em>It's fluent.</em>
+        </p>
+      </div>
+    </section>
+
+    <!-- ──────────── CHAPTER III ──────────── -->
+    <section class="scene chapter" id="file" data-palette="parchment" data-numeral="III">
+      <div class="numeral" aria-hidden="true">III</div>
+      <p class="chapter-kicker reveal">Chapter three</p>
+      <h2 class="chapter-title">
+        <span class="l"><span>A process</span></span>
+        <span class="l"><span>is a <em>file</em></span></span>
+      </h2>
+      <div class="chapter-body">
+        <p class="lede reveal">
+          One declarative artifact — inputs, steps, outputs. It lives in your repo,
+          reviews in your PRs, ships in your commits.
+        </p>
+        <ul class="verbs reveal" role="list">
+          <li>declare</li><li>version</li><li>fork</li><li>run</li><li>audit</li>
+        </ul>
+        <figure class="code reveal">
+          <figcaption>morning-briefing.sop.yaml</figcaption>
+<pre><code><span class="c-key">opensop:</span> <span class="c-str">"0.6"</span>
+<span class="c-key">process:</span>
+  <span class="c-key">name:</span> morning-briefing
+  <span class="c-key">trigger:</span> { <span class="c-key">type:</span> schedule, <span class="c-key">cron:</span> <span class="c-str">"50 7 * * 1-5"</span> }
+  <span class="c-key">steps:</span>
+    - <span class="c-key">id:</span> fetch-calendar
+      <span class="c-key">type:</span> automated
+      <span class="c-key">run:</span> ./scripts/fetch-calendar.sh
+      <span class="c-key">outputs:</span>
+        - { <span class="c-key">name:</span> success, <span class="c-key">type:</span> boolean }
+    - <span class="c-key">id:</span> synthesize
+      <span class="c-key">type:</span> llm
+      <span class="c-key">condition:</span> |
+        <span class="c-em">steps.fetch-calendar.outputs.success == true</span>
+      <span class="c-key">prompt:</span> <span class="c-str">"Synthesize a 200-word brief…"</span></code></pre>
+        </figure>
+        <p class="reveal">
+          Fork it. Adapt it. The lineage is recorded — not copied-and-forgotten in a doc.
+        </p>
+      </div>
+    </section>
+
+    <!-- ──────────── CHAPTER IV ──────────── -->
+    <section class="scene chapter" id="receipts" data-palette="pine" data-numeral="IV">
+      <div class="numeral" aria-hidden="true">IV</div>
+      <p class="chapter-kicker reveal">Chapter four</p>
+      <h2 class="chapter-title">
+        <span class="l"><span>Keep the</span></span>
+        <span class="l"><span><em>receipts</em></span></span>
+      </h2>
+      <div class="chapter-body">
+        <p class="lede reveal">
+          When Calendar fails, the runtime <strong>stops</strong>. It does not ask the
+          LLM to fill the gap.
+        </p>
+        <figure class="code receipt reveal">
+          <figcaption>$ opensop show run_7f3a</figcaption>
+<pre><code>fetch-slack      <span class="ok">✓ completed</span>   07:50:12
+fetch-gmail      <span class="ok">✓ completed</span>   07:50:58
+fetch-calendar   <span class="bad">✗ failed</span>      07:51:34
+synthesize       <span class="dim">— never asked</span></code></pre>
+        </figure>
+        <p class="reveal">
+          Every run leaves receipts: what ran, what it decided, with what confidence,
+          in what order. Determinism you can inspect after the fact.
+        </p>
+        <p class="stat reveal">
+          <span class="stat-figure">~88%</span>
+          of agent operations across six real-world workflows turned out to be
+          deterministic code dressed up as cognitive work.
+        </p>
+      </div>
+    </section>
+
+    <!-- ──────────── CHAPTER V ──────────── -->
+    <section class="scene chapter" id="anywhere" data-palette="dawn" data-numeral="V">
+      <div class="numeral" aria-hidden="true">V</div>
+      <p class="chapter-kicker reveal">Chapter five</p>
+      <h2 class="chapter-title">
+        <span class="l"><span>Run it</span></span>
+        <span class="l"><span><em>anywhere</em></span></span>
+      </h2>
+      <div class="chapter-body">
+        <p class="lede reveal">
+          Local-first. <code class="inline">opensop run</code> — no server, no network,
+          no account. One bash file. The file is the binary.
+        </p>
+        <p class="reveal">
+          One surface for humans and agents: the same process, the same commands, whether
+          a person or an agent drives it. Want shared orchestration, a monitoring UI, a
+          team audit log? Run the server. Don't want to? You lose nothing.
+        </p>
+        <p class="reveal">The server is an option — <em>never a prerequisite</em>.</p>
+      </div>
+    </section>
+
+    <!-- ──────────── EPILOGUE ──────────── -->
+    <section class="scene outro" id="epilogue" data-palette="sunrise">
+      <h2 class="outro-title">
+        <span class="l"><span>Build processes you can fork.</span></span>
+        <span class="l"><span>Run them anywhere.</span></span>
+        <span class="l"><span><em>Keep the receipts.</em></span></span>
+      </h2>
+      <div class="install reveal">
+        <pre><code id="install-cmd">curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/opensop -o opensop &amp;&amp; chmod +x opensop</code></pre>
+        <button class="copy" id="copy-btn" type="button" aria-label="Copy install command">copy</button>
+      </div>
+      <div class="outro-links reveal">
+        <a class="btn solid" href="https://github.com/Chosen9115/opensop">Star the repo ↗</a>
+        <a class="btn" href="https://github.com/Chosen9115/opensop/blob/main/MANIFESTO.md">Read the manifesto</a>
+        <a class="btn" href="https://github.com/Chosen9115/opensop/blob/main/SPEC.md">Read the spec</a>
+      </div>
+      <footer class="colophon reveal">
+        <span>Apache-2.0</span>
+        <span aria-hidden="true">·</span>
+        <span>Used in production at <a href="https://coba.ai">Coba</a></span>
+        <span aria-hidden="true">·</span>
+        <span>A process that runs the same way every time beats one that merely ran once.</span>
+      </footer>
+    </section>
+
+  </main>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
