@@ -1,0 +1,18 @@
+# Local dev artifacts
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Editor / IDE
+.idea/
+.vscode/
+
+# Secrets — should never be committed
+.env
+.env.*
+!.env.example
+
+# Local test output
+tmp/
+*.log

@@ -1,0 +1,4155 @@
+#!/usr/bin/env bash
+#
+# opensop — thin CLI client for OpenSOP runtimes
+#
+# Talks to any OpenSOP server's /sop/* HTTP API. Stateless except for a
+# small local cache that maps instance IDs back to process names so most
+# commands can take just an id.
+#
+# Usage:  opensop <command> [args]
+# Help:   opensop help
+# Repo:   https://github.com/Chosen9115/opensop-cli
+
+set -euo pipefail
+
+# --------------------------------------------------------------------------- #
+# Constants & paths
+# --------------------------------------------------------------------------- #
+
+readonly OPENSOP_CLI_VERSION="0.8.0"
+readonly OPENSOP_HOME="${OPENSOP_HOME:-$HOME/.opensop}"
+readonly CONFIG_FILE="$OPENSOP_HOME/config"
+readonly CACHE_FILE="$OPENSOP_HOME/instances.tsv"
+
+# --------------------------------------------------------------------------- #
+# Output helpers
+# --------------------------------------------------------------------------- #
+
+is_tty() { [[ -t 1 ]]; }
+
+# Color support — only when stdout is a TTY and NO_COLOR is unset.
+if is_tty && [[ -z "${NO_COLOR:-}" ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'
+  C_CYAN=$'\033[36m'
+else
+  C_RESET=""; C_BOLD=""; C_DIM=""; C_RED=""; C_GREEN=""
+  C_YELLOW=""; C_BLUE=""; C_CYAN=""
+fi
+
+# _resolve_output_mode
+#   Returns the effective output mode: "json" or "pretty".
+#   --json flag sets OUTPUT_MODE="json"; --pretty sets "pretty".
+#   "auto" (default before main strips flags) resolves TTY-aware.
+_resolve_output_mode() {
+  local mode="$OUTPUT_MODE"
+  if [[ "$mode" == "auto" ]]; then
+    is_tty && mode="pretty" || mode="json"
+  fi
+  echo "$mode"
+}
+
+# _error_mode
+#   Returns "json" only when --json was explicitly requested (OUTPUT_MODE="json").
+#   "auto" always resolves to prose for error messages — errors are human-readable
+#   by default; agents opt in with --json.
+_error_mode() {
+  if [[ "$OUTPUT_MODE" == "json" ]]; then
+    echo "json"
+  else
+    echo "prose"
+  fi
+}
+
+# err MESSAGE [CODE [HINT]]
+#   Print an error. In JSON mode emits {error, message, hint?} to stderr.
+#   In prose mode prints the familiar colored "opensop: ..." line.
+err() {
+  local message="$1" code="${2:-cli_error}" hint="${3:-}"
+  local mode; mode=$(_error_mode)
+  if [[ "$mode" == "json" ]]; then
+    jq -nc --arg error "$code" --arg msg "$message" --arg hint "$hint" \
+      '{error: $error, message: $msg} + (if $hint != "" then {hint: $hint} else {} end)' >&2
+  else
+    printf '%sopensop:%s %s\n' "$C_RED" "$C_RESET" "$message" >&2
+  fi
+}
+
+warn() { printf '%sopensop:%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+ok()   { printf '%s✓%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+info() { printf '%s%s%s\n' "$C_DIM" "$*" "$C_RESET"; }
+
+# die MESSAGE [CODE [HINT]]
+die() { err "$@"; exit 1; }
+
+# Output mode: pretty | json. Set by --json / --pretty flags or auto-detected.
+OUTPUT_MODE="auto"
+LOCAL_MODE=false                                                  # DEPRECATED no-op alias (local is now the default)
+REMOTE_MODE=false                                                 # --remote / --server: route to the configured/given server
+# Local run receipts. v0.6: when inside an OpenSOP cell, the default becomes
+# the active cell's .opensop/ instead of the global ~/.opensop-local — so
+# receipts land alongside the processes that produced them. The explicit
+# env override (when the user sets OPENSOP_LOCAL_HOME themselves) always
+# wins. The cell-aware override is applied in main() after helpers are
+# loaded; here we just track whether the user set it explicitly.
+if [[ -n "${OPENSOP_LOCAL_HOME-}" ]]; then
+  _OPENSOP_LOCAL_HOME_EXPLICIT=true
+else
+  _OPENSOP_LOCAL_HOME_EXPLICIT=false
+fi
+OPENSOP_LOCAL_HOME="${OPENSOP_LOCAL_HOME:-$HOME/.opensop-local}"
+
+emit_json() {
+  # Print compact JSON (stdin) — used for --json and piped output.
+  jq -c .
+}
+
+emit_pretty_or_json() {
+  # If TTY and not --json, pretty-print. Else compact JSON.
+  local mode; mode=$(_resolve_output_mode)
+  if [[ "$mode" == "json" ]]; then
+    jq -c .
+  else
+    jq .
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Dependency check
+# --------------------------------------------------------------------------- #
+
+require_jq() {
+  command -v jq >/dev/null 2>&1 || die "jq is required — install it first" "missing_dependency" "brew install jq"
+}
+
+require_curl() {
+  command -v curl >/dev/null 2>&1 || die "curl is required (it should be on every Unix already)" "missing_dependency"
+}
+
+# --------------------------------------------------------------------------- #
+# Config — ~/.opensop/config is sourced as bash key=value pairs.
+# Vars: OPENSOP_URL, OPENSOP_TOKEN
+# --------------------------------------------------------------------------- #
+
+ensure_home() {
+  mkdir -p "$OPENSOP_HOME"
+  chmod 700 "$OPENSOP_HOME"
+}
+
+load_config() {
+  ensure_home
+  if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+  fi
+  # Env vars override config file.
+  : "${OPENSOP_URL:=${OPENSOP_URL_OVERRIDE:-}}"
+  : "${OPENSOP_TOKEN:=${OPENSOP_TOKEN_OVERRIDE:-}}"
+}
+
+save_config() {
+  ensure_home
+  umask 077
+  cat > "$CONFIG_FILE" <<EOF
+# OpenSOP CLI config — managed by 'opensop config'
+# Override either of these via env vars (OPENSOP_URL / OPENSOP_TOKEN) at runtime.
+OPENSOP_URL="${OPENSOP_URL:-}"
+OPENSOP_TOKEN="${OPENSOP_TOKEN:-}"
+EOF
+  chmod 600 "$CONFIG_FILE"
+}
+
+require_url() {
+  [[ -n "${OPENSOP_URL:-}" ]] || die "OPENSOP_URL is not set — run: opensop config set url <https://your-server>" "config_missing" "opensop config set url <URL>"
+}
+
+# --------------------------------------------------------------------------- #
+# HTTP — every API call goes through these.
+#
+# api_call METHOD PATH [BODY]
+#   - prints response body to stdout
+#   - exits non-zero on HTTP >= 400 (with error printed to stderr)
+# --------------------------------------------------------------------------- #
+
+api_call() {
+  local method="$1"; local path="$2"; local body="${3:-}"
+  require_url
+  local url="${OPENSOP_URL%/}${path}"
+  local tmp_body
+  tmp_body=$(mktemp)
+
+  local -a curl_args=(
+    -sS
+    -X "$method"
+    -H "Content-Type: application/json"
+    -H "Accept: application/json"
+    -o "$tmp_body"
+    -w "%{http_code}"
+  )
+
+  [[ -n "${OPENSOP_TOKEN:-}" ]] && curl_args+=(-H "X-SOP-Token: $OPENSOP_TOKEN")
+  [[ -n "$body" ]] && curl_args+=(-d "$body")
+
+  local status
+  if ! status=$(curl "${curl_args[@]}" "$url"); then
+    rm -f "$tmp_body"
+    die "request failed: $method $url" "network_error"
+  fi
+
+  if [[ "$status" -ge 400 ]]; then
+    local emode; emode=$(_error_mode)
+    if [[ "$emode" == "json" ]]; then
+      # In JSON mode: pass through the server's error envelope verbatim,
+      # augmented with _meta.http_status for round-trip context.
+      jq -c --argjson s "$status" '. + {_meta: {http_status: $s}}' "$tmp_body" >&2 \
+        2>/dev/null || jq -nc --argjson s "$status" \
+          '{error: "http_error", message: "HTTP error", _meta: {http_status: $s}}' >&2
+    else
+      local err_msg err_code
+      err_code=$(jq -r '.error // "http_error"' "$tmp_body" 2>/dev/null || echo "http_error")
+      err_msg=$(jq -r '.message // empty' "$tmp_body" 2>/dev/null || echo "")
+      printf '%sopensop:%s HTTP %s — %s%s\n' "$C_RED" "$C_RESET" "$status" "$err_code" \
+        "${err_msg:+: $err_msg}" >&2
+    fi
+    rm -f "$tmp_body"
+    exit 1
+  fi
+  cat "$tmp_body"
+  rm -f "$tmp_body"
+}
+
+api_get()  { api_call GET  "$1"; }
+api_post() { api_call POST "$1" "${2:-{\}}"; }
+
+# --------------------------------------------------------------------------- #
+# Local instance cache — TSV: id\tname\tcreated_at\turl
+# Lets `opensop status <id>` work without re-passing the process name.
+# --------------------------------------------------------------------------- #
+
+cache_instance() {
+  local id="$1" name="$2"
+  ensure_home
+  touch "$CACHE_FILE"
+  # Drop existing row for this id (if any), then append fresh.
+  grep -v "^${id}	" "$CACHE_FILE" > "${CACHE_FILE}.tmp" 2>/dev/null || true
+  printf '%s\t%s\t%s\t%s\n' "$id" "$name" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${OPENSOP_URL:-}" >> "${CACHE_FILE}.tmp"
+  mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
+}
+
+lookup_name() {
+  # Resolve instance id → process name. Cache first, then paginated /sop/instances scan.
+  local id="$1"
+  if [[ -f "$CACHE_FILE" ]]; then
+    local hit
+    hit=$(awk -F'\t' -v id="$id" '$1 == id { print $2; exit }' "$CACHE_FILE")
+    [[ -n "$hit" ]] && { echo "$hit"; return 0; }
+  fi
+  # Cache miss — paginate up to 1000 rows (5 pages of 200) looking for the id.
+  warn "id $id not in local cache; scanning /sop/instances..."
+  local name=""
+  for offset in 0 200 400 600 800; do
+    local resp count
+    resp=$(api_get "/sop/instances?limit=200&offset=$offset")
+    name=$(echo "$resp" | jq -r --arg id "$id" '.instances[] | select(.id == $id) | .process.name' | head -1)
+    if [[ -n "$name" ]]; then
+      cache_instance "$id" "$name"
+      echo "$name"
+      return 0
+    fi
+    count=$(echo "$resp" | jq -r '.instances | length')
+    # Short page = end of results; no need to keep paging.
+    [[ "$count" -lt 200 ]] && break
+  done
+  die "instance $id not found on $OPENSOP_URL (check the id, or set --state and re-list with 'opensop instances')" "instance_not_found"
+}
+
+# --------------------------------------------------------------------------- #
+# Cell / scope (v0.6 — fractal addressing)
+#
+# A "cell" is a directory marked by .opensop/manifest.yaml. Cells nest;
+# `init` creates one in cwd, `scope` walks up from cwd to find the nearest
+# cell (the active scope) and prints its ancestor chain.
+#
+# Substrate level only — no policy, no evolution semantics here. The
+# manifest is intentionally tiny (name + parent) so a 6-line grep+sed
+# parser is enough and we don't pull in a yaml dep.
+# --------------------------------------------------------------------------- #
+
+# _find_scope_root [start_dir]
+#   Walk up from start_dir (default: cwd) looking for .opensop/manifest.yaml.
+#   Echo absolute path of the cell root (the directory CONTAINING .opensop/),
+#   or empty string if none. Empty is "no active cell", not an error.
+_find_scope_root() {
+  local d
+  d="$(cd "${1:-.}" 2>/dev/null && pwd)" || return 0
+  while [[ "$d" != "/" && -n "$d" ]]; do
+    if [[ -d "$d/.opensop" && -f "$d/.opensop/manifest.yaml" ]]; then
+      echo "$d"
+      return 0
+    fi
+    d="$(dirname "$d")"
+  done
+  return 0
+}
+
+# _read_manifest_field <cell_root> <field>
+#   Read a single top-level scalar field from .opensop/manifest.yaml.
+#   Grammar: "field: value" on its own line. Strips quotes + trailing space.
+#   Returns empty for "null" or missing fields.
+_read_manifest_field() {
+  local cell_root="$1" field="$2"
+  local file="$cell_root/.opensop/manifest.yaml"
+  local val
+  [[ -f "$file" ]] || return 0
+  val=$(grep -E "^${field}:" "$file" 2>/dev/null \
+    | head -1 \
+    | sed -E "s/^${field}:[[:space:]]*//; s/^['\"]//; s/['\"]$//; s/[[:space:]]+$//")
+  [[ "$val" == "null" ]] && val=""
+  echo "$val"
+}
+
+# _enumerate_ancestors <cell_root>
+#   Echo nearest-first list of ancestor cell roots, one per line.
+#   Resolves the manifest's `parent` field (relative or absolute), then
+#   continues up the chain until a manifest is missing or parent is null.
+_enumerate_ancestors() {
+  local cell_root="$1"
+  local parent_path
+  while true; do
+    parent_path="$(_read_manifest_field "$cell_root" parent)"
+    [[ -z "$parent_path" ]] && return 0
+    if [[ "$parent_path" != /* ]]; then
+      parent_path="$(cd "$cell_root/$parent_path" 2>/dev/null && pwd)" || return 0
+    fi
+    [[ -d "$parent_path/.opensop" && -f "$parent_path/.opensop/manifest.yaml" ]] || return 0
+    echo "$parent_path"
+    cell_root="$parent_path"
+  done
+}
+
+# opensop init [--name NAME] [--parent PATH]
+#   Create .opensop/ in cwd. The directory becomes the active cell for any
+#   OpenSOP operation executed from within it (or any subdirectory).
+#
+#   Defaults:
+#     --name      cwd basename
+#     --parent    auto-detected by walking up from cwd's parent for an
+#                 ancestor cell; null if none found
+cmd_init() {
+  local name="" parent_arg="" explicit_parent=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name)   name="$2"; shift 2 ;;
+      --parent) parent_arg="$2"; explicit_parent=true; shift 2 ;;
+      *) die "unknown flag for init: $1" "unknown_flag" "run opensop help" ;;
+    esac
+  done
+
+  local cwd; cwd="$(pwd)"
+
+  if [[ -d "$cwd/.opensop" ]]; then
+    die "cell already initialized at $cwd/.opensop" "usage_error" \
+        "remove .opensop/ first if you want to re-init, or cd elsewhere"
+  fi
+
+  [[ -z "$name" ]] && name="$(basename "$cwd")"
+
+  local parent_resolved=""
+  if $explicit_parent; then
+    parent_resolved="$parent_arg"
+  else
+    local up; up="$(_find_scope_root "$(dirname "$cwd")")"
+    if [[ -n "$up" ]]; then
+      if [[ "$up" == "$(dirname "$cwd")" ]]; then
+        parent_resolved="../"
+      else
+        parent_resolved="$up"
+      fi
+    fi
+  fi
+
+  mkdir -p "$cwd/.opensop/runs" "$cwd/.opensop/archive"
+  {
+    echo "name: $name"
+    if [[ -n "$parent_resolved" ]]; then
+      echo "parent: $parent_resolved"
+    else
+      echo "parent: null"
+    fi
+  } > "$cwd/.opensop/manifest.yaml"
+  echo "{}" > "$cwd/.opensop/lineage.json"
+
+  if [[ "$OUTPUT_MODE" == "pretty" ]] || { [[ "$OUTPUT_MODE" == "auto" ]] && is_tty; }; then
+    info "${C_GREEN}initialized cell '$name'${C_RESET} at $cwd/.opensop/"
+    if [[ -n "$parent_resolved" ]]; then
+      info "  parent: $parent_resolved"
+    else
+      info "  parent: (root cell — no ancestor)"
+    fi
+  else
+    jq -nc --arg root "$cwd" --arg name "$name" --arg parent "$parent_resolved" \
+      '{ok:true, cell_root:$root, name:$name, parent:(if $parent == "" then null else $parent end)}'
+  fi
+}
+
+# opensop scope
+#   Print the active cell + ancestor chain (nearest-first). Fails if cwd is
+#   not inside any cell.
+cmd_scope() {
+  local cell_root; cell_root="$(_find_scope_root)"
+
+  if [[ -z "$cell_root" ]]; then
+    die "not inside an OpenSOP cell — run 'opensop init' to create one" "usage_error" \
+        "or cd into a directory under an existing cell"
+  fi
+
+  local name; name="$(_read_manifest_field "$cell_root" name)"
+
+  if [[ "$OUTPUT_MODE" == "pretty" ]] || { [[ "$OUTPUT_MODE" == "auto" ]] && is_tty; }; then
+    info "${C_BOLD}active cell:${C_RESET} $name"
+    info "  $cell_root"
+    local printed_header=false
+    while IFS= read -r ancestor_root; do
+      [[ -z "$ancestor_root" ]] && continue
+      $printed_header || { info ""; info "ancestors (nearest first):"; printed_header=true; }
+      local a_name; a_name="$(_read_manifest_field "$ancestor_root" name)"
+      info "  ↑ $a_name"
+      info "    $ancestor_root"
+    done < <(_enumerate_ancestors "$cell_root")
+  else
+    local payload
+    payload="$(jq -n --arg name "$name" --arg root "$cell_root" \
+      '[{name:$name, root:$root, active:true}]')"
+    while IFS= read -r ancestor_root; do
+      [[ -z "$ancestor_root" ]] && continue
+      local a_name; a_name="$(_read_manifest_field "$ancestor_root" name)"
+      payload="$(jq --arg name "$a_name" --arg root "$ancestor_root" \
+        '. + [{name:$name, root:$root, active:false}]' <<<"$payload")"
+    done < <(_enumerate_ancestors "$cell_root")
+    echo "$payload"
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Lineage (v0.6 — substrate-level event log per skill)
+#
+# Per-cell .opensop/lineage.json records `status` / `metadata` / `history`
+# for every skill the cell knows about. The substrate stores; policies
+# populate via `annotate` and read via `lineage`. Both `status` and
+# `metadata` are open — the substrate does not interpret them.
+#
+# Schema (per skill, keyed by logical_name in the top-level object):
+#   { logical_name, forked_from, history: [{at, type, data}], status, metadata }
+# --------------------------------------------------------------------------- #
+
+# _lineage_path <cell_root>  — echo absolute path of the cell's lineage.json
+_lineage_path() { echo "$1/.opensop/lineage.json"; }
+
+# _lineage_read <cell_root>
+#   Echo lineage.json contents (or '{}' if file missing). Errors on bad JSON.
+_lineage_read() {
+  local f; f="$(_lineage_path "$1")"
+  if [[ ! -f "$f" ]]; then
+    echo "{}"
+    return 0
+  fi
+  if ! jq -e . "$f" >/dev/null 2>&1; then
+    die "corrupt lineage file: $f" "invalid_json" "remove or fix the file"
+  fi
+  cat "$f"
+}
+
+# _lineage_write <cell_root> <json>  — atomic write via temp + mv
+_lineage_write() {
+  local f; f="$(_lineage_path "$1")"
+  local tmp="${f}.tmp.$$"
+  printf '%s\n' "$2" > "$tmp"
+  mv "$tmp" "$f"
+}
+
+# _lineage_default_entry <skill>  — echo the empty-default entry shape
+_lineage_default_entry() {
+  jq -nc --arg name "$1" \
+    '{logical_name: $name, forked_from: null, history: [], status: "", metadata: {}}'
+}
+
+# opensop annotate <skill> <event-type> <json>
+#   Append a policy event to the skill's lineage history in the active cell.
+#   Creates the lineage entry with default fields if it doesn't exist yet.
+#   Event type is open-string; data is whatever JSON the policy needs.
+cmd_annotate() {
+  [[ $# -lt 3 ]] && die "usage: opensop annotate <skill> <event-type> <json-data>" "usage_error" \
+                        "example: opensop annotate publish-linkedin promote '{\"to\":\"m4\"}'"
+  local skill="$1" event_type="$2" data_json="$3"
+
+  if ! jq -e . <<<"$data_json" >/dev/null 2>&1; then
+    die "invalid JSON data: $data_json" "invalid_json" \
+        "wrap data in single quotes; ensure it parses (e.g. '{\"key\":\"value\"}')"
+  fi
+
+  local cell_root; cell_root="$(_find_scope_root)"
+  [[ -z "$cell_root" ]] && die "not inside an OpenSOP cell — run 'opensop init' first" "usage_error" \
+                               "or cd into a directory under an existing cell"
+
+  local now; now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local lineage; lineage="$(_lineage_read "$cell_root")"
+
+  # Existing entry, or fresh default.
+  local entry; entry="$(jq -n --argjson l "$lineage" --arg s "$skill" '$l[$s] // null')"
+  if [[ "$entry" == "null" ]]; then
+    entry="$(_lineage_default_entry "$skill")"
+  fi
+
+  local event; event="$(jq -nc --arg at "$now" --arg type "$event_type" --argjson data "$data_json" \
+    '{at: $at, type: $type, data: $data}')"
+  local new_entry; new_entry="$(jq --argjson e "$event" '.history += [$e]' <<<"$entry")"
+  local new_lineage; new_lineage="$(jq --arg s "$skill" --argjson e "$new_entry" '.[$s] = $e' <<<"$lineage")"
+
+  _lineage_write "$cell_root" "$new_lineage"
+
+  if [[ "$OUTPUT_MODE" == "pretty" ]] || { [[ "$OUTPUT_MODE" == "auto" ]] && is_tty; }; then
+    info "${C_GREEN}annotated${C_RESET} '$skill' with event '$event_type' at $now"
+  else
+    echo "$event"
+  fi
+}
+
+# opensop lineage <skill>
+#   Print the lineage entry for a skill in the active cell. Returns the
+#   default empty entry if no events have been recorded for that skill yet.
+cmd_lineage() {
+  [[ $# -lt 1 ]] && die "usage: opensop lineage <skill>" "usage_error" \
+                        "name a skill (e.g., opensop lineage publish-linkedin)"
+  local skill="$1"
+
+  local cell_root; cell_root="$(_find_scope_root)"
+  [[ -z "$cell_root" ]] && die "not inside an OpenSOP cell — run 'opensop init' first" "usage_error" \
+                               "or cd into a directory under an existing cell"
+
+  local lineage; lineage="$(_lineage_read "$cell_root")"
+  local entry; entry="$(jq --arg s "$skill" '.[$s] // null' <<<"$lineage")"
+  if [[ "$entry" == "null" ]]; then
+    entry="$(_lineage_default_entry "$skill")"
+  fi
+
+  if [[ "$OUTPUT_MODE" == "pretty" ]] || { [[ "$OUTPUT_MODE" == "auto" ]] && is_tty; }; then
+    local n_events status
+    n_events="$(jq -r '.history | length' <<<"$entry")"
+    status="$(jq -r '.status // ""' <<<"$entry")"
+    [[ -z "$status" ]] && status="(none)"
+
+    info "${C_BOLD}lineage:${C_RESET} $skill"
+    info "  logical_name: $(jq -r '.logical_name' <<<"$entry")"
+    info "  status:       $status"
+    info "  metadata:     $(jq -c '.metadata' <<<"$entry")"
+    info "  forked_from:  $(jq -c '.forked_from' <<<"$entry")"
+    info "  history ($n_events event(s)):"
+    if [[ "$n_events" == "0" ]]; then
+      info "    (none)"
+    else
+      while IFS= read -r line; do info "$line"; done < <(jq -r '.history[] | "    \(.at)  \(.type)  \(.data | tojson)"' <<<"$entry")
+    fi
+  else
+    jq . <<<"$entry"
+  fi
+}
+
+# opensop fork <name> [--from <cell-path>]
+#   Materialize a copy of an ancestor cell's skill in the active cell, and
+#   record a lineage entry with the parent's policy state (status, metadata)
+#   captured as a snapshot. After fork:
+#     * processes/<name>.sop.json exists in the active cell (copied verbatim)
+#     * lineage entry has forked_from = { cell, forked_at, snapshot }
+#     * the child's live status + metadata are empty — policy decides what
+#       to do with the snapshot (e.g., inherit + flag as unverified)
+#
+#   Default source: walk ancestors and use the nearest match. Pass --from
+#   to override (resolves relative to the active cell or accepts absolute).
+cmd_fork() {
+  local name="" from_arg=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from) from_arg="$2"; shift 2 ;;
+      --*)    die "unknown flag for fork: $1" "unknown_flag" "run opensop help" ;;
+      *)
+        if [[ -z "$name" ]]; then name="$1"; shift
+        else die "unexpected arg: $1" "usage_error" "usage: opensop fork <name> [--from <cell>]"
+        fi
+        ;;
+    esac
+  done
+  [[ -z "$name" ]] && die "usage: opensop fork <name> [--from <cell-path>]" "usage_error" "name the skill to fork"
+
+  # Path-traversal guard: reject names containing anything outside [a-zA-Z0-9_-].
+  # Allows "my-skill", "my_skill", "Skill123"; rejects "../../etc/evil", "../foo".
+  [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] \
+    || die "invalid name '$name' — only letters, digits, hyphens, and underscores allowed" \
+           "usage_error" "use a name matching ^[a-zA-Z0-9_-]+\$"
+
+  local active_cell; active_cell="$(_find_scope_root)"
+  [[ -z "$active_cell" ]] && die "not inside an OpenSOP cell — run 'opensop init' first" "usage_error" \
+                                "create a cell first, then fork into it"
+
+  # Refuse to overwrite — a fork into an active cell that already has the
+  # skill would silently shadow without recording lineage. Force explicit
+  # action from the user.
+  [[ -f "$active_cell/processes/${name}.sop.json" ]] && \
+    die "skill already exists in active cell: $active_cell/processes/${name}.sop.json" "usage_error" \
+        "remove it first, or fork into a different cell"
+
+  # Resolve source cell + file.
+  local src_cell="" src_file=""
+  if [[ -n "$from_arg" ]]; then
+    if [[ "$from_arg" != /* ]]; then
+      src_cell="$(cd "$active_cell/$from_arg" 2>/dev/null && pwd)" \
+        || die "--from cell not found: $from_arg" "file_not_found" "use an existing cell path"
+    else
+      src_cell="$from_arg"
+    fi
+    [[ -d "$src_cell/.opensop" && -f "$src_cell/.opensop/manifest.yaml" ]] \
+      || die "--from is not a cell: $src_cell" "usage_error" "the path must contain .opensop/manifest.yaml"
+    src_file="$src_cell/processes/${name}.sop.json"
+    [[ -f "$src_file" ]] || die "skill '$name' not found in $src_cell" "file_not_found" "check processes/${name}.sop.json"
+  else
+    while IFS= read -r anc; do
+      [[ -z "$anc" ]] && continue
+      if [[ -f "$anc/processes/${name}.sop.json" ]]; then
+        src_cell="$anc"
+        src_file="$anc/processes/${name}.sop.json"
+        break
+      fi
+    done < <(_enumerate_ancestors "$active_cell")
+    [[ -z "$src_file" ]] && die "skill '$name' not found in any ancestor cell" "file_not_found" \
+                                "use --from to specify a non-ancestor cell"
+  fi
+
+  # Snapshot parent's policy state (status + metadata) — opaque to substrate.
+  local parent_lineage parent_entry snapshot
+  parent_lineage="$(_lineage_read "$src_cell")"
+  parent_entry="$(jq -n --argjson l "$parent_lineage" --arg s "$name" '$l[$s] // null')"
+  if [[ "$parent_entry" == "null" ]]; then
+    snapshot='{"status":"","metadata":{}}'
+  else
+    snapshot="$(jq -c '{status: (.status // ""), metadata: (.metadata // {})}' <<<"$parent_entry")"
+  fi
+
+  # Copy the process file.
+  mkdir -p "$active_cell/processes"
+  cp "$src_file" "$active_cell/processes/${name}.sop.json"
+
+  # Create the child lineage entry with forked_from set.
+  local now; now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local new_entry; new_entry="$(jq -n --arg name "$name" --arg cell "$src_cell" --arg at "$now" --argjson snap "$snapshot" \
+    '{logical_name: $name,
+      forked_from: { cell: $cell, forked_at: $at, snapshot: $snap },
+      history: [],
+      status: "",
+      metadata: {}}')"
+  local child_lineage; child_lineage="$(_lineage_read "$active_cell")"
+  local new_lineage; new_lineage="$(jq --arg n "$name" --argjson e "$new_entry" '.[$n] = $e' <<<"$child_lineage")"
+  _lineage_write "$active_cell" "$new_lineage"
+
+  if [[ "$OUTPUT_MODE" == "pretty" ]] || { [[ "$OUTPUT_MODE" == "auto" ]] && is_tty; }; then
+    info "${C_GREEN}forked${C_RESET} '$name' from ${C_BOLD}$src_cell${C_RESET}"
+    info "  into:     $active_cell/processes/${name}.sop.json"
+    info "  snapshot: $snapshot"
+    info "  ${C_DIM}(child's live status + metadata are empty — policy decides what to do with the snapshot)${C_RESET}"
+  else
+    jq -nc --arg name "$name" --arg src "$src_cell" --arg dst "$active_cell/processes/${name}.sop.json" --argjson snap "$snapshot" \
+      '{ok:true, name:$name, source_cell:$src, dest_file:$dst, snapshot:$snap}'
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: help
+# --------------------------------------------------------------------------- #
+
+cmd_help() {
+  cat <<EOF
+${C_BOLD}opensop${C_RESET} — thin CLI for OpenSOP runtimes (v$OPENSOP_CLI_VERSION)
+
+${C_BOLD}USAGE${C_RESET}
+  opensop <command> [args]
+
+${C_BOLD}DISCOVERY${C_RESET}
+  list [--tag <tag>]            list all registered processes (optionally filtered by tag)
+  search <keyword> [...]        ranked text search over process names, descriptions, tags
+  suggest "<task description>"  inverse retrieval — describe a task, get a process recommendation
+  schema <name>                 show the full definition of a process [remote]
+
+${C_BOLD}INSPECTION${C_RESET}
+  status <id>                   show the current state of a run
+  steps <id>                    show all steps of a run
+  diff <id1> <id2>              compare two runs of the same process
+  history --process <name> [--limit N]  recent runs of a specific process (newest-first)
+  compass                       top processes by run-count, recency, and failure rate
+
+${C_BOLD}EXECUTION${C_RESET}
+  run <name> [opts]             start a new run of a process
+  dry-run <name> [opts]         preview what would happen — validates inputs, no execution
+  submit <id> <step-id> [opts]  submit outputs to advance a paused step
+  cancel <id> [--reason TEXT]   cancel a running run
+
+${C_BOLD}LOCAL EXECUTION (default — no server required)${C_RESET}
+  run <name|file.sop.json>           run a process locally; bare name resolves across the cell chain (nearest wins)
+  dry-run <name|file.sop.json>       preview a local process — validates inputs, shows step walkthrough, no run created
+  submit <run_id> <step-id> [opts]   resume a paused (waiting) run — inject outputs and re-enter execution at cursor
+                                     opts: --output k=v (repeatable), --decided-by <actor>, --confidence <float>
+  status <run_id>                    show state of a local run (mirrors remote status shape)
+  steps <run_id>                     list per-step state from a local run's audit log
+  diff <run_id1> <run_id2>           compare two local runs of the same process (inputs/outputs/per-step state)
+  cancel <run_id> [--reason TEXT]    cancel a running or waiting local run; completed/failed/cancelled → rejected
+  list [dir] [--conflicts]           list local processes; no arg + inside a cell walks the chain; --conflicts marks shadowed entries
+  search <kw...>                     ranked text search over cell-chain processes (no server)
+  suggest "<task>" [--threshold N]   intent scoring over cell-chain processes (no server)
+  runs                               list local runs
+  show <run_id>                      show a local run's manifest + per-step receipts
+  ${C_DIM}⚠ local steps run as shell on this machine — only run process files you trust${C_RESET}
+
+${C_BOLD}LOCAL STEP TYPES (v0.7 — full SPEC parity)${C_RESET}
+  automated          run a shell script; JSON stdout merged into context
+  shell              alias for automated
+  noop               no-op placeholder; passes through context unchanged
+  form               pauses run (waiting_for_input); resume via: opensop submit <run_id> <step-id> --output k=v
+  approval           pauses run (waiting_for_approval); expects decision=approve|reject (or custom outputs/schema)
+  wait               wait.seconds → completes immediately with {waited:true}; wait.until → pauses (waiting_for_callback)
+  llm                call Anthropic Claude; requires ANTHROPIC_API_KEY; model must start with "claude"
+  webhook            outbound HTTP; sync → completes with response; callback → pauses (waiting_for_callback); poll → unsupported
+  subprocess         run a child process locally; child context merged under step id; depth guard (max 16 levels)
+
+${C_BOLD}CELLS (v0.6 — fractal addressing)${C_RESET}
+  init [--name N] [--parent PATH]   create .opensop/ in cwd; parent auto-detected if cwd is inside an ancestor cell
+  scope                             print the active cell + ancestor chain (errors when cwd is not inside any cell)
+  annotate <skill> <type> <json>    append a policy event to the skill's lineage history in the active cell
+  lineage <skill>                   print a skill's lineage entry (status, metadata, history) in the active cell
+  fork <name> [--from <cell>]       copy an ancestor cell's skill into the active cell + record forked_from snapshot
+
+${C_BOLD}AUTHORING${C_RESET}
+  register <process.yaml>       POST a .sop.yaml to /sop/processes/register (requires --remote or --server)
+  schema validate <file.yaml>   client-side YAML lint (no server round-trip)
+
+${C_BOLD}ADMIN${C_RESET}
+  instances [--state X] [--process Y]   list runs (paginated; --remote for server)
+
+${C_BOLD}CONFIG${C_RESET}
+  config                        show current config
+  config set url <URL>          set the server URL
+  config set token <TOKEN>      set the API token
+
+${C_BOLD}GLOBAL OPTIONS${C_RESET}
+  --json                        emit JSON to stdout (default when piped)
+  --pretty                      pretty-print (default in TTY)
+  --remote                      route dual commands to the configured remote server (OPENSOP_URL)
+  --server <url>                set the server URL for this invocation and enable remote mode
+  --local                       deprecated no-op (local is now the default); kept for script compatibility
+  --help, -h                    show this help
+  --version, -v                 print version
+
+${C_BOLD}INPUT FORMS (for run/dry-run/submit)${C_RESET}
+  --inputs '<json>'             pass inputs as a JSON object
+  --inputs-file <path>          read inputs from a JSON file
+  --input KEY=VALUE             repeatable; build the inputs object piece by piece
+                                (use --outputs / --output / --outputs-file for submit)
+
+${C_BOLD}EXAMPLES${C_RESET}
+  # Local (default — no server):
+  opensop run ./greet.sop.json --input name=Ana          # run locally, no server
+  opensop submit <run_id> collect --output email=a@b.com # resume a paused form step
+  opensop status <run_id>                                # local run state
+  opensop list                                           # list local process files
+  opensop runs                                           # list local runs
+  opensop show <run_id>                                  # local run receipts
+
+  # Remote (opt-in with --remote or --server):
+  opensop config set url https://demo.opensop.ai
+  opensop config set token demo-public-token-resets-daily
+  opensop --remote list
+  opensop --remote run lead-qualification \\
+    --input lead_name="Ana García" \\
+    --input lead_email=ana@example.com \\
+    --input source=website
+  opensop --remote status <run-id>
+  opensop --remote history --process lead-qualification --limit 5
+  opensop --server https://demo.opensop.ai register ./my-process.sop.yaml
+  opensop schema validate ./my-process.sop.yaml  # always local (no server)
+
+${C_BOLD}ENVIRONMENT${C_RESET}
+  OPENSOP_URL                   override config server URL for one call
+  OPENSOP_TOKEN                 override config token for one call
+  OPENSOP_HOME                  config + cache dir (default: ~/.opensop)
+  OPENSOP_LOCAL_HOME            local-mode receipts dir (default: active cell's .opensop/ when inside a cell; else ~/.opensop-local)
+  NO_COLOR                      disable ANSI color output
+EOF
+}
+
+cmd_version() {
+  echo "opensop $OPENSOP_CLI_VERSION"
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: config
+# --------------------------------------------------------------------------- #
+
+cmd_config() {
+  if [[ $# -eq 0 ]]; then
+    load_config
+    if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+      printf '%sserver:%s %s\n' "$C_BOLD" "$C_RESET" "${OPENSOP_URL:-${C_DIM}(unset)$C_RESET}"
+      local masked="${OPENSOP_TOKEN:-}"
+      [[ -n "$masked" ]] && masked="${masked:0:6}…${masked: -4}"
+      printf '%stoken:%s  %s\n' "$C_BOLD" "$C_RESET" "${masked:-${C_DIM}(unset)$C_RESET}"
+      printf '%sconfig:%s %s\n' "$C_BOLD" "$C_RESET" "$CONFIG_FILE"
+    else
+      jq -nc --arg url "${OPENSOP_URL:-}" --arg token "${OPENSOP_TOKEN:-}" --arg cfg "$CONFIG_FILE" \
+        '{url: $url, token_set: ($token | length > 0), config: $cfg}'
+    fi
+    return 0
+  fi
+
+  local sub="$1"; shift
+  case "$sub" in
+    set)
+      [[ $# -lt 2 ]] && die "usage: opensop config set <url|token> <value>" "usage_error" "run opensop help"
+      local key="$1" val="$2"
+      load_config
+      case "$key" in
+        url)   OPENSOP_URL="$val" ;;
+        token) OPENSOP_TOKEN="$val" ;;
+        *) die "unknown config key '$key' — valid: url, token" "usage_error" "run opensop help" ;;
+      esac
+      save_config
+      ok "$key set"
+      ;;
+    *)
+      die "unknown subcommand 'config $sub' — valid: set" "usage_error" "run opensop help"
+      ;;
+  esac
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: list
+# --------------------------------------------------------------------------- #
+
+cmd_list() {
+  # Default: list local .sop.json process files. With --remote/--server: list from server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_list "$@"; return $?; fi
+  local tag_filter=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --tag) tag_filter="$2"; shift 2 ;;
+      *) die "unknown flag for list: $1" "unknown_flag" "run opensop list --help" ;;
+    esac
+  done
+
+  local resp; resp=$(api_get "/sop/")
+
+  # Client-side tag filter.
+  if [[ -n "$tag_filter" ]]; then
+    resp=$(echo "$resp" | jq --arg tag "$tag_filter" \
+      '{processes: [.processes[] | select(.tags | index($tag) != null)]}')
+  fi
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    echo "$resp" | jq -r '.processes[] | "\(.name)\t\(.tags // [] | join(", "))\t\(.description // "")"' | \
+      while IFS=$'\t' read -r name tags desc; do
+        printf '%s%-30s%s %-40s  %s\n' "$C_BOLD" "$name" "$C_RESET" "${C_DIM}${tags}${C_RESET}" "$desc"
+      done
+  else
+    echo "$resp" | emit_pretty_or_json
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: schema
+# --------------------------------------------------------------------------- #
+
+cmd_schema() {
+  if [[ "$REMOTE_MODE" != true ]]; then
+    die "schema lookup requires a remote server" "usage_error" \
+        "pass --remote (configured server) or --server <url>"
+  fi
+  [[ $# -lt 1 ]] && die "usage: opensop schema <name>" "usage_error" "run opensop help"
+  local name="$1"
+  api_get "/sop/$name/schema" | emit_pretty_or_json
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: run
+# --------------------------------------------------------------------------- #
+
+# Build a JSON object from --input KEY=VALUE pairs, --inputs '<json>', or --inputs-file.
+# Echoes the resulting JSON to stdout.
+build_payload_object() {
+  # Args:
+  #   $1: noun ("input" or "output")
+  #   shift; rest = the user's args after subcommand+positionals already consumed
+  local noun="$1"; shift
+  local plural="${noun}s"
+  local json_blob=""
+  local file_path=""
+  local -a kv_pairs=()
+  local -a metadata_pairs=()
+  local extra_decided_by="" extra_confidence=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --$plural)         json_blob="$2"; shift 2 ;;
+      --$plural-file)    file_path="$2"; shift 2 ;;
+      --$noun)           kv_pairs+=("$2"); shift 2 ;;
+      --metadata)        metadata_pairs+=("$2"); shift 2 ;;
+      --decided-by)      extra_decided_by="$2"; shift 2 ;;
+      --confidence)      extra_confidence="$2"; shift 2 ;;
+      *)                 die "unknown flag: $1" "unknown_flag" "run opensop help" ;;
+    esac
+  done
+
+  local payload="{}"
+
+  # Start from --inputs/--outputs JSON or --inputs-file/--outputs-file.
+  if [[ -n "$json_blob" ]]; then
+    payload=$(echo "$json_blob" | jq .) || die "invalid JSON in --$plural" "invalid_json"
+  elif [[ -n "$file_path" ]]; then
+    payload=$(jq . "$file_path") || die "could not read $file_path as JSON" "invalid_json"
+  fi
+
+  # Merge --input KEY=VALUE pairs into payload.
+  if (( ${#kv_pairs[@]} > 0 )); then
+    for kv in "${kv_pairs[@]}"; do
+      [[ "$kv" != *=* ]] && die "--$noun expects KEY=VALUE, got: $kv" "usage_error"
+      local k="${kv%%=*}" v="${kv#*=}"
+      # If value parses as JSON (number, bool, null, object, array), use raw; else string.
+      if echo "$v" | jq -e . >/dev/null 2>&1; then
+        payload=$(echo "$payload" | jq --arg k "$k" --argjson v "$v" '.[$k] = $v')
+      else
+        payload=$(echo "$payload" | jq --arg k "$k" --arg v "$v" '.[$k] = $v')
+      fi
+    done
+  fi
+
+  # Build metadata object (run only).
+  local metadata="{}"
+  if (( ${#metadata_pairs[@]} > 0 )); then
+    for kv in "${metadata_pairs[@]}"; do
+      [[ "$kv" != *=* ]] && die "--metadata expects KEY=VALUE, got: $kv" "usage_error"
+      local k="${kv%%=*}" v="${kv#*=}"
+      if echo "$v" | jq -e . >/dev/null 2>&1; then
+        metadata=$(echo "$metadata" | jq --arg k "$k" --argjson v "$v" '.[$k] = $v')
+      else
+        metadata=$(echo "$metadata" | jq --arg k "$k" --arg v "$v" '.[$k] = $v')
+      fi
+    done
+  fi
+
+  # Emit structured response: payload + metadata + extras.
+  jq -nc \
+    --argjson payload "$payload" \
+    --argjson metadata "$metadata" \
+    --arg decided_by "$extra_decided_by" \
+    --arg confidence "$extra_confidence" \
+    '{payload: $payload, metadata: $metadata, decided_by: $decided_by, confidence: $confidence}'
+}
+
+cmd_run() {
+  # Default: run locally against a process file. With --remote/--server: start on server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_run "$@"; return $?; fi
+  [[ $# -lt 1 ]] && die "usage: opensop run <name> [--inputs '<json>' | --input KEY=VALUE ...] [--metadata KEY=VALUE ...]" "usage_error" "run opensop help"
+  local name="$1"; shift
+
+  local built; built=$(build_payload_object input "$@")
+  local inputs metadata
+  inputs=$(echo "$built" | jq -c '.payload')
+  metadata=$(echo "$built" | jq -c '.metadata')
+
+  local body
+  body=$(jq -nc --argjson inputs "$inputs" --argjson metadata "$metadata" \
+    '{inputs: $inputs, metadata: $metadata}')
+
+  local resp; resp=$(api_post "/sop/$name/start" "$body")
+  local id state
+  id=$(echo "$resp" | jq -r '.id')
+  state=$(echo "$resp" | jq -r '.state')
+  cache_instance "$id" "$name"
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    ok "started $C_BOLD$name$C_RESET"
+    info "  id:    $id"
+    info "  state: $state"
+    # Show what's waiting, if anything.
+    local waiting
+    waiting=$(echo "$resp" | jq -r '.steps[]? | select(.state == "active") | "  \(.step_id) (\(.type)): \(.sub_state // "active")"')
+    [[ -n "$waiting" ]] && { echo; printf '%swaiting:%s\n' "$C_BOLD" "$C_RESET"; echo "$waiting"; }
+    echo
+    info "next:  opensop status $id"
+  else
+    echo "$resp" | emit_pretty_or_json
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: status / steps / cancel
+# --------------------------------------------------------------------------- #
+
+cmd_status() {
+  # Default: read from local run directory. With --remote/--server: query server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_status "$@"; return $?; fi
+  [[ $# -lt 1 ]] && die "usage: opensop status <instance-id>" "usage_error" "run opensop help"
+  local id="$1"
+  local name; name=$(lookup_name "$id")
+  local resp; resp=$(api_get "/sop/$name/$id")
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local state ended
+    state=$(echo "$resp" | jq -r '.state')
+    ended=$(echo "$resp" | jq -r '.completed_at // ""')
+    local color="$C_BLUE"
+    [[ "$state" == "completed" ]] && color="$C_GREEN"
+    [[ "$state" == "failed"    ]] && color="$C_RED"
+    [[ "$state" == "cancelled" ]] && color="$C_YELLOW"
+    printf '%sinstance:%s %s\n' "$C_BOLD" "$C_RESET" "$id"
+    printf '%sprocess:%s  %s\n' "$C_BOLD" "$C_RESET" "$name"
+    printf '%sstate:%s    %s%s%s%s\n' "$C_BOLD" "$C_RESET" "$color" "$state" "$C_RESET" "${ended:+ ($ended)}"
+    echo
+    echo "$resp" | jq -r '.steps[]? | "\(.step_id)\t\(.type)\t\(.state)\t\(.sub_state // "")"' | \
+      while IFS=$'\t' read -r step_id stype sstate sub; do
+        local glyph
+        case "$sstate" in
+          completed) glyph="${C_GREEN}✓${C_RESET}" ;;
+          failed)    glyph="${C_RED}✗${C_RESET}" ;;
+          active)    glyph="${C_YELLOW}⏳${C_RESET}" ;;
+          waiting)   glyph="${C_YELLOW}⏳${C_RESET}" ;;  # local-equivalent of remote 'active' for paused steps
+          skipped)   glyph="${C_DIM}—${C_RESET}" ;;
+          *)         glyph="${C_DIM}·${C_RESET}" ;;
+        esac
+        printf '  %s %-30s %s%s%s%s\n' "$glyph" "$step_id" "$C_DIM" "$stype" "${sub:+ · $sub}" "$C_RESET"
+      done
+  else
+    echo "$resp" | emit_pretty_or_json
+  fi
+}
+
+cmd_steps() {
+  # Default: derive steps from local run's audit.jsonl. With --remote/--server: query server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_steps "$@"; return $?; fi
+  [[ $# -lt 1 ]] && die "usage: opensop steps <instance-id>" "usage_error" "run opensop help"
+  local id="$1"
+  local name; name=$(lookup_name "$id")
+  api_get "/sop/$name/$id/steps" | emit_pretty_or_json
+}
+
+cmd_cancel() {
+  # Default: cancel a local run. With --remote/--server: cancel on server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_cancel "$@"; return $?; fi
+  [[ $# -lt 1 ]] && die "usage: opensop cancel <instance-id> [--reason TEXT]" "usage_error" "run opensop help"
+  local id="$1"; shift
+  local reason=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --reason) reason="$2"; shift 2 ;;
+      *) die "unknown flag for cancel: $1" "unknown_flag" "run opensop cancel --help" ;;
+    esac
+  done
+  local name; name=$(lookup_name "$id")
+  local body
+  body=$(jq -nc --arg reason "$reason" '{reason: $reason}')
+  local resp; resp=$(api_post "/sop/$name/$id/cancel" "$body")
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    ok "cancelled $name $id"
+    [[ -n "$reason" ]] && info "  reason: $reason"
+  else
+    echo "$resp" | emit_pretty_or_json
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: submit
+# --------------------------------------------------------------------------- #
+
+cmd_submit() {
+  # Default: resume a paused local run. With --remote/--server: submit to server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_submit "$@"; return $?; fi
+  [[ $# -lt 2 ]] && die "usage: opensop submit <instance-id> <step-id> [--outputs '<json>' | --output KEY=VALUE ...] [--decided-by WHO] [--confidence N]" "usage_error" "run opensop help"
+  local id="$1" step_id="$2"; shift 2
+
+  local built; built=$(build_payload_object output "$@")
+  local outputs decided_by confidence
+  outputs=$(echo "$built" | jq -c '.payload')
+  decided_by=$(echo "$built" | jq -r '.decided_by')
+  confidence=$(echo "$built" | jq -r '.confidence')
+
+  local body
+  body=$(jq -nc --argjson outputs "$outputs" \
+    --arg decided_by "$decided_by" \
+    --arg confidence "$confidence" \
+    '{outputs: $outputs}
+     | (if $decided_by != "" then .decided_by = $decided_by else . end)
+     | (if $confidence != "" then .confidence = ($confidence | tonumber) else . end)')
+
+  local name; name=$(lookup_name "$id")
+  local resp; resp=$(api_post "/sop/$name/$id/steps/$step_id/submit" "$body")
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local instance_state step_state
+    instance_state=$(echo "$resp" | jq -r '.instance.state')
+    step_state=$(echo "$resp" | jq -r '.step.state')
+    ok "submitted $step_id ($step_state) — run $instance_state"
+    info "next:  opensop status $id"
+  else
+    echo "$resp" | emit_pretty_or_json
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: instances
+# --------------------------------------------------------------------------- #
+
+cmd_instances() {
+  # Default: enumerate local runs. With --remote/--server: query server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_instances "$@"; return $?; fi
+  local query=""
+  local state="" process="" limit=50 offset=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state)    state="$2";   shift 2 ;;
+      --process)  process="$2"; shift 2 ;;
+      --limit)    limit="$2";   shift 2 ;;
+      --offset)   offset="$2";  shift 2 ;;
+      *) die "unknown flag for instances: $1" "unknown_flag" "run opensop instances --help" ;;
+    esac
+  done
+  query="?limit=$limit&offset=$offset"
+  [[ -n "$state" ]]   && query="$query&state=$state"
+  [[ -n "$process" ]] && query="$query&process=$process"
+
+  local resp; resp=$(api_get "/sop/instances$query")
+
+  # Always prime the local cache from every returned row so that
+  # a subsequent `opensop status <id>` doesn't hit the cache-miss path.
+  while IFS=$'\t' read -r _cid _cname; do
+    [[ -n "$_cid" && -n "$_cname" ]] && cache_instance "$_cid" "$_cname"
+  done < <(echo "$resp" | jq -r '.instances[]? | "\(.id)\t\(.process.name)"')
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local total
+    total=$(echo "$resp" | jq -r '.total')
+    info "$total run(s)"
+    echo "$resp" | jq -r '.instances[]? | "\(.id)\t\(.process.name)\t\(.state)\t\(.started_at // "")"' | \
+      while IFS=$'\t' read -r id name pstate started; do
+        local color="$C_BLUE"
+        [[ "$pstate" == "completed" ]] && color="$C_GREEN"
+        [[ "$pstate" == "failed"    ]] && color="$C_RED"
+        [[ "$pstate" == "cancelled" ]] && color="$C_YELLOW"
+        printf '  %s  %-25s %s%-10s%s %s\n' "$id" "$name" "$color" "$pstate" "$C_RESET" "$C_DIM$started$C_RESET"
+      done
+  else
+    echo "$resp" | emit_pretty_or_json
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: search / suggest — ranked text search helpers
+# --------------------------------------------------------------------------- #
+
+# score_processes KEYWORDS_JSON PROCESSES_JSON
+#   Scores each process by counting case-insensitive token matches across
+#   name (hyphen/underscore-tokenized) + description + tags + inputs_summary +
+#   outputs_summary. Emits JSON array sorted by score desc.
+#   KEYWORDS_JSON: a JSON array of strings (each may itself be multi-word;
+#   they are tokenized again on whitespace inside jq).
+#   PROCESSES_JSON: the full /sop/ response object.
+score_processes() {
+  local keywords_json="$1"
+  local processes_json="$2"
+
+  echo "$processes_json" | jq -c \
+    --argjson kws "$keywords_json" '
+    # Flatten a possibly-multi-word keyword array into individual tokens,
+    # dropping tokens shorter than 2 characters (stop words).
+    ($kws | map(ascii_downcase | split(" ") | .[] | select(length >= 2)) ) as $tokens |
+
+    [ .processes[] |
+      . as $p |
+      # Build haystack:
+      #   - name with hyphens/underscores replaced by spaces (tokenizes names)
+      #   - description
+      #   - tags joined
+      #   - inputs_summary (new in v0.4.1)
+      #   - outputs_summary (new in v0.4.1)
+      (($p.name // "" | gsub("[-_]"; " ")) + " " +
+       ($p.name // "") + " " +
+       ($p.description // "") + " " +
+       (($p.tags // []) | join(" ")) + " " +
+       ($p.inputs_summary // "") + " " +
+       ($p.outputs_summary // "")) | ascii_downcase as $text |
+      # Sum word-boundary matches per token; skip tokens shorter than 2 chars.
+      ($tokens | map(
+        . as $tok |
+        if ($tok | length) < 2 then 0
+        else
+          ("\\b" + $tok + "\\b") as $pat |
+          ($text | [scan($pat)] | length)
+        end
+      ) | add // 0) as $score |
+      select($score >= 1) |
+      {name: $p.name, score: $score, description: ($p.description // ""), tags: ($p.tags // [])}
+    ] | sort_by(-.score)
+  '
+}
+
+cmd_search() {
+  # Default: search over local process files in the cell chain. With --remote/--server: search server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_search "$@"; return $?; fi
+  [[ $# -lt 1 ]] && die "usage: opensop search <keyword> [keyword2 ...]" "usage_error" "run opensop help"
+  local -a keywords=("$@")
+  local keywords_json
+  keywords_json=$(printf '%s\n' "${keywords[@]}" | jq -Rsc '[split("\n")[] | select(length > 0)]')
+
+  local resp; resp=$(api_get "/sop/")
+  local results; results=$(score_processes "$keywords_json" "$resp")
+
+  # Top 5 only.
+  local top5; top5=$(echo "$results" | jq -c '.[0:5]')
+
+  local count; count=$(echo "$top5" | jq 'length')
+  if [[ "$count" -eq 0 ]]; then
+    printf 'no matches for: %s\n' "${keywords[*]}" >&2
+    exit 0
+  fi
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    echo "$top5" | jq -r '.[] | "\(.score)\t\(.name)\t\(.tags | join(", "))\t\(.description)"' | \
+      while IFS=$'\t' read -r score name tags desc; do
+        # Truncate description to 60 chars for readability.
+        local snippet="${desc:0:60}"
+        [[ "${#desc}" -gt 60 ]] && snippet="${snippet}…"
+        printf '%s%-4s%s  %s%-30s%s %s%s%s  %s\n' \
+          "$C_DIM" "$score" "$C_RESET" \
+          "$C_BOLD" "$name" "$C_RESET" \
+          "$C_DIM" "(${tags})" "$C_RESET" \
+          "$snippet"
+      done
+  else
+    local query_arr; query_arr=$(printf '%s\n' "${keywords[@]}" | jq -Rsc '[split("\n")[] | select(length > 0)]')
+    echo "$top5" | jq -c --argjson q "$query_arr" '{query: $q, results: .}'
+  fi
+}
+
+cmd_suggest() {
+  # Default: suggest from local process files in the cell chain. With --remote/--server: suggest from server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_suggest "$@"; return $?; fi
+  [[ $# -lt 1 ]] && die "usage: opensop suggest \"<task description>\"" "usage_error" "run opensop help"
+  # Treat all positional args as one concatenated task string.
+  local task="$*"
+  local -a keywords
+  # Split task into words.
+  IFS=' ' read -r -a keywords <<< "$task"
+
+  local threshold="0.0"
+  # Check for --threshold flag: re-parse args to extract it.
+  local -a remaining_args=("$@")
+  local -a parsed_keywords=()
+  local i=0
+  while [[ $i -lt ${#remaining_args[@]} ]]; do
+    local a="${remaining_args[$i]}"
+    if [[ "$a" == "--threshold" ]]; then
+      (( i++ ))
+      threshold="${remaining_args[$i]:-0.0}"
+    else
+      parsed_keywords+=("$a")
+    fi
+    (( i++ ))
+  done
+
+  # Rebuild task and keywords from parsed args (stripping --threshold).
+  if (( ${#parsed_keywords[@]} > 0 )); then
+    task="${parsed_keywords[*]}"
+    IFS=' ' read -r -a keywords <<< "$task"
+  fi
+
+  [[ ${#keywords[@]} -eq 0 ]] && die "usage: opensop suggest \"<task description>\"" "usage_error" "run opensop help"
+
+  local keywords_json
+  keywords_json=$(printf '%s\n' "${keywords[@]}" | jq -Rsc '[split("\n")[] | select(length > 0)]')
+  local num_kws="${#keywords[@]}"
+
+  local resp; resp=$(api_get "/sop/")
+  local results; results=$(score_processes "$keywords_json" "$resp")
+
+  # Top-1 with confidence.
+  local top1; top1=$(echo "$results" | jq -c --argjson nk "$num_kws" '
+    if length == 0 then null
+    else
+      .[0] |
+      . + {confidence: ([1.0, (.score / ([$nk, 1] | max))] | min)}
+    end
+  ')
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    if [[ "$top1" == "null" ]]; then
+      printf 'no clear match for "%s"\n' "$task"
+    else
+      local name confidence desc
+      name=$(echo "$top1" | jq -r '.name')
+      confidence=$(echo "$top1" | jq -r '.confidence | (. * 100 | round / 100 | tostring)')
+      desc=$(echo "$top1" | jq -r '.description')
+      # Check threshold.
+      local passes; passes=$(echo "$top1" | jq -r --arg t "$threshold" '(.confidence >= ($t | tonumber)) | tostring')
+      if [[ "$passes" == "true" ]]; then
+        printf '%s→%s this looks like %s%s%s (confidence: %s)\n' \
+          "$C_GREEN" "$C_RESET" "$C_BOLD" "$name" "$C_RESET" "$confidence"
+        printf '  %s\n' "$desc"
+      else
+        printf 'no clear match for "%s"\n' "$task"
+      fi
+    fi
+  else
+    local match_json
+    if [[ "$top1" == "null" ]]; then
+      match_json="null"
+    else
+      # Check threshold.
+      local passes; passes=$(echo "$top1" | jq -r --arg t "$threshold" '(.confidence >= ($t | tonumber)) | tostring')
+      if [[ "$passes" == "true" ]]; then
+        match_json=$(echo "$top1" | jq -c '{name, confidence, description}')
+      else
+        match_json="null"
+      fi
+    fi
+    jq -nc --arg task "$task" --argjson match "$match_json" '{task: $task, match: $match}'
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: diff — compare two instances of the same process
+# --------------------------------------------------------------------------- #
+
+cmd_diff() {
+  # Default: compare two local runs. With --remote/--server: compare server instances.
+  if [[ "$REMOTE_MODE" != true ]]; then local_diff "$@"; return $?; fi
+  [[ $# -lt 2 ]] && die "usage: opensop diff <id1> <id2>" "usage_error" "run opensop help"
+  local id1="$1" id2="$2"
+
+  local name1; name1=$(lookup_name "$id1")
+  local name2; name2=$(lookup_name "$id2")
+  [[ "$name1" != "$name2" ]] && die "instances are from different processes ($name1 vs $name2); diff requires the same process" "cli_error"
+
+  local a; a=$(api_get "/sop/$name1/$id1")
+  local b; b=$(api_get "/sop/$name2/$id2")
+
+  # Build structured diff in jq.
+  local diff_json
+  diff_json=$(jq -nc \
+    --argjson a "$a" \
+    --argjson b "$b" \
+    --arg id1 "$id1" \
+    --arg id2 "$id2" '
+    def maybe_diff(p; va; vb):
+      if va != vb then [{path: p, a: va, b: vb}] else [] end;
+
+    # Top-level fields.
+    (maybe_diff("state";    $a.state;   $b.state)) +
+    (maybe_diff("outputs";  $a.outputs; $b.outputs)) +
+    (maybe_diff("metadata"; $a.metadata; $b.metadata)) +
+
+    # Per-step diffs — iterate step IDs, accumulate diffs per-step.
+    ([$a.steps[]?.step_id, $b.steps[]?.step_id] | unique |
+      map(. as $sid |
+        ($a.steps[]? | select(.step_id == $sid)) as $sa |
+        ($b.steps[]? | select(.step_id == $sid)) as $sb |
+        maybe_diff("steps.\($sid).state";       $sa.state;       $sb.state) +
+        maybe_diff("steps.\($sid).sub_state";   $sa.sub_state;   $sb.sub_state) +
+        maybe_diff("steps.\($sid).outputs";     $sa.outputs;     $sb.outputs) +
+        maybe_diff("steps.\($sid).decided_by";  $sa.decided_by;  $sb.decided_by) +
+        maybe_diff("steps.\($sid).confidence";  $sa.confidence;  $sb.confidence) +
+        maybe_diff("steps.\($sid).duration_ms"; $sa.duration_ms; $sb.duration_ms)
+      ) | add // []) |
+
+    {
+      a: {id: $id1, state: $a.state, started_at: $a.started_at},
+      b: {id: $id2, state: $b.state, started_at: $b.started_at},
+      differences: .,
+      identical: (length == 0)
+    }
+  ')
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local identical; identical=$(echo "$diff_json" | jq -r '.identical')
+    if [[ "$identical" == "true" ]]; then
+      ok "runs are identical"
+      return 0
+    fi
+    printf '%sdiff%s  %s  vs  %s\n\n' "$C_BOLD" "$C_RESET" "$id1" "$id2"
+    echo "$diff_json" | jq -r '.differences[] | "\(.path)\t\(.a // "null")\t\(.b // "null")"' | \
+      while IFS=$'\t' read -r path va vb; do
+        printf '  %s%-50s%s\n' "$C_BOLD" "$path" "$C_RESET"
+        printf '    %sa:%s %s\n' "$C_RED"   "$C_RESET" "$va"
+        printf '    %sb:%s %s\n' "$C_GREEN" "$C_RESET" "$vb"
+      done
+  else
+    echo "$diff_json" | emit_pretty_or_json
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: compass — top processes by runs / recency / failure rate
+# --------------------------------------------------------------------------- #
+
+cmd_compass() {
+  # Default: compute compass metrics over local runs. With --remote/--server: query server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_compass "$@"; return $?; fi
+  # Paginate up to 1000 instances in batches of 200.
+  local all_instances="[]"
+  local offset=0 batch_size=200 fetched=0
+
+  while true; do
+    local resp; resp=$(api_get "/sop/instances?limit=${batch_size}&offset=${offset}")
+    local batch; batch=$(echo "$resp" | jq -c '.instances // []')
+    local count; count=$(echo "$batch" | jq 'length')
+    (( count == 0 )) && break
+
+    all_instances=$(jq -nc --argjson acc "$all_instances" --argjson new "$batch" '$acc + $new')
+    (( fetched += count ))
+    (( offset  += batch_size ))
+    (( fetched >= 1000 || count < batch_size )) && break
+  done
+
+  # TODO: cost dimension once server exposes /sop/metrics with per-instance cost
+
+  local stats
+  stats=$(echo "$all_instances" | jq -c '
+    group_by(.process.name) |
+    map(
+      . as $grp |
+      ($grp | map(select(.state == "failed" or .state == "cancelled")) | length) as $failures |
+      ($grp | length) as $total |
+      {
+        name:         $grp[0].process.name,
+        total:        $total,
+        last_run_at:  ($grp | map(.started_at) | sort | last),
+        failures:     $failures,
+        rate:         ($failures / $total)
+      }
+    ) | {
+      by_runs:         (sort_by(-.total)        | .[0:10] | map({name, total})),
+      by_recency:      (sort_by(.last_run_at) | reverse | .[0:10] | map({name, last_run_at})),
+      by_failure_rate: (sort_by(-.rate)         | .[0:10] | map({name, total, failures, rate}))
+    }
+  ')
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local by_runs by_recency by_failure
+    by_runs=$(   echo "$stats" | jq -c '.by_runs')
+    by_recency=$(echo "$stats" | jq -c '.by_recency')
+    by_failure=$(echo "$stats" | jq -c '.by_failure_rate')
+
+    printf '%sMost-run:%s\n' "$C_BOLD" "$C_RESET"
+    echo "$by_runs" | jq -r '.[] | "  \(.name) × \(.total)"'
+
+    printf '\n%sMost-recent:%s\n' "$C_BOLD" "$C_RESET"
+    echo "$by_recency" | jq -r '.[] | "  \(.name)  \(.last_run_at // "-")"'
+
+    printf '\n%sHighest failure rate:%s\n' "$C_BOLD" "$C_RESET"
+    echo "$by_failure" | jq -r '.[] | "  \(.name)  \(.rate * 100 | round | tostring)%  (\(.failures)/\(.total))"'
+  else
+    echo "$stats" | emit_pretty_or_json
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: history — discoverable alias for instances --process X
+# --------------------------------------------------------------------------- #
+
+cmd_history() {
+  # Default: enumerate local runs for one process. With --remote/--server: query server.
+  if [[ "$REMOTE_MODE" != true ]]; then local_history "$@"; return $?; fi
+  local process="" limit=10
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --process) process="$2"; shift 2 ;;
+      --limit)   limit="$2";   shift 2 ;;
+      *) die "unknown flag for history: $1" "unknown_flag" "run opensop history --help" ;;
+    esac
+  done
+  [[ -z "$process" ]] && die "usage: opensop history --process <name> [--limit N]" "usage_error" "run opensop help"
+  # Delegate to cmd_instances — share backend call, no duplication.
+  cmd_instances --process "$process" --limit "$limit"
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: dry-run — client-side preview, NO server execution
+# --------------------------------------------------------------------------- #
+
+# walk_steps_preview SCHEMA_JSON
+#   Walks process.steps and emits a human-readable "would ..." description per step.
+walk_steps_preview() {
+  local schema_json="$1"
+  echo "$schema_json" | jq -r '
+    .process.steps[]? |
+    . as $s |
+    ($s.id // "?") as $id |
+    ($s.type // "unknown") as $t |
+    # Collect output field names; fall back to input field names for form steps.
+    ([($s.outputs // [])[]?.name // empty] |
+      if length == 0 then [($s.inputs // [])[]?.name // empty] else . end |
+      map(select(. != null and . != "")) | join(", ")) as $fields |
+    if   $t == "form" then
+      "  \($id)  form          → would request input for fields: \($fields)"
+    elif $t == "automated" then
+      "  \($id)  automated     → would run script: \($s.run // $s.script // $s.runs // "(unspecified)")\(if $s.timeout then " (timeout: \($s.timeout)s)" else "" end)"
+    elif $t == "webhook" then
+      "  \($id)  webhook       → would \($s.method // "POST") \($s.url // "(unspecified)") (response_mode: \($s.response_mode // "sync"))"
+    elif $t == "notification" then
+      "  \($id)  notification  → would send via \($s.channel // "unspecified") to \($s.to // "(unspecified)")"
+    elif $t == "judgment" then
+      "  \($id)  judgment      → would route to LLM (model: \($s.model // "default"), confidence_threshold: \($s.confidence_threshold // "unset")); fallback: \($s.escalation // "none")"
+    elif $t == "approval" then
+      "  \($id)  approval      → would await approval from \(($s.approvers // ["(unspecified)"]) | map(tostring) | join(", "))"
+    elif $t == "subprocess" then
+      "  \($id)  subprocess    → would start subprocess: \($s.process // $s.name // "(unspecified)")"
+    elif $t == "loop" then
+      "  \($id)  loop          → would iterate over \($s.for_each_source // $s.for_each // "(unspecified)"), body: \($s.body.id // "(unspecified)")"
+    elif $t == "llm" then
+      "  \($id)  llm           → would call \($s.model // "default") with prompt template"
+    elif $t == "wait" then
+      "  \($id)  wait          → would pause for \(if $s.seconds then "\($s.seconds)s" else "(unspecified)" end)\(if $s.until then " or until \($s.until)" else "" end)"
+    else
+      "  \($id)  \($t)  → (unknown step type — would execute as configured)"
+    end
+  '
+}
+
+cmd_dry_run() {
+  # Default: preview a local process file. With --remote/--server: validate against server schema.
+  if [[ "$REMOTE_MODE" != true ]]; then local_dry_run "$@"; return $?; fi
+  [[ $# -lt 1 ]] && die "usage: opensop dry-run <name> [--inputs '<json>' | --input KEY=VALUE ...] [--inputs-file <path>]" "usage_error" "run opensop help"
+  local name="$1"; shift
+
+  # Parse flags — only input flags (no metadata/etc for dry-run).
+  local json_blob="" file_path=""
+  local -a kv_pairs=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --inputs)       json_blob="$2";  shift 2 ;;
+      --inputs-file)  file_path="$2";  shift 2 ;;
+      --input)        kv_pairs+=("$2"); shift 2 ;;
+      *) die "unknown flag for dry-run: $1" "unknown_flag" "run opensop dry-run --help" ;;
+    esac
+  done
+
+  # Build input object.
+  local inputs="{}"
+  if [[ -n "$json_blob" ]]; then
+    inputs=$(echo "$json_blob" | jq .) || die "invalid JSON in --inputs" "invalid_json"
+  elif [[ -n "$file_path" ]]; then
+    inputs=$(jq . "$file_path") || die "could not read $file_path as JSON" "invalid_json"
+  fi
+  if (( ${#kv_pairs[@]} > 0 )); then
+    for kv in "${kv_pairs[@]}"; do
+      [[ "$kv" != *=* ]] && die "--input expects KEY=VALUE, got: $kv" "usage_error"
+      local k="${kv%%=*}" v="${kv#*=}"
+      if echo "$v" | jq -e . >/dev/null 2>&1; then
+        inputs=$(echo "$inputs" | jq --arg k "$k" --argjson v "$v" '.[$k] = $v')
+      else
+        inputs=$(echo "$inputs" | jq --arg k "$k" --arg v "$v" '.[$k] = $v')
+      fi
+    done
+  fi
+
+  # 1. Fetch schema (server round-trip for schema only, NOT execution).
+  local schema; schema=$(api_get "/sop/$name/schema")
+
+  # 2. Validate inputs against process.inputs definition.
+  local errors_json
+  errors_json=$(echo "$schema" | jq -c \
+    --argjson supplied "$inputs" '
+    [ .process.inputs[]? |
+      . as $field |
+      ($supplied[$field.name]) as $val |
+      # Required check.
+      (if ($field.required == true) and ($val == null) then
+        {path: ("inputs." + $field.name), message: ("required field missing: " + $field.name)}
+      else null end),
+      # Type check (best-effort).
+      (if $val != null then
+        if   $field.type == "number"  and ($val | type) != "number"  then
+          {path: ("inputs." + $field.name), message: ($field.name + " must be a number")}
+        elif $field.type == "boolean" and ($val | type) != "boolean" then
+          {path: ("inputs." + $field.name), message: ($field.name + " must be a boolean")}
+        elif $field.type == "enum" and ($field.values != null) and ([$field.values[] | . == $val] | any | not) then
+          {path: ("inputs." + $field.name), message: ($field.name + " must be one of: " + ($field.values | join(", ")))}
+        elif $field.type == "string" and $field.format == "email" and ($val | type) == "string" and ($val | test("^[^@]+@[^@]+\\.[^@]+$") | not) then
+          {path: ("inputs." + $field.name), message: ($field.name + " does not look like an email address")}
+        else null end
+      else null end)
+    ] | map(select(. != null))
+  ')
+
+  local valid=true
+  local err_count; err_count=$(echo "$errors_json" | jq 'length')
+  (( err_count > 0 )) && valid=false
+
+  # 3. Walk steps.
+  local steps_preview
+  steps_preview=$(walk_steps_preview "$schema")
+
+  # Build per-step JSON array for JSON output.
+  local steps_json
+  steps_json=$(echo "$schema" | jq -c '
+    [.process.steps[]? | {step_id: .id, type, preview: ("would execute \(.type) step")}]
+  ')
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    printf '%sdry-run:%s %s\n\n' "$C_BOLD" "$C_RESET" "$name"
+
+    printf '%sinputs validation:%s\n' "$C_BOLD" "$C_RESET"
+    if [[ "$valid" == "true" ]]; then
+      ok "inputs valid"
+    else
+      echo "$errors_json" | jq -r '.[] | "  ✗ \(.message)"' | sed "s/^  ✗/$(printf '%s' "${C_RED}✗${C_RESET}")/g"
+      printf '%svalidation failed (%s error(s))%s\n' "$C_RED" "$err_count" "$C_RESET"
+    fi
+
+    printf '\n%sstep preview:%s\n' "$C_BOLD" "$C_RESET"
+    echo "$steps_preview"
+  else
+    local valid_bool; valid_bool=$( [[ "$valid" == "true" ]] && echo 'true' || echo 'false')
+    jq -nc \
+      --arg process "$name" \
+      --argjson valid "$valid_bool" \
+      --argjson validation_errors "$errors_json" \
+      --argjson steps "$steps_json" \
+      '{process: $process, valid: $valid, validation_errors: $validation_errors, steps: $steps}'
+  fi
+
+  [[ "$valid" == "false" ]] && exit 1
+  return 0
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: register — POST a .sop.yaml to /sop/processes/register
+# --------------------------------------------------------------------------- #
+
+cmd_register() {
+  # register is remote-only: requires --remote (configured server) or --server <url>.
+  if [[ "$REMOTE_MODE" != true ]]; then
+    die "register requires a remote server" "usage_error" \
+        "pass --remote (configured server) or --server <url>"
+  fi
+  [[ $# -lt 1 ]] && die "usage: opensop register <process.yaml>" "usage_error" "run opensop help"
+  local file="$1"
+  [[ ! -f "$file" ]] && die "file does not exist: $file" "file_not_found"
+
+  local yaml_content; yaml_content=$(cat "$file")
+
+  # Try JSON-wrapped first; fall back to raw YAML if 4xx.
+  local body; body=$(jq -nc --arg yaml "$yaml_content" '{yaml: $yaml}')
+  local resp status
+
+  # We need to capture the HTTP status to detect the fallback case.
+  local tmp_resp; tmp_resp=$(mktemp)
+  require_url
+  local url="${OPENSOP_URL%/}/sop/processes/register"
+  local -a curl_args=(-sS -X POST
+    -H "Content-Type: application/json"
+    -H "Accept: application/json"
+    -o "$tmp_resp"
+    -w "%{http_code}")
+  [[ -n "${OPENSOP_TOKEN:-}" ]] && curl_args+=(-H "X-SOP-Token: $OPENSOP_TOKEN")
+  curl_args+=(-d "$body")
+
+  status=$(curl "${curl_args[@]}" "$url" 2>/dev/null || true)
+
+  if [[ "$status" -ge 400 && "$status" -lt 500 ]]; then
+    # Fall back to raw YAML body.
+    curl_args=(-sS -X POST
+      -H "Content-Type: application/x-yaml"
+      -H "Accept: application/json"
+      -o "$tmp_resp"
+      -w "%{http_code}")
+    [[ -n "${OPENSOP_TOKEN:-}" ]] && curl_args+=(-H "X-SOP-Token: $OPENSOP_TOKEN")
+    curl_args+=(--data-binary "@$file")
+    status=$(curl "${curl_args[@]}" "$url" 2>/dev/null || true)
+  fi
+
+  resp=$(cat "$tmp_resp")
+  rm -f "$tmp_resp"
+
+  if [[ "$status" -ge 400 ]]; then
+    local err_code err_msg
+    err_code=$(echo "$resp" | jq -r '.error // "http_error"' 2>/dev/null || echo "http_error")
+    err_msg=$(echo "$resp"  | jq -r '.message // empty'      2>/dev/null || echo "")
+    local emode; emode=$(_error_mode)
+    if [[ "$emode" == "json" ]]; then
+      jq -c --argjson s "$status" '. + {_meta: {http_status: $s}}' <<< "$resp" >&2 \
+        2>/dev/null || jq -nc --argjson s "$status" \
+          '{error: "http_error", message: "HTTP error", _meta: {http_status: $s}}' >&2
+    else
+      printf '%sopensop:%s HTTP %s — %s%s\n' "$C_RED" "$C_RESET" "$status" "$err_code" \
+        "${err_msg:+: $err_msg}" >&2
+      if [[ "$status" == "401" || "$status" == "403" ]]; then
+        warn "registration may be admin-restricted; check your token has the right scope,"
+        warn "or register via the dashboard at ${OPENSOP_URL}/admin"
+      fi
+    fi
+    exit 1
+  fi
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local pname pversion
+    pname=$(echo "$resp"    | jq -r '.process.name    // .name    // "(unknown)"' 2>/dev/null || echo "(unknown)")
+    pversion=$(echo "$resp" | jq -r '.process.version // .version // "(unknown)"' 2>/dev/null || echo "(unknown)")
+    ok "registered ${pname}@${pversion}"
+  else
+    echo "$resp" | emit_pretty_or_json
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: schema validate — fully client-side YAML lint
+# --------------------------------------------------------------------------- #
+
+# resolve_yaml FILE
+#   Parses a YAML file and outputs normalized JSON. Uses yq (v4+) if available,
+#   falls back to python3 + PyYAML. Exits non-zero if neither is available.
+resolve_yaml() {
+  local file="$1"
+  if command -v yq >/dev/null 2>&1; then
+    yq e -o=json '.' "$file"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import yaml,json,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))' "$file" \
+      || die "python3 YAML parse failed for $file" "parse_error"
+  else
+    die "schema validate needs 'yq' or 'python3' with PyYAML — install one" "missing_dependency"
+  fi
+}
+
+cmd_schema_validate() {
+  [[ $# -lt 1 ]] && die "usage: opensop schema validate <file.yaml>" "usage_error" "run opensop help"
+  local file="$1"
+  [[ ! -f "$file" ]] && die "file does not exist: $file" "file_not_found"
+
+  local doc
+  doc=$(resolve_yaml "$file") || exit 1
+
+  local -a errors=()
+
+  # Helper: add an error.
+  add_error() { errors+=("$1"); }
+
+  # 1. Top-level opensop field.
+  local opensop_ver; opensop_ver=$(echo "$doc" | jq -r '.opensop // empty')
+  [[ -z "$opensop_ver" ]] && add_error "missing top-level 'opensop' version field"
+
+  # 2. process object.
+  local has_process; has_process=$(echo "$doc" | jq 'has("process")')
+  if [[ "$has_process" != "true" ]]; then
+    add_error "missing top-level 'process' object"
+  else
+    for key in name version description; do
+      local kval; kval=$(echo "$doc" | jq -r --arg k "$key" '.process[$k] // empty')
+      [[ -z "$kval" ]] && add_error "process.$key is required but missing or empty"
+    done
+
+    # inputs array.
+    local inputs_type; inputs_type=$(echo "$doc" | jq -r '.process.inputs | type')
+    if [[ "$inputs_type" != "array" ]]; then
+      add_error "process.inputs must be an array (got: $inputs_type)"
+    else
+      # Each input must have name + type.
+      local bad_inputs
+      bad_inputs=$(echo "$doc" | jq -r '
+        .process.inputs | to_entries[] |
+        select((.value.name == null) or (.value.type == null)) |
+        "  input[\(.key)]: missing name or type"
+      ')
+      [[ -n "$bad_inputs" ]] && while IFS= read -r ln; do add_error "$ln"; done <<< "$bad_inputs"
+    fi
+
+    # steps array.
+    local steps_type; steps_type=$(echo "$doc" | jq -r '.process.steps | type')
+    if [[ "$steps_type" != "array" ]]; then
+      add_error "process.steps must be an array (got: $steps_type)"
+    else
+      local known_types='["form","automated","judgment","approval","webhook","notification","subprocess","loop","llm","wait"]'
+      # Each step: must have id + type; type must be known.
+      # Webhook steps additionally require response_mode (no silent default).
+      local bad_steps
+      bad_steps=$(echo "$doc" | jq -r \
+        --argjson known "$known_types" '
+        .process.steps | to_entries[] |
+        . as $e | $e.value as $s |
+        (
+          (if $s.id == null then "  step[\($e.key)]: missing id" else "" end),
+          (if $s.type == null then "  step[\($e.key)]: missing type" else "" end),
+          (if $s.type != null and ([$known[] | . == $s.type] | any | not) then
+            "  step \($s.id // $e.key): unknown type \"\($s.type)\" (valid: \($known | join(", ")))"
+          else "" end),
+          (if $s.type == "webhook" and (($s.webhook.response_mode // "") == "") then
+            "  step \($s.id // $e.key): webhook step is missing required field: webhook.response_mode (sync|callback|poll)"
+          else "" end)
+        ) | select(length > 0)
+      ')
+      [[ -n "$bad_steps" ]] && while IFS= read -r ln; do add_error "$ln"; done <<< "$bad_steps"
+    fi
+  fi
+
+  # 3. Validate from: reference strings — must match steps.X.outputs.Y or process.inputs.Y.
+  local bad_refs
+  bad_refs=$(echo "$doc" | jq -r '
+    [ .. | strings | select(test("^(steps\\.[^.]+\\.outputs\\.[^.]+|process\\.inputs\\.[^.]+)$") | not)
+      | select(test("^steps\\.") or test("^process\\.inputs\\.")) ] |
+    map("  invalid from: reference: " + .) | .[]
+  ')
+  [[ -n "$bad_refs" ]] && while IFS= read -r ln; do add_error "$ln"; done <<< "$bad_refs"
+
+  local valid=true
+  (( ${#errors[@]} > 0 )) && valid=false
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    printf '%sschema validate:%s %s\n' "$C_BOLD" "$C_RESET" "$file"
+    if [[ "$valid" == "true" ]]; then
+      ok "valid"
+    else
+      for e in "${errors[@]}"; do
+        printf '%s✗%s %s\n' "$C_RED" "$C_RESET" "$e"
+      done
+      printf '%s%s error(s) found%s\n' "$C_RED" "${#errors[@]}" "$C_RESET"
+    fi
+  else
+    local errors_json="[]"
+    if (( ${#errors[@]} > 0 )); then
+      for e in "${errors[@]}"; do
+        errors_json=$(echo "$errors_json" | jq --arg msg "$e" '. + [{path: "unknown", message: $msg}]')
+      done
+    fi
+    local valid_bool; valid_bool=$( [[ "$valid" == "true" ]] && echo 'true' || echo 'false')
+    jq -nc \
+      --arg file "$file" \
+      --argjson valid "$valid_bool" \
+      --argjson errors "$errors_json" \
+      '{file: $file, valid: $valid, errors: $errors}'
+  fi
+
+  [[ "$valid" == "false" ]] && exit 1
+  return 0
+}
+
+# --------------------------------------------------------------------------- #
+# Main dispatch
+# --------------------------------------------------------------------------- #
+
+# =========================================================================== #
+# LOCAL EXECUTION ENGINE  (--local)
+#
+# Run a process against internal files with NO server — no Rails, no daemon, no
+# network. Same CLI, two backends: `opensop run X` hits the configured server;
+# `opensop run X.sop.json --local` runs X locally. Steps run in order; each gets
+# the accumulated JSON context on stdin and in $OSL_CONTEXT, and its JSON stdout
+# is merged back under the step id. Receipts: $OPENSOP_LOCAL_HOME/runs/<run_id>/.
+# =========================================================================== #
+
+_local_now()    { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# timestamp + PID + $RANDOM: distinct across processes (PID) and hardened against
+# the rare same-second/recycled-PID collision. `date %N` is unportable (BSD), so
+# we don't rely on sub-second precision.
+_local_run_id() { echo "$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"; }
+
+# Mark a still-"running" manifest as interrupted. Registered as an EXIT trap
+# during a local run so a kill/crash never leaves a run stuck at "running".
+_local_finalize_trap() {
+  local mf="${1:-}/manifest.json"
+  [ -f "$mf" ] || return 0
+  jq -e '.status=="running"' "$mf" >/dev/null 2>&1 || return 0
+  jq -c '.status="interrupted"' "$mf" > "$mf.tmp" 2>/dev/null && mv "$mf.tmp" "$mf"
+}
+
+# opensop run <process.sop.json> --local [--input k=v ...]
+local_run() {
+  [[ $# -lt 1 ]] && die "usage: opensop run <name|process.sop.json> [--input KEY=VALUE ...]" "usage_error" "run opensop help"
+  local proc_arg="$1"; shift
+
+  # v0.6: argument resolution.
+  #   path-shaped (contains '/' or ends in .sop.json) → use as a file path
+  #   bare name → resolve across the active cell chain (nearest wins)
+  local proc_file=""
+  if [[ "$proc_arg" == *.sop.json ]] || [[ "$proc_arg" == */* ]]; then
+    proc_file="$proc_arg"
+  else
+    proc_file="$(_find_skill_in_cells "$proc_arg")"
+    [[ -z "$proc_file" ]] && die "skill not found: '$proc_arg' (looked in active cell + ancestors)" "file_not_found" \
+        "create processes/${proc_arg}.sop.json in a cell, or pass an explicit path"
+  fi
+
+  [[ -f "$proc_file" ]] || die "process file not found: $proc_file" "file_not_found"
+  jq -e . "$proc_file" >/dev/null 2>&1 || die "process file is not valid JSON: $proc_file" "invalid_json"
+
+  local proc_dir name built inputs ctx
+  proc_dir="$(cd "$(dirname "$proc_file")" && pwd)"
+  name="$(jq -r '.name // "unnamed"' "$proc_file")"
+  built="$(build_payload_object input "$@")"          # reuse the same input parsing as remote run
+  inputs="$(echo "$built" | jq -c '.payload')"
+  ctx="$(jq -c --argjson i "$inputs" '(.inputs // {}) * $i' "$proc_file")"  # declared defaults, overridden by --input
+
+  # Validate the steps array up front — before creating a run dir — so an empty
+  # or malformed process fails loudly instead of "completing" trivially.
+  local n_steps
+  n_steps="$(jq '(.steps // null) | if type=="array" then length else -1 end' "$proc_file")"
+  [ "$n_steps" -lt 0 ] && die "process has no valid \"steps\" array: $proc_file" "parse_error" "add a \"steps\": [ ... ] array"
+  [ "$n_steps" -eq 0 ] && die "process has no steps: $proc_file" "parse_error" "add at least one step to \"steps\""
+
+  # v0.6: pre-validate the optional `executor` field on every step before
+  # running anything. Allowed values: "internal" | "external". Field is
+  # optional; per-type defaults apply when absent (automated/shell/webhook
+  # → external; noop/form/approval/notification/wait/judgment → internal).
+  # Invalid values fail loudly here (parse_error) rather than after partial
+  # execution.
+  local _v_i=0
+  while [ "$_v_i" -lt "$n_steps" ]; do
+    local _v_step _v_exec _v_id
+    _v_step="$(jq -c ".steps[$_v_i]" "$proc_file")"
+    _v_exec="$(jq -r '.executor // ""' <<<"$_v_step")"
+    if [[ -n "$_v_exec" && "$_v_exec" != "internal" && "$_v_exec" != "external" ]]; then
+      _v_id="$(jq -r '.id // "?"' <<<"$_v_step")"
+      die "step[$_v_i] '$_v_id' has invalid executor '$_v_exec' (must be 'internal' or 'external')" "parse_error" \
+          "omit the executor field to accept the default, or set it to internal|external"
+    fi
+    _v_i=$((_v_i+1))
+  done
+
+  local run_id run_dir started
+  run_id="$(_local_run_id)"; run_dir="$OPENSOP_LOCAL_HOME/runs/$run_id"
+  mkdir -p "$run_dir"; started="$(_local_now)"
+  trap '_local_finalize_trap "$run_dir"' EXIT    # safety net: never leave a run "running"
+  jq -nc --arg n "$name" --arg p "$proc_file" --arg id "$run_id" --arg t "$started" --argjson inp "$ctx" \
+    '{run_id:$id, process:$n, process_file:$p, started_at:$t, status:"running", inputs:$inp}' > "$run_dir/manifest.json"
+
+  local loop_status
+  loop_status="$(_local_step_loop "$run_dir" "$proc_file" 0 "$ctx")"
+  local run_status
+  case "$loop_status" in
+    completed)    run_status="completed" ;;
+    failed)       run_status="failed" ;;
+    waiting:*)    run_status="waiting" ;;
+    *)            run_status="failed" ;;
+  esac
+
+  # context.json is written inside _local_step_loop (live checkpoint); just
+  # ensure it exists even on a zero-step edge-case (pre-validated above).
+  [ -f "$run_dir/context.json" ] || echo "$ctx" > "$run_dir/context.json"
+
+  if [ "$run_status" = "waiting" ]; then
+    # Pause path: manifest gets status=waiting + cursor + waiting block.
+    # No ended_at — the run is still in flight, paused at a form/approval/wait step.
+    local wait_index; wait_index="${loop_status#waiting:}"
+    local wait_step wait_since
+    wait_step="$(jq -r ".steps[$wait_index].id // \"step-$wait_index\"" "$proc_file")"
+    wait_since="$(_local_now)"
+    # Build expects: field names + schema from the step's inputs/outputs array.
+    # For approval steps, default to decision:enum(approve,reject) when neither
+    # inputs[] nor outputs[] is declared (matches the runtime's implicit contract).
+    local wait_expects
+    wait_expects="$(jq -c --argjson idx "$wait_index" '
+      .steps[$idx] as $s |
+      ($s.inputs // $s.outputs // null) as $decl |
+      if $decl != null and ($decl | length) > 0 then
+        { outputs: [$decl[].name // empty],
+          schema:  $decl }
+      elif $s.type == "approval" then
+        { outputs: ["decision"],
+          schema:  [{"name":"decision","type":"enum","values":["approve","reject"],"required":true}] }
+      else
+        { outputs: [], schema: [] }
+      end
+    ' "$proc_file")"
+    # Determine reason from step type (byte-parity with runtime sub_state strings).
+    local wait_stype wait_reason
+    wait_stype="$(jq -r ".steps[$wait_index].type // \"automated\"" "$proc_file")"
+    case "$wait_stype" in
+      form)     wait_reason="waiting_for_input" ;;
+      approval) wait_reason="waiting_for_approval" ;;
+      *)        wait_reason="waiting_for_callback" ;;
+    esac
+    jq -c --arg s "waiting" \
+          --argjson idx "$((wait_index + 1))" \
+          --argjson widx "$wait_index" \
+          --arg step "$wait_step" \
+          --arg reason "$wait_reason" \
+          --arg since "$wait_since" \
+          --argjson expects "$wait_expects" \
+       '.status=$s
+        | .cursor={next_index:$idx}
+        | .waiting={step:$step, index:$widx, reason:$reason, expects:$expects, since:$since}' \
+       "$run_dir/manifest.json" > "$run_dir/manifest.json.tmp" \
+    && mv "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
+    trap - EXIT    # finalized normally; safety net no longer needed
+    if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+      ok "ran $C_BOLD$name$C_RESET locally — waiting at $wait_step"
+      info "  run: $run_id"
+      info "  dir: $run_dir"
+      info "next:  opensop submit $run_id $wait_step --output k=v"
+    else
+      jq -c . "$run_dir/manifest.json"
+    fi
+    return 0
+  fi
+
+  local ended; ended="$(_local_now)"
+  jq -c --arg s "$run_status" --arg e "$ended" '.status=$s | .ended_at=$e' \
+     "$run_dir/manifest.json" > "$run_dir/manifest.json.tmp" && mv "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
+  trap - EXIT    # finalized normally; drop the interrupted-run safety net
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    if [ "$run_status" = completed ]; then ok "ran $C_BOLD$name$C_RESET locally — completed"; else err "ran $name locally — failed"; fi
+    info "  run: $run_id"
+    info "  dir: $run_dir"
+    info "next:  opensop show $run_id"
+  else
+    jq -c . "$run_dir/manifest.json"
+  fi
+  [ "$run_status" = completed ]
+}
+
+# _local_step_loop <run_dir> <proc_file> <start_index> <ctx_json>
+#
+# Shared step-execution kernel. Iterates steps from <start_index>, dispatches
+# by type (automated/shell/noop/form), threads context, writes audit receipts
+# to <run_dir>/audit.jsonl, and writes <run_dir>/context.json after every
+# completed step (live checkpoint — idempotency anchor for future resume).
+#
+# Return contract (stdout, one line):
+#   "completed"       — all steps finished successfully (or continue_on_error)
+#   "failed"          — a step failed and continue_on_error was not set
+#   "waiting:<index>" — step at <index> paused for external input; a "waiting"
+#                       receipt is appended to audit.jsonl before returning
+#
+# The run_id is derived from run_dir's basename so it matches manifest records.
+# proc_dir is derived from proc_file for automated-step script resolution.
+_local_step_loop() {
+  local run_dir="$1" proc_file="$2" start_index="$3" ctx="$4"
+  local run_id; run_id="$(basename "$run_dir")"
+  local proc_dir; proc_dir="$(cd "$(dirname "$proc_file")" && pwd)"
+  local audit="$run_dir/audit.jsonl"
+  local n_steps; n_steps="$(jq '(.steps // []) | length' "$proc_file")"
+
+  local i="$start_index"
+  while [ "$i" -lt "$n_steps" ]; do
+    local step sid stype srun scont sexec
+    step="$(jq -c ".steps[$i]" "$proc_file")"
+    sid="$(jq -r '.id' <<<"$step")"; [ "$sid" = null ] && sid="step-$i"
+    stype="$(jq -r '.type // "automated"' <<<"$step")"
+    srun="$(jq -r '.run // ""' <<<"$step")"
+    scont="$(jq -r '.continue_on_error // false' <<<"$step")"
+    # v0.6: resolve executor. Explicit value already validated up-front; here
+    # we apply per-type defaults when absent. The effective value goes into
+    # the audit so receipts record WHERE the work happened.
+    sexec="$(jq -r '.executor // ""' <<<"$step")"
+    if [[ -z "$sexec" ]]; then
+      case "$stype" in
+        automated|shell|webhook)                          sexec="external" ;;
+        noop|form|approval|notification|wait|judgment|llm|subprocess) sexec="internal" ;;
+        *)                                                sexec="external" ;;
+      esac
+    fi
+
+    # Reset explicitly each iteration — re-`local x` (no `=`) does NOT clear a
+    # value already local in this function, which would leak one step into the next.
+    local out_raw="" rc=0 s_started s_ended
+    s_started="$(_local_now)"
+    case "$stype" in
+      automated)
+        local script="$srun"
+        if [[ "$script" = /* ]]; then :
+        elif [ -f "$proc_dir/$script" ]; then script="$proc_dir/$script"
+        elif [ -f "$(cd "$proc_dir/.." 2>/dev/null && pwd)/$script" ]; then script="$(cd "$proc_dir/.." && pwd)/$script"
+        else script="$proc_dir/$script"; fi
+        # `|| rc=$?` is load-bearing: under `set -e` a bare `out_raw=$(failing)`
+        # would abort the whole CLI here, before rc is read — killing the failure
+        # receipt, manifest finalize, and continue_on_error. The `||` exempts it.
+        if [ ! -f "$script" ]; then out_raw="step script not found: $script"; rc=127
+        else out_raw="$(OSL_CONTEXT="$ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" bash "$script" <<<"$ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$?; fi ;;
+      shell)
+        out_raw="$(OSL_CONTEXT="$ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" bash -c "$srun" <<<"$ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$? ;;
+      noop) out_raw="{}"; rc=0 ;;
+      form)
+        # Pause — append a "waiting" receipt and return the waiting signal.
+        # context.json is already up-to-date (written after last completed step).
+        jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
+               --arg a "$s_started" \
+          '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
+            reason:"waiting_for_input", started_at:$a}' >> "$audit"
+        echo "waiting:$i"
+        return 0 ;;
+      approval)
+        # Approval pause — byte-parity with StepExecutors::Approval (reason: waiting_for_approval).
+        # context.json is already up-to-date (written after last completed step).
+        jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
+               --arg a "$s_started" \
+          '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
+            reason:"waiting_for_approval", started_at:$a}' >> "$audit"
+        echo "waiting:$i"
+        return 0 ;;
+      wait)
+        # Wait step — mirrors StepExecutors::Wait exactly (wait.rb).
+        # Three cases based on what's in the step's nested "wait" block:
+        #   wait.seconds present → synchronous: complete immediately with {waited:true, seconds:<n>}.
+        #                          Do NOT actually sleep — MVP synchronous stub (byte-parity with runtime).
+        #   wait.until present   → async pause: reason="waiting_for_callback"; advisory until metadata.
+        #   neither              → synchronous: complete immediately with {waited:true}.
+        local wait_block
+        wait_block="$(jq -c '.wait // {}' <<<"$step")"
+        if jq -e 'has("seconds")' <<<"$wait_block" >/dev/null 2>&1; then
+          # Synchronous — complete immediately, fall through to the audit/context block below.
+          out_raw="$(jq -c '{waited:true, seconds:.seconds}' <<<"$wait_block")"
+          rc=0
+        elif jq -e 'has("until")' <<<"$wait_block" >/dev/null 2>&1; then
+          # Async pause — record an advisory "until" and pause.
+          local wait_until_val
+          wait_until_val="$(jq -r '.until' <<<"$wait_block")"
+          jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
+                 --arg a "$s_started" --arg u "$wait_until_val" \
+            '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
+              reason:"waiting_for_callback", until:$u, started_at:$a}' >> "$audit"
+          echo "waiting:$i"
+          return 0
+        else
+          # Neither seconds nor until — complete immediately with {waited:true}.
+          out_raw='{"waited":true}'
+          rc=0
+        fi ;;
+      llm)
+        # LLM step — mirrors StepExecutors::Llm + LlmProviders::Anthropic.
+        #
+        # Fields:
+        #   model (required; must start with "claude")
+        #   prompt | prompt_file (resolved relative to proc_dir)
+        #   expected_output_schema (object — optional)
+        #   max_retries (default 2; total attempts = max_retries + 1)
+        #   retry_on_incomplete (default true; false => 1 attempt)
+        #
+        # Test seam: if OSL_LLM_STUB is set, skip the network call entirely and
+        # treat its value as the raw model response text (same fence-strip +
+        # schema validation still runs). Mirrors the runtime's provider_resolver
+        # test seam (TestStub). Never set this in production.
+        #
+        # DESIGN NOTE: all early-exit paths use rc=1 + a sentinel variable llm_ok=false
+        # rather than `break`, because `break` inside `case ... esac` that is itself
+        # inside `while ... done` breaks the outer while loop (not the case block).
+        local llm_ok=true llm_model llm_prompt_file llm_schema_json llm_max_retries llm_retry
+        llm_model="$(jq -r '.model // ""' <<<"$step")"
+        if [[ -z "$llm_model" ]]; then
+          out_raw='{"error":"llm step is missing model"}'; rc=1; llm_ok=false
+        fi
+        if [[ "$llm_ok" == true ]]; then
+          case "$llm_model" in
+            claude*) ;;
+            *) out_raw="{\"error\":\"no provider configured for model '$llm_model'\"}"; rc=1; llm_ok=false ;;
+          esac
+        fi
+
+        # Prompt body: inline prompt or prompt_file (relative to proc_dir).
+        local llm_prompt_body=""
+        if [[ "$llm_ok" == true ]]; then
+          llm_prompt_file="$(jq -r '.prompt_file // ""' <<<"$step")"
+          if [[ -n "$llm_prompt_file" ]]; then
+            local llm_pf_path="$proc_dir/$llm_prompt_file"
+            if [[ ! -f "$llm_pf_path" ]]; then
+              out_raw="{\"error\":\"prompt_file not found: $llm_pf_path\"}"; rc=1; llm_ok=false
+            else
+              llm_prompt_body="$(cat "$llm_pf_path")"
+            fi
+          else
+            llm_prompt_body="$(jq -r '.prompt // ""' <<<"$step")"
+            if [[ -z "$llm_prompt_body" ]]; then
+              out_raw='{"error":"llm step requires prompt or prompt_file"}'; rc=1; llm_ok=false
+            fi
+          fi
+        fi
+
+        # Substitute {{ var }} tokens from the current context (jq).
+        # Each {{var}} is replaced by ctx[var] (stringified) if present; left as-is if not.
+        local llm_rendered_prompt=""
+        if [[ "$llm_ok" == true ]]; then
+          llm_rendered_prompt="$(jq -rn \
+            --arg tmpl "$llm_prompt_body" \
+            --argjson ctx "$ctx" \
+            '$tmpl | gsub("\\{\\{\\s*(?<v>[a-zA-Z_][a-zA-Z0-9_]*)\\s*\\}\\}";
+              if $ctx[.v] != null then ($ctx[.v] | tostring) else "{{" + .v + "}}" end)')"
+        fi
+
+        # Schema (optional).
+        if [[ "$llm_ok" == true ]]; then
+          llm_schema_json="$(jq -c '.expected_output_schema // {}' <<<"$step")"
+        fi
+
+        # Attempt count: max_retries (default 2) + 1, unless retry_on_incomplete=false.
+        local llm_max_attempts=3
+        if [[ "$llm_ok" == true ]]; then
+          llm_retry="$(jq -r '.retry_on_incomplete // true' <<<"$step")"
+          llm_max_retries="$(jq -r '.max_retries // 2' <<<"$step")"
+          if [[ "$llm_retry" == "false" ]]; then
+            llm_max_attempts=1
+          else
+            llm_max_attempts=$(( llm_max_retries + 1 ))
+            [ "$llm_max_attempts" -lt 1 ] && llm_max_attempts=1
+          fi
+        fi
+
+        # Require curl for the real API call (test seam bypasses this).
+        if [[ "$llm_ok" == true && -z "${OSL_LLM_STUB:-}" ]]; then
+          require_curl
+          if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            out_raw='{"error":"ANTHROPIC_API_KEY is not set"}'; rc=1; llm_ok=false
+          fi
+        fi
+
+        # System prompt (asks model for a JSON object matching the schema).
+        # [MEDIUM] Schema is pretty-printed with jq '.' for deterministic, readable
+        # output — previously used a one-line to_entries rendering that was hard to
+        # read and non-deterministic across jq versions.
+        local llm_system_prompt=""
+        if [[ "$llm_ok" == true ]]; then
+          local llm_schema_pretty
+          llm_schema_pretty="$(jq '.' <<<"$llm_schema_json")"
+          llm_system_prompt="You are a precise JSON generator. Respond ONLY with a valid JSON object matching this schema (pretty-printed for readability):
+$llm_schema_pretty
+No prose, no code fences. Output only the JSON object."
+        fi
+
+        # Retry loop — only entered when all pre-checks passed (llm_ok=true).
+        local llm_attempt=1 llm_last_errors="" llm_validated="" llm_failed=false
+        while [[ "$llm_ok" == true && "$llm_attempt" -le "$llm_max_attempts" ]]; do
+          # Prepend corrective preamble on retry.
+          local llm_attempt_prompt
+          if [[ "$llm_attempt" -gt 1 && -n "$llm_last_errors" ]]; then
+            llm_attempt_prompt="Previous attempt failed validation: $llm_last_errors.
+Return JSON only matching the schema.
+
+$llm_rendered_prompt"
+          else
+            llm_attempt_prompt="$llm_rendered_prompt"
+          fi
+
+          # Get the raw text response: stub or real API call.
+          local llm_raw_text=""
+          if [[ -n "${OSL_LLM_STUB:-}" ]]; then
+            llm_raw_text="$OSL_LLM_STUB"
+          else
+            # Build request body.
+            local llm_req_body
+            llm_req_body="$(jq -nc \
+              --arg model "$llm_model" \
+              --arg system "$llm_system_prompt" \
+              --arg user "$llm_attempt_prompt" \
+              '{model:$model, max_tokens:4096, system:$system,
+                messages:[{role:"user", content:$user}]}')"
+
+            # [LOW] curl call uses a bash array so $ANTHROPIC_API_KEY and the
+            # request body are not subject to word-splitting (mirrors wh_curl_args).
+            local llm_resp_tmp; llm_resp_tmp="$(mktemp)"
+            local llm_http_status
+            local llm_curl_args=(-sS -X POST "https://api.anthropic.com/v1/messages"
+              -H "x-api-key: $ANTHROPIC_API_KEY"
+              -H "anthropic-version: 2023-06-01"
+              -H "content-type: application/json"
+              -o "$llm_resp_tmp"
+              -w "%{http_code}"
+              -d "$llm_req_body")
+            if ! llm_http_status="$(curl "${llm_curl_args[@]}" 2>>"$run_dir/$sid.stderr.log")"; then
+              rm -f "$llm_resp_tmp"
+              out_raw='{"error":"curl failed calling Anthropic API"}'; rc=1; llm_failed=true; llm_ok=false; continue
+            fi
+
+            if [[ "$llm_http_status" -ge 400 ]]; then
+              local llm_api_err; llm_api_err="$(cat "$llm_resp_tmp")" ; rm -f "$llm_resp_tmp"
+              out_raw="{\"error\":\"Anthropic API returned HTTP $llm_http_status\",\"detail\":$(jq -c '.' <<<"$llm_api_err" 2>/dev/null || echo "\"$llm_api_err\"")}"; rc=1; llm_failed=true; llm_ok=false; continue
+            fi
+
+            local llm_resp_json; llm_resp_json="$(cat "$llm_resp_tmp")"; rm -f "$llm_resp_tmp"
+
+            # Extract the first text content block.
+            if ! llm_raw_text="$(jq -r '
+              .content | if type != "array" then error("no content array") else . end |
+              (map(select(.type=="text")) | first // first) |
+              if type != "object" then error("no text block") else .text end
+            ' <<<"$llm_resp_json" 2>>"$run_dir/$sid.stderr.log")"; then
+              out_raw='{"error":"Anthropic API response missing text content"}'; rc=1; llm_failed=true; llm_ok=false; continue
+            fi
+          fi
+
+          # Strip ``` fences if present.
+          local llm_cleaned
+          llm_cleaned="$(printf '%s' "$llm_raw_text" \
+            | sed -E 's/^[[:space:]]*```(json)?[[:space:]]*//' \
+            | sed -E 's/[[:space:]]*```[[:space:]]*$//')"
+
+          # Must parse as a valid JSON object.
+          local llm_parsed
+          if ! llm_parsed="$(jq -e 'if type=="object" then . else error("not an object") end' <<<"$llm_cleaned" 2>/dev/null)"; then
+            llm_last_errors="model output is not a valid JSON object"
+            llm_attempt=$(( llm_attempt + 1 ))
+            continue
+          fi
+
+          # Validate against expected_output_schema (required + type + enum checks).
+          # Schema here is an object {field_name: {type, required, ...}} or {} for any.
+          local llm_schema_errors
+          llm_schema_errors="$(jq -rn \
+            --argjson schema "$llm_schema_json" \
+            --argjson parsed "$llm_parsed" \
+            '[ $schema | to_entries[] |
+               . as $e | $e.key as $k | $e.value as $fdef |
+               ($parsed[$k]) as $val |
+               (if ($fdef.required == true) and ($val == null) then
+                  "required field missing: " + $k
+                else null end),
+               (if $val != null then
+                 if   $fdef.type == "number"  and ($val | type) != "number"  then $k + " must be a number"
+                 elif $fdef.type == "boolean" and ($val | type) != "boolean" then $k + " must be a boolean"
+                 elif $fdef.type == "string"  and ($val | type) != "string"  then $k + " must be a string"
+                 elif $fdef.type == "enum" and ($fdef.values != null) and ([$fdef.values[] | . == $val] | any | not) then
+                   $k + " must be one of: " + ($fdef.values | join(", "))
+                 else null end
+               else null end)
+            ] | map(select(. != null)) | join("; ")')"
+
+          if [[ -n "$llm_schema_errors" ]]; then
+            llm_last_errors="$llm_schema_errors"
+            llm_attempt=$(( llm_attempt + 1 ))
+            continue
+          fi
+
+          # Validation passed.
+          llm_validated="$llm_parsed"
+          llm_ok=false  # sentinel to exit the while (validated successfully)
+        done
+
+        if [[ "$llm_failed" == true ]]; then
+          : # out_raw and rc already set inside the loop
+        elif [[ -n "$llm_validated" ]]; then
+          out_raw="$llm_validated"; rc=0
+        elif [[ "$rc" -ne 1 ]]; then
+          # Exhausted attempts without a fatal error — validation always failed.
+          out_raw="{\"error\":\"llm output failed schema validation after $llm_max_attempts attempt(s): $llm_last_errors\"}"; rc=1
+        fi ;;
+      webhook)
+        # Webhook step — mirrors StepExecutors::Webhook (webhook.rb) +
+        # Opensop::Templating (${...} dialect).
+        #
+        # Nested "webhook" block fields:
+        #   url            (required)
+        #   method         (default POST; GET|POST|PUT|PATCH|DELETE)
+        #   headers        (object; values are ${...}-templated)
+        #   body_template  (path relative to proc_dir; else inputs-as-JSON)
+        #   response_mode  (sync|callback|poll; default POST uses sync per SPEC)
+        #   poll_timeout   (ignored in callback mode; documented only)
+        #
+        # Template dialect: ${env.X}, ${process.inputs.Y}, ${callback_url},
+        #   ${X.Y.Z} → bare path into current context (step inputs).
+        #   Applied to url, header values, and body_template content.
+        #
+        # Test seam: OSL_WEBHOOK_STUB="<http_code>:<body>" skips curl entirely.
+        #   Mirrors OSL_LLM_STUB pattern. "200:{}" → 2xx success with {} body.
+        #   Never set in production.
+        #
+        # DESIGN NOTE: same sentinel pattern as llm — wh_ok=false for early exit,
+        # never bare `break` inside case/while.
+        local wh_ok=true wh_block wh_url wh_method wh_mode wh_headers wh_body
+        wh_block="$(jq -c '.webhook // {}' <<<"$step")"
+
+        # Resolve method (default POST).
+        wh_method="$(jq -r '.method // "POST"' <<<"$wh_block")"
+
+        # response_mode is REQUIRED — no silent default. Fail the step loudly
+        # when absent (matches the runtime change landing in parallel).
+        wh_mode="$(jq -r '.response_mode // ""' <<<"$wh_block")"
+        if [[ -z "$wh_mode" ]]; then
+          out_raw='{"error":"webhook.response_mode is required (sync|callback|poll) — no silent default"}'; rc=1; wh_ok=false
+        fi
+
+        # Validate mode.
+        if [[ "$wh_ok" == true ]]; then
+          case "$wh_mode" in
+            sync|callback|poll) ;;
+            *) out_raw="{\"error\":\"unknown response_mode: $wh_mode (must be sync, callback, or poll)\"}"; rc=1; wh_ok=false ;;
+          esac
+        fi
+
+        # poll is not implemented (matches runtime's StepFailure).
+        if [[ "$wh_ok" == true && "$wh_mode" == "poll" ]]; then
+          out_raw='{"error":"response_mode: poll is not implemented yet (see SPEC §8 roadmap)"}'; rc=2; wh_ok=false
+        fi
+
+        # Validate method.
+        if [[ "$wh_ok" == true ]]; then
+          case "$wh_method" in
+            GET|POST|PUT|PATCH|DELETE) ;;
+            *) out_raw="{\"error\":\"unsupported HTTP method: $wh_method\"}"; rc=1; wh_ok=false ;;
+          esac
+        fi
+
+        # Capture the process-level initial inputs (stored in manifest.json under
+        # .inputs). This is distinct from the flat accumulated ctx (which includes
+        # later step outputs). ${process.inputs.X} resolves from this snapshot only.
+        local wh_proc_inputs
+        wh_proc_inputs="$(jq -c '.inputs // {}' "$run_dir/manifest.json" 2>/dev/null || echo '{}')"
+
+        # [HIGH] Generate callback id ONCE, BEFORE any rendering, so ${callback_url}
+        # resolves to a real non-empty id in both sync mode (unused but not empty)
+        # and callback mode. Previously the id was generated inside the callback arm,
+        # after _wh_render was already called with "".
+        local wh_cb_id; wh_cb_id="$(date -u +%Y%m%dT%H%M%SZ)-cb-$$-$RANDOM"
+
+        # Template rendering helper (${...} dialect, pure jq).
+        # Resolves: ${env.X}, ${process.inputs.X}, ${callback_url},
+        #           ${payload.X} (→ __MISSING__ in local non-trigger runs),
+        #           ${X.Y.Z} (bare path into flat accumulated context).
+        # ${process.inputs.X} is resolved from wh_proc_inputs (the run's initial
+        # inputs), NOT from the flat ctx — they differ whenever a step output shares
+        # a name with a process input.
+        # Missing variables produce a loud __MISSING__ sentinel; caller checks it.
+        _wh_render() {
+          local tmpl="$1" cb_url="${2:-}"
+          jq -rn \
+            --arg tmpl         "$tmpl" \
+            --argjson ctx      "$ctx" \
+            --argjson proc_inp "$wh_proc_inputs" \
+            --arg cb_url       "$cb_url" \
+            '$tmpl | gsub("\\$\\{(?<expr>[^}]+)\\}";
+              (.expr | ltrimstr(" ") | rtrimstr(" ")) as $e |
+              if   $e == "callback_url"              then $cb_url
+              elif $e | startswith("env.")           then (env[($e | ltrimstr("env."))] // ("__MISSING_ENV__:" + $e))
+              elif $e | startswith("process.inputs.") then
+                   # Reduce-walk the dot-path into wh_proc_inputs, matching
+                   # Templating.walk() — so ${process.inputs.address.city}
+                   # descends nested objects, not just a single flat key.
+                   (reduce ($e | ltrimstr("process.inputs.") | split("."))[] as $k (
+                     $proc_inp;
+                     if . == null then null
+                     elif type == "object" then .[$k]
+                     elif type == "array"  then .[ ($k | tonumber? // -1) ]
+                     else null end)
+                    | if . == null then ("__MISSING__:" + $e) else tostring end)
+              elif $e | startswith("payload.")       then
+                   # No inbound payload in local non-trigger runs → always missing.
+                   ("__MISSING__:" + $e)
+              else
+                   (reduce ($e | split("."))[] as $k (null;
+                     if . == null then ($ctx[$k] // null) else
+                       if type == "object" then .[$k]
+                       elif type == "array" then .[ ($k | tonumber? // -1) ]
+                       else null end
+                     end) | if . == null then ("__MISSING__:" + $e) else tostring end)
+              end
+            )'
+        }
+
+        # Render URL (required).
+        if [[ "$wh_ok" == true ]]; then
+          local wh_raw_url; wh_raw_url="$(jq -r '.url // ""' <<<"$wh_block")"
+          if [[ -z "$wh_raw_url" ]]; then
+            out_raw='{"error":"webhook.url is required"}'; rc=1; wh_ok=false
+          else
+            # Pass the pre-generated cb_id so ${callback_url} is never empty.
+            wh_url="$(_wh_render "$wh_raw_url" "$wh_cb_id")"
+            if [[ "$wh_url" == *"__MISSING_ENV__:"* || "$wh_url" == *"__MISSING__:"* ]]; then
+              out_raw="{\"error\":\"template error: unresolved variable in webhook.url: $wh_url\"}"; rc=1; wh_ok=false
+            fi
+          fi
+        fi
+
+        # Render headers (object — values are templated strings).
+        local wh_headers_json="{}"
+        if [[ "$wh_ok" == true ]]; then
+          local wh_raw_headers; wh_raw_headers="$(jq -c '.headers // {}' <<<"$wh_block")"
+          local wh_hdr_err=""
+          # Re-render each header value through the same ${} template logic.
+          # We do a key-by-key loop to keep errors recoverable (bash 3.2 safe).
+          # [ITEM 9] The malformed '.[(keys_unsorted | .[$i])]' line below is removed;
+          # only the correct 'keys_unsorted[$i]' idiom remains.
+          local wh_hdr_count wh_hdr_i
+          wh_hdr_count="$(jq 'length' <<<"$wh_raw_headers")"
+          if [[ "$wh_hdr_count" -gt 0 ]]; then
+            local wh_hdr_rendered="{}"
+            wh_hdr_i=0
+            while [[ "$wh_hdr_i" -lt "$wh_hdr_count" ]]; do
+              local wh_hk wh_hv wh_hv_rendered
+              # jq key-by-index idiom (bash 3.2 safe, no mapfile).
+              wh_hk="$(jq -r "keys_unsorted[$wh_hdr_i]" <<<"$wh_raw_headers")"
+              wh_hv="$(jq -r --arg k "$wh_hk" '.[$k]' <<<"$wh_raw_headers")"
+              # [MEDIUM/SECURITY] CRLF header injection guard: reject header KEY names
+              # that contain CR or LF. A key with \r or \n could split HTTP headers and
+              # inject arbitrary headers. Mirrors the value-guard below.
+              if [[ "$wh_hk" == *$'\r'* || "$wh_hk" == *$'\n'* ]]; then
+                wh_hdr_err="security: CRLF characters in header key name — refusing to send"; break
+              fi
+              # Pass the pre-generated cb_id so ${callback_url} resolves correctly.
+              wh_hv_rendered="$(_wh_render "$wh_hv" "$wh_cb_id")"
+              if [[ "$wh_hv_rendered" == *"__MISSING_ENV__:"* || "$wh_hv_rendered" == *"__MISSING__:"* ]]; then
+                wh_hdr_err="template error in header '$wh_hk': $wh_hv_rendered"; break
+              fi
+              # [MEDIUM/SECURITY] CRLF header injection guard: reject rendered header
+              # values that contain CR or LF. A rendered value with \r or \n could split
+              # HTTP headers and inject arbitrary headers or truncate the request.
+              # Choice: fail loudly (rather than strip silently) so the template author
+              # notices the bad value. This mirrors the runtime's HeaderInjection check.
+              if [[ "$wh_hv_rendered" == *$'\r'* || "$wh_hv_rendered" == *$'\n'* ]]; then
+                wh_hdr_err="security: CRLF characters in rendered header value for '$wh_hk' — refusing to send"; break
+              fi
+              wh_hdr_rendered="$(jq -c --arg k "$wh_hk" --arg v "$wh_hv_rendered" '.[$k]=$v' <<<"$wh_hdr_rendered")"
+              wh_hdr_i=$(( wh_hdr_i + 1 ))
+            done
+            if [[ -n "$wh_hdr_err" ]]; then
+              out_raw="$(jq -nc --arg e "$wh_hdr_err" '{error:$e}')"; rc=1; wh_ok=false
+            else
+              wh_headers_json="$wh_hdr_rendered"
+            fi
+          fi
+        fi
+
+        # Build request body.
+        if [[ "$wh_ok" == true ]]; then
+          local wh_body_tmpl_path; wh_body_tmpl_path="$(jq -r '.body_template // ""' <<<"$wh_block")"
+          if [[ -n "$wh_body_tmpl_path" ]]; then
+            # Resolve path relative to proc_dir.
+            local wh_tmpl_abs
+            if [[ "$wh_body_tmpl_path" = /* ]]; then wh_tmpl_abs="$wh_body_tmpl_path"
+            else wh_tmpl_abs="$proc_dir/$wh_body_tmpl_path"; fi
+            if [[ ! -f "$wh_tmpl_abs" ]]; then
+              out_raw="{\"error\":\"body_template not found: $wh_tmpl_abs\"}"; rc=1; wh_ok=false
+            else
+              local wh_tmpl_raw; wh_tmpl_raw="$(cat "$wh_tmpl_abs")"
+              # Pass the pre-generated cb_id so ${callback_url} resolves in the body.
+              wh_body="$(_wh_render "$wh_tmpl_raw" "$wh_cb_id")"
+            fi
+          else
+            # No template: send ONLY the step's declared inputs[] resolved via
+            # their `from:` reference against the current context, or {} if none
+            # declared. Mirrors webhook.rb build_body + InputResolver (step.inputs).
+            # Sending the whole ctx would leak prior step outputs to external URLs.
+            #
+            # Resolution rules (matching InputResolver.resolve_reference):
+            #   from: steps.<id>.outputs.<field> → ctx["<id>"]["<field>"]
+            #   from: process.inputs.<field>      → wh_proc_inputs["<field>"]
+            #   no `from` key                     → bare name lookup in ctx
+            wh_body="$(jq -c \
+              --argjson ctx "$ctx" \
+              --argjson proc_inp "$wh_proc_inputs" \
+              '(.inputs // []) |
+               if length == 0 then {}
+               else
+                 map(
+                   select(.name != null) |
+                   . as $inp |
+                   (.from // null) as $from |
+                   # Resolve value from `from:` reference or bare name.
+                   ($from |
+                     if . == null then $ctx[$inp.name]
+                     elif startswith("steps.") and (split(".") | length >= 4) then
+                       # steps.<id>.outputs.<field>
+                       (split(".")) as $parts |
+                       $ctx[$parts[1]][$parts[3]]
+                     elif startswith("process.inputs.") then
+                       reduce (ltrimstr("process.inputs.") | split("."))[] as $k (
+                         $proc_inp;
+                         if . == null then null
+                         elif type == "object" then .[$k]
+                         elif type == "array"  then .[ ($k | tonumber? // -1) ]
+                         else null end)
+                     else
+                       $ctx[$from]
+                     end) as $val |
+                   {key: $inp.name, value: $val}
+                 ) |
+                 from_entries |
+                 with_entries(select(.value != null))
+               end
+              ' <<<"$step")"
+          fi
+        fi
+
+        # _wh_fire_http: shared curl dispatch used by both sync and callback arms.
+        # Fires the outbound request; sets wh_resp_code and wh_resp_body.
+        # Sets wh_ok=false + out_raw + rc=1 on network or non-existent curl failure.
+        # Does NOT check the HTTP status code — callers do that (sync vs callback
+        # have different 2xx semantics).
+        _wh_fire_http() {
+          require_curl
+          local wh_resp_code="" wh_resp_body=""
+          if [[ -n "${OSL_WEBHOOK_STUB:-}" ]]; then
+            wh_resp_code="${OSL_WEBHOOK_STUB%%:*}"
+            wh_resp_body="${OSL_WEBHOOK_STUB#*:}"
+          else
+            # Real curl call.
+            local wh_curl_tmp; wh_curl_tmp="$(mktemp)"
+            local wh_curl_args=(-sS -X "$wh_method" "$wh_url"
+              -o "$wh_curl_tmp" -w "%{http_code}")
+
+            # Inject headers.
+            local wh_hdr_n; wh_hdr_n="$(jq 'length' <<<"$wh_headers_json")"
+            local wh_h_i=0
+            while [[ "$wh_h_i" -lt "$wh_hdr_n" ]]; do
+              local wh_h_k wh_h_v
+              wh_h_k="$(jq -r "keys_unsorted[$wh_h_i]" <<<"$wh_headers_json")"
+              # [MEDIUM/SECURITY] CRLF guard on header key at dispatch time.
+              # Keys already passed the render-loop guard above; this is a
+              # belt-and-suspenders check in case wh_headers_json was built
+              # from an alternate path in the future.
+              if [[ "$wh_h_k" == *$'\r'* || "$wh_h_k" == *$'\n'* ]]; then
+                out_raw='{"error":"security: CRLF characters in header key name — refusing to send"}'; rc=1; wh_ok=false; return
+              fi
+              wh_h_v="$(jq -r --arg k "$wh_h_k" '.[$k]' <<<"$wh_headers_json")"
+              wh_curl_args+=(-H "$wh_h_k: $wh_h_v")
+              wh_h_i=$(( wh_h_i + 1 ))
+            done
+
+            # Body (not for GET/DELETE).
+            case "$wh_method" in
+              GET|DELETE) ;;
+              *)          wh_curl_args+=(--data-raw "$wh_body") ;;
+            esac
+
+            if ! wh_resp_code="$(curl "${wh_curl_args[@]}" 2>>"$run_dir/$sid.stderr.log")"; then
+              rm -f "$wh_curl_tmp"
+              out_raw='{"error":"curl failed for webhook step"}'; rc=1; wh_ok=false; return
+            fi
+            wh_resp_body="$(cat "$wh_curl_tmp")"; rm -f "$wh_curl_tmp"
+          fi
+          # Export to caller via upvar (bash variable already in scope).
+          # Relies on the fact that wh_resp_code/wh_resp_body are local in _local_step_loop.
+          # shellcheck disable=SC2034
+          WH_FIRE_CODE="$wh_resp_code"
+          WH_FIRE_BODY="$wh_resp_body"
+        }
+
+        # Dispatch: sync fires curl and returns the parsed response; callback
+        # fires curl first (notify the third party with the pre-generated
+        # callback_id in url/headers/body), checks 2xx, THEN pauses.
+        # Mirrors execute_callback in webhook.rb which calls fire_request before
+        # setting state=waiting_for_callback.
+        if [[ "$wh_ok" == true ]]; then
+          case "$wh_mode" in
+            sync)
+              # require_curl inside this arm only (curl-free for other types).
+              local WH_FIRE_CODE="" WH_FIRE_BODY=""
+              _wh_fire_http
+              if [[ "$wh_ok" == true ]]; then
+                local wh_resp_code="$WH_FIRE_CODE" wh_resp_body="$WH_FIRE_BODY"
+                # 2xx check (matches raise_unless_success!).
+                if [[ "$wh_resp_code" -lt 200 || "$wh_resp_code" -ge 300 ]]; then
+                  local wh_trunc; wh_trunc="${wh_resp_body:0:300}"
+                  out_raw="{\"error\":\"sync webhook HTTP $wh_resp_code: $wh_trunc\"}"; rc=1; wh_ok=false
+                fi
+              fi
+
+              if [[ "$wh_ok" == true ]]; then
+                # Parse response body as a JSON object (matches parse_response).
+                local wh_resp_stripped; wh_resp_stripped="$(printf '%s' "$wh_resp_body" | tr -d '[:space:]')"
+                if [[ -z "$wh_resp_stripped" ]]; then
+                  # Empty body → {} (matches "return {} if body.strip.empty?").
+                  out_raw="{}"; rc=0
+                elif ! out_raw="$(jq -e 'if type=="object" then . else error("not a JSON object") end' <<<"$wh_resp_body" 2>/dev/null)"; then
+                  out_raw="{\"error\":\"sync webhook response is not a valid JSON object — got: ${wh_resp_body:0:300}\"}"; rc=1; wh_ok=false
+                else
+                  rc=0
+                fi
+              fi ;;
+
+            callback)
+              # Callback mode: FIRE the outbound request first (notify the third
+              # party that work is queued, with ${callback_url} in the payload),
+              # check 2xx, THEN write the waiting receipt and pause.
+              # Mirrors execute_callback (webhook.rb): fire_request → raise_unless_success!
+              # → { waiting: "waiting_for_callback" }.
+              # NOTE: there is no inbound HTTP receiver in the local backend — the
+              # third party cannot post back to us. The operator resumes manually via
+              # `opensop submit <run_id> <step-id>`.
+              local WH_FIRE_CODE="" WH_FIRE_BODY=""
+              _wh_fire_http
+              if [[ "$wh_ok" == true ]]; then
+                local wh_cb_resp_code="$WH_FIRE_CODE" wh_cb_resp_body="$WH_FIRE_BODY"
+                # 2xx check: callback fires must also succeed (matches raise_unless_success!).
+                if [[ "$wh_cb_resp_code" -lt 200 || "$wh_cb_resp_code" -ge 300 ]]; then
+                  local wh_cb_trunc; wh_cb_trunc="${wh_cb_resp_body:0:300}"
+                  out_raw="{\"error\":\"callback webhook outbound HTTP $wh_cb_resp_code: $wh_cb_trunc\"}"; rc=1; wh_ok=false
+                fi
+              fi
+              if [[ "$wh_ok" == true ]]; then
+                # Outbound request succeeded — now pause.
+                jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
+                       --arg a "$s_started" --arg cb "$wh_cb_id" \
+                  '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
+                    reason:"waiting_for_callback", callback_id:$cb, started_at:$a}' >> "$audit"
+                echo "waiting:$i"
+                return 0
+              fi ;;
+          esac
+        fi ;;
+      subprocess)
+        # Subprocess step — CLI EXCEEDS the runtime (runtime only stubs it).
+        #
+        # Fields:
+        #   process (required): logical name (resolved via _find_skill_in_cells)
+        #            or an explicit path (contains '/' or ends in .sop.json).
+        #   inputs  (optional): array of {name, from} mappings. Each entry maps
+        #            a child input name to a parent context reference. References
+        #            are resolved against the parent's current context:
+        #              - "inputs.X"         → ctx["process"]["inputs"]["X"]  (NOT
+        #                                     implemented as a deep path; left as
+        #                                     the literal key in the parent context)
+        #              - "steps.X.outputs.Y" → ctx["X"]["Y"]
+        #              - bare value          → passed as a literal string
+        #            For simplicity we support the two most common dot-path shapes:
+        #            "steps.<id>.outputs.<field>" and "<stepid>.<field>" (bare ctx
+        #            path). Both resolve via jq against the parent context.
+        #
+        # Recursion guard: OSL_DEPTH (env int, starts at 0). Increment on entry;
+        # refuse at >= 16 (mirrors a typical stack-depth safety valve).
+        #
+        # Run dir: <parent_run_dir>/subprocess/<step-id>/ — inspectable, isolated.
+        #
+        # Result mapping:
+        #   child completed → out_raw = child's final context.json merged under step_id
+        #                               (i.e. {<child_output_keys>:...})
+        #   child waiting   → propagate as parent waiting_for_callback; record child run_id
+        #   child failed    → rc=1, out_raw = error message (continue_on_error applies)
+        #
+        # DESIGN NOTE: uses the same sentinel pattern (sp_ok=false) — never bare
+        # `break` inside case/while.
+        local sp_ok=true sp_proc_arg sp_child_file sp_inputs_arr sp_child_ctx
+        sp_proc_arg="$(jq -r '.process // ""' <<<"$step")"
+        if [[ -z "$sp_proc_arg" ]]; then
+          out_raw='{"error":"subprocess step is missing required field: process"}'; rc=1; sp_ok=false
+        fi
+
+        # Recursion depth guard.
+        if [[ "$sp_ok" == true ]]; then
+          local sp_depth="${OSL_DEPTH:-0}"
+          if [[ "$sp_depth" -ge 16 ]]; then
+            out_raw="{\"error\":\"subprocess recursion depth limit reached ($sp_depth >= 16) — possible self-reference?\"}"; rc=1; sp_ok=false
+          fi
+        fi
+
+        # Resolve the child process file — same logic as local_run.
+        if [[ "$sp_ok" == true ]]; then
+          if [[ "$sp_proc_arg" == *.sop.json ]] || [[ "$sp_proc_arg" == */* ]]; then
+            sp_child_file="$sp_proc_arg"
+          else
+            sp_child_file="$(_find_skill_in_cells "$sp_proc_arg")"
+          fi
+          if [[ -z "$sp_child_file" || ! -f "$sp_child_file" ]]; then
+            out_raw="{\"error\":\"subprocess: process file not found: $sp_proc_arg\"}"; rc=1; sp_ok=false
+          fi
+        fi
+
+        # Build child inputs from the inputs[] mapping against the parent context.
+        # inputs[] array entries: {name, from} where from is a dot-path into ctx.
+        # Supported from patterns:
+        #   "steps.<id>.outputs.<field>" → ctx["<id>"]["<field>"]
+        #   "<id>.<field>"               → ctx["<id>"]["<field>"]  (shorthand)
+        #   "<id>"                       → ctx["<id>"]             (whole step output)
+        #   literal (no dot match)       → pass as string literal
+        if [[ "$sp_ok" == true ]]; then
+          sp_inputs_arr="$(jq -c '.inputs // []' <<<"$step")"
+          sp_child_ctx="$(jq -cn \
+            --argjson parent_ctx "$ctx" \
+            --argjson inp_map "$sp_inputs_arr" '
+            # Resolve a "from" reference against the parent context.
+            def resolve_ref(ref; pctx):
+              if ref | startswith("steps.") and (ref | split(".") | length >= 4) then
+                # steps.<id>.outputs.<field> — extract id and field
+                (ref | split(".")) as $parts |
+                pctx[$parts[1]][$parts[3]]
+              elif ref | test("^[a-zA-Z_][a-zA-Z0-9_-]*\\.[a-zA-Z_][a-zA-Z0-9_-]*$") then
+                # <stepid>.<field> shorthand
+                (ref | split(".")) as $parts |
+                pctx[$parts[0]][$parts[1]]
+              elif pctx[ref] != null then
+                pctx[ref]
+              else
+                ref  # literal string fallback
+              end;
+            $inp_map | map(
+              select(.name != null) |
+              {key: .name, value: (resolve_ref((.from // .name); $parent_ctx))}
+            ) | from_entries
+          ')"
+        fi
+
+        # Create the child run dir and run the subprocess.
+        # Child runs are stored at $OPENSOP_LOCAL_HOME/runs/<child_run_id>/ — a flat
+        # sibling of the parent run, not nested inside it. This prevents exponentially
+        # growing paths when subprocesses recurse. The parent audit receipt records
+        # child_run_id so the operator can inspect via `opensop show <child_run_id>`.
+        # A symlink <parent_run>/subprocess/<step-id> → child_run_dir is also created
+        # for at-a-glance inspectability without navigating the flat list.
+        if [[ "$sp_ok" == true ]]; then
+          local sp_child_run_id; sp_child_run_id="$(_local_run_id)-sp-$sid"
+          local sp_child_run_dir="$OPENSOP_LOCAL_HOME/runs/$sp_child_run_id"
+          mkdir -p "$sp_child_run_dir"
+          # Create a symlink in the parent's run dir for convenient inspection.
+          local sp_symlink_dir="$run_dir/subprocess/$sid"
+          mkdir -p "$sp_symlink_dir"
+          ln -sfn "$sp_child_run_dir" "$sp_symlink_dir/$sp_child_run_id" 2>/dev/null || true
+
+          # Run the child process in a subshell with incremented depth,
+          # overriding OPENSOP_LOCAL_HOME to route its receipts into the nested dir.
+          # We capture the manifest JSON from the child and inspect its status.
+          local sp_child_name; sp_child_name="$(jq -r '.name // "unnamed"' "$sp_child_file")"
+          local sp_child_started; sp_child_started="$(_local_now)"
+          local sp_depth_next; sp_depth_next=$(( ${OSL_DEPTH:-0} + 1 ))
+
+          # Write child manifest (mirrors local_run's initial manifest write).
+          jq -nc \
+            --arg n "$sp_child_name" \
+            --arg p "$sp_child_file" \
+            --arg id "$sp_child_run_id" \
+            --arg t "$sp_child_started" \
+            --argjson inp "$sp_child_ctx" \
+            '{run_id:$id, process:$n, process_file:$p, started_at:$t, status:"running", inputs:$inp}' \
+            > "$sp_child_run_dir/manifest.json"
+
+          # Run the child step loop directly (reuse _local_step_loop, no subshell overhead).
+          # Override OSL_DEPTH for any nested subprocess calls.
+          local sp_loop_status
+          sp_loop_status="$(OSL_DEPTH="$sp_depth_next" \
+            _local_step_loop "$sp_child_run_dir" "$sp_child_file" 0 "$sp_child_ctx")"
+
+          case "$sp_loop_status" in
+            completed)
+              # Merge child's final context under the step id.
+              local sp_final_ctx
+              if [[ -f "$sp_child_run_dir/context.json" ]]; then
+                sp_final_ctx="$(cat "$sp_child_run_dir/context.json")"
+              else
+                sp_final_ctx="$sp_child_ctx"
+              fi
+              # Record child as completed in its manifest.
+              local sp_child_ended; sp_child_ended="$(_local_now)"
+              jq -c --arg s "completed" --arg e "$sp_child_ended" '.status=$s | .ended_at=$e' \
+                "$sp_child_run_dir/manifest.json" > "$sp_child_run_dir/manifest.json.tmp" \
+                && mv "$sp_child_run_dir/manifest.json.tmp" "$sp_child_run_dir/manifest.json"
+              # out_raw = child's final context (the whole context object is the step output).
+              out_raw="$sp_final_ctx"; rc=0 ;;
+
+            failed)
+              local sp_child_ended2; sp_child_ended2="$(_local_now)"
+              jq -c --arg s "failed" --arg e "$sp_child_ended2" '.status=$s | .ended_at=$e' \
+                "$sp_child_run_dir/manifest.json" > "$sp_child_run_dir/manifest.json.tmp" \
+                && mv "$sp_child_run_dir/manifest.json.tmp" "$sp_child_run_dir/manifest.json"
+              out_raw="{\"error\":\"subprocess '$sp_proc_arg' failed (see $sp_child_run_dir/)\"}"; rc=1; sp_ok=false ;;
+
+            waiting:*)
+              # Child paused — propagate as a parent waiting_for_callback pause.
+              # Record the child run_id and the child run dir so the operator can inspect.
+              local sp_wait_index; sp_wait_index="${sp_loop_status#waiting:}"
+              local sp_wait_step; sp_wait_step="$(jq -r ".steps[$sp_wait_index].id // \"step-$sp_wait_index\"" "$sp_child_file")"
+              local sp_wait_since; sp_wait_since="$(_local_now)"
+
+              # Finalize child manifest as waiting.
+              jq -c --arg s "waiting" \
+                    --argjson idx "$(( sp_wait_index + 1 ))" \
+                    --argjson widx "$sp_wait_index" \
+                    --arg step "$sp_wait_step" \
+                 '.status=$s | .cursor={next_index:$idx} | .waiting={step:$step, index:$widx, reason:"waiting_for_callback", since:"'"$sp_wait_since"'"}' \
+                "$sp_child_run_dir/manifest.json" > "$sp_child_run_dir/manifest.json.tmp" \
+                && mv "$sp_child_run_dir/manifest.json.tmp" "$sp_child_run_dir/manifest.json"
+
+              # Append a waiting audit receipt for this parent step.
+              jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
+                     --arg a "$s_started" --arg crid "$sp_child_run_id" --arg crdir "$sp_child_run_dir" \
+                '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
+                  reason:"waiting_for_callback", child_run_id:$crid, child_run_dir:$crdir, started_at:$a}' >> "$audit"
+              echo "waiting:$i"
+              return 0 ;;
+
+            *)
+              out_raw="{\"error\":\"subprocess: unexpected loop status: $sp_loop_status\"}"; rc=1; sp_ok=false ;;
+          esac
+        fi ;;
+      *)    out_raw="unsupported step type for local execution: $stype"; rc=2 ;;
+    esac
+
+    local out_json
+    if jq -e . >/dev/null 2>&1 <<<"$out_raw"; then
+      out_json="$(jq -c 'if type=="object" then . else {value:.} end' <<<"$out_raw")"
+    else
+      out_json="$(jq -nc --arg s "$out_raw" '{stdout:$s}')"
+    fi
+    s_ended="$(_local_now)"
+    local sstatus; [ "$rc" -eq 0 ] && sstatus="completed" || sstatus="failed"
+    # Fold the step's stderr into the receipt so `show` surfaces it; drop the
+    # temp log afterwards (and never leave an empty one lying around).
+    local serr=""
+    [ -s "$run_dir/$sid.stderr.log" ] && serr="$(cat "$run_dir/$sid.stderr.log")"
+    rm -f "$run_dir/$sid.stderr.log"
+    jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" --arg st "$sstatus" --argjson rc "$rc" \
+      --arg a "$s_started" --arg b "$s_ended" --argjson out "$out_json" --arg se "$serr" \
+      '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:$st, exit_code:$rc, started_at:$a, ended_at:$b, output:$out}
+       + (if $se=="" then {} else {stderr:$se} end)' >> "$audit"
+
+    if [ "$rc" -eq 0 ]; then
+      ctx="$(jq -c --arg id "$sid" --argjson o "$out_json" '.[$id]=$o' <<<"$ctx")"
+      # Live checkpoint: atomic write (temp+mv) so a truncated write never silently
+      # strips outputs — a future resume can re-enter at the cursor safely.
+      printf '%s' "$ctx" > "$run_dir/context.json.tmp" && mv "$run_dir/context.json.tmp" "$run_dir/context.json"
+    else
+      [[ "$OUTPUT_MODE" != json ]] && err "[$sid] failed (exit $rc): $(jq -rc '.stdout // .' <<<"$out_json" | head -c 160)"
+      if [ "$scont" != "true" ]; then echo "failed"; return 0; fi
+      ctx="$(jq -c --arg id "$sid" --argjson o "$out_json" '.[$id]=$o' <<<"$ctx")"
+      printf '%s' "$ctx" > "$run_dir/context.json.tmp" && mv "$run_dir/context.json.tmp" "$run_dir/context.json"
+    fi
+    i=$((i+1))
+  done
+
+  echo "completed"
+}
+
+# opensop submit <run_id> <step-id> --local [--output k=v ...] [--outputs '<json>'] [--decided-by WHO]
+#
+# Resume a paused local run at the step named <step-id>. Validates submitted
+# outputs against the step's declared schema, injects them into context, appends
+# a completion receipt to audit.jsonl, then re-enters _local_step_loop from
+# cursor.next_index onward. Finalizes manifest on completion/failure.
+#
+# Pre-conditions (all die on violation):
+#   - run dir + manifest exist
+#   - manifest.status == "waiting"
+#   - manifest.waiting.step == <step-id>
+#   - all required output fields are present and type-valid
+#
+# Contract: never re-runs steps at index < cursor.next_index (idempotency).
+local_submit() {
+  [[ $# -lt 2 ]] && die "usage: opensop submit <run_id> <step-id> [--output KEY=VALUE ...] [--outputs '<json>'] [--decided-by WHO]" "usage_error" "run opensop help"
+  local run_id="$1" step_id="$2"; shift 2
+
+  local run_dir="$OPENSOP_LOCAL_HOME/runs/$run_id"
+  [ -d "$run_dir" ] || die "no such local run: $run_id (see: opensop runs)" "instance_not_found" "opensop runs"
+  local mf="$run_dir/manifest.json"
+  [ -f "$mf" ] || die "run directory found but manifest.json is missing: $run_dir" "cli_error"
+
+  # Status gate: only waiting runs can be resumed.
+  local mf_status; mf_status="$(jq -r '.status' "$mf")"
+  [ "$mf_status" = "waiting" ] || die "run $run_id is '$mf_status', not 'waiting' — cannot submit" "usage_error" "only waiting runs can be submitted"
+
+  # Step gate: must be waiting on exactly this step.
+  local waiting_step; waiting_step="$(jq -r '.waiting.step // ""' "$mf")"
+  [ "$waiting_step" = "$step_id" ] || die "run $run_id is waiting on '$waiting_step', not '$step_id'" "usage_error" "submit step id must match manifest.waiting.step"
+
+  # Parse submitted outputs.
+  local built; built="$(build_payload_object output "$@")"
+  local submitted; submitted="$(jq -c '.payload' <<<"$built")"
+  local decided_by; decided_by="$(jq -r '.decided_by' <<<"$built")"
+  local confidence; confidence="$(jq -r '.confidence' <<<"$built")"
+
+  # Validate submitted outputs against manifest.waiting.expects.schema.
+  # Reuse the same required/enum/type logic as the dry-run validator.
+  #
+  # required_if PARITY: the runtime's validate_outputs! (instance_executor.rb ~:319)
+  # supports required_if — a field required only when a condition holds against
+  # the submitted outputs. The local validator CANNOT evaluate arbitrary condition
+  # expressions (no ConditionEvaluator here), so we skip the unconditional required
+  # check for any field that declares required_if. This is intentionally permissive —
+  # "never more restrictive than the server" — and documented as a local limitation.
+  local schema; schema="$(jq -c '.waiting.expects.schema // []' "$mf")"
+  local errors_json
+  errors_json="$(jq -cn --argjson schema "$schema" --argjson supplied "$submitted" '
+    [ $schema[] |
+      . as $field |
+      ($supplied[$field.name]) as $val |
+      # required check: skip entirely when required_if is present (local cannot
+      # evaluate the condition — treat as optional, never more strict than server).
+      (if ($field.required == true) and ($field.required_if == null) and ($val == null) then
+        {path: ("outputs." + $field.name), message: ("required field missing: " + $field.name)}
+      else null end),
+      (if $val != null then
+        if   $field.type == "number"  and ($val | type) != "number"  then
+          {path: ("outputs." + $field.name), message: ($field.name + " must be a number")}
+        elif $field.type == "boolean" and ($val | type) != "boolean" then
+          {path: ("outputs." + $field.name), message: ($field.name + " must be a boolean")}
+        elif $field.type == "enum" and ($field.values != null) and ([$field.values[] | . == $val] | any | not) then
+          {path: ("outputs." + $field.name), message: ($field.name + " must be one of: " + ($field.values | join(", ")))}
+        elif $field.type == "string" and $field.format == "email" and ($val | type) == "string" and ($val | test("^[^@]+@[^@]+\\.[^@]+$") | not) then
+          {path: ("outputs." + $field.name), message: ($field.name + " does not look like an email address")}
+        else null end
+      else null end)
+    ] | map(select(. != null))
+  ')"
+  local err_count; err_count="$(jq 'length' <<<"$errors_json")"
+  if (( err_count > 0 )); then
+    local first_err; first_err="$(jq -r '.[0].message' <<<"$errors_json")"
+    die "validation failed: $first_err" "usage_error" "$(jq -r '.[].message' <<<"$errors_json" | head -5 | tr '\n' '; ')"
+  fi
+
+  # Locate the process file so we can resume execution.
+  local proc_file; proc_file="$(jq -r '.process_file' "$mf")"
+  [ -f "$proc_file" ] || die "process file not found: $proc_file (was the run created on another machine?)" "file_not_found"
+
+  # Resolve the cursor: cursor.next_index already points to the first step to run
+  # on resume (it was stored as wait_index + 1 when the run paused). Read it
+  # directly — no +1 offset needed here.
+  local wait_index; wait_index="$(jq -r '.waiting.index' "$mf")"
+  local resume_index; resume_index="$(jq -r '.cursor.next_index' "$mf")"
+
+  # Load current context (already checkpointed after all completed steps).
+  local ctx
+  if [ -f "$run_dir/context.json" ]; then
+    ctx="$(cat "$run_dir/context.json")"
+  else
+    ctx="$(jq -c '.inputs // {}' "$mf")"
+  fi
+
+  # Inject the submitted outputs under the step id (same merge shape as local_run ~:1926).
+  local out_json
+  if jq -e . >/dev/null 2>&1 <<<"$submitted"; then
+    out_json="$(jq -c 'if type=="object" then . else {value:.} end' <<<"$submitted")"
+  else
+    out_json="$(jq -nc --arg s "$submitted" '{stdout:$s}')"
+  fi
+  ctx="$(jq -c --arg id "$step_id" --argjson o "$out_json" '.[$id]=$o' <<<"$ctx")"
+
+  # Append a completed receipt for the step we're resuming from.
+  # Derive type + executor dynamically from the process file (matches _local_step_loop
+  # receipts). The executor uses the same per-type default logic as the step loop.
+  local resumed_stype; resumed_stype="$(jq -r ".steps[$wait_index].type // \"automated\"" "$proc_file")"
+  local resumed_sexec; resumed_sexec="$(jq -r ".steps[$wait_index].executor // \"\"" "$proc_file")"
+  if [[ -z "$resumed_sexec" ]]; then
+    case "$resumed_stype" in
+      automated|shell|webhook)                                               resumed_sexec="external" ;;
+      noop|form|approval|notification|wait|judgment|llm|subprocess) resumed_sexec="internal" ;;
+      *)                                                                      resumed_sexec="external" ;;
+    esac
+  fi
+  local audit="$run_dir/audit.jsonl"
+  local submitted_at; submitted_at="$(_local_now)"
+  jq -nc \
+    --arg rid "$run_id" --arg sid "$step_id" --arg t "$resumed_stype" --arg ex "$resumed_sexec" \
+    --arg a "$submitted_at" --arg b "$submitted_at" \
+    --argjson out "$out_json" \
+    --arg db "$decided_by" \
+    --arg conf "$confidence" \
+    '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"completed",
+      exit_code:0, started_at:$a, ended_at:$b, output:$out}
+     + (if $db   != "" then {decided_by:$db} else {} end)
+     + (if $conf != "" then {confidence:($conf | tonumber)} else {} end)' >> "$audit"
+
+  # Update context.json checkpoint with the submitted data (atomic write).
+  printf '%s' "$ctx" > "$run_dir/context.json.tmp" && mv "$run_dir/context.json.tmp" "$run_dir/context.json"
+
+  # Flip manifest back to running and clear the waiting block before re-entering the loop.
+  jq -c '.status="running" | del(.waiting) | del(.cursor)' \
+     "$mf" > "$mf.tmp" && mv "$mf.tmp" "$mf"
+
+  # Safety net: if we crash mid-resume, mark interrupted (not left as running).
+  trap '_local_finalize_trap "$run_dir"' EXIT
+
+  # Re-enter the step loop at resume_index (NEVER re-runs steps < resume_index).
+  local loop_status
+  loop_status="$(_local_step_loop "$run_dir" "$proc_file" "$resume_index" "$ctx")"
+
+  local run_status
+  case "$loop_status" in
+    completed) run_status="completed" ;;
+    failed)    run_status="failed" ;;
+    waiting:*) run_status="waiting" ;;
+    *)         run_status="failed" ;;
+  esac
+
+  [ -f "$run_dir/context.json" ] || echo "$ctx" > "$run_dir/context.json"
+
+  if [ "$run_status" = "waiting" ]; then
+    # Another pause point hit during resume.
+    local wait_index2; wait_index2="${loop_status#waiting:}"
+    local wait_step2 wait_since2
+    wait_step2="$(jq -r ".steps[$wait_index2].id // \"step-$wait_index2\"" "$proc_file")"
+    wait_since2="$(_local_now)"
+    local wait_expects2
+    wait_expects2="$(jq -c --argjson idx "$wait_index2" '
+      .steps[$idx] as $s |
+      ($s.inputs // $s.outputs // null) as $decl |
+      if $decl != null and ($decl | length) > 0 then
+        { outputs: [$decl[].name // empty],
+          schema:  $decl }
+      elif $s.type == "approval" then
+        { outputs: ["decision"],
+          schema:  [{"name":"decision","type":"enum","values":["approve","reject"],"required":true}] }
+      else
+        { outputs: [], schema: [] }
+      end
+    ' "$proc_file")"
+    local wait_stype2 wait_reason2
+    wait_stype2="$(jq -r ".steps[$wait_index2].type // \"automated\"" "$proc_file")"
+    case "$wait_stype2" in
+      form)     wait_reason2="waiting_for_input" ;;
+      approval) wait_reason2="waiting_for_approval" ;;
+      *)        wait_reason2="waiting_for_callback" ;;
+    esac
+    jq -c --arg s "waiting" \
+          --argjson idx "$((wait_index2 + 1))" \
+          --argjson widx "$wait_index2" \
+          --arg step "$wait_step2" \
+          --arg reason "$wait_reason2" \
+          --arg since "$wait_since2" \
+          --argjson expects "$wait_expects2" \
+       '.status=$s
+        | .cursor={next_index:$idx}
+        | .waiting={step:$step, index:$widx, reason:$reason, expects:$expects, since:$since}' \
+       "$mf" > "$mf.tmp" && mv "$mf.tmp" "$mf"
+    trap - EXIT
+    if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+      ok "submitted $step_id — run $run_id now waiting at $wait_step2"
+      info "next:  opensop submit $run_id $wait_step2 --output k=v"
+    else
+      jq -c . "$mf"
+    fi
+    return 0
+  fi
+
+  local ended; ended="$(_local_now)"
+  jq -c --arg s "$run_status" --arg e "$ended" '.status=$s | .ended_at=$e' \
+     "$mf" > "$mf.tmp" && mv "$mf.tmp" "$mf"
+  trap - EXIT
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local proc_name; proc_name="$(jq -r '.process' "$mf")"
+    if [ "$run_status" = completed ]; then
+      ok "submitted $step_id — $C_BOLD$proc_name$C_RESET completed"
+    else
+      err "submitted $step_id — $proc_name failed"
+    fi
+    info "  run: $run_id"
+    info "next:  opensop show $run_id"
+  else
+    jq -c . "$mf"
+  fi
+  [ "$run_status" = completed ]
+}
+
+# _enumerate_local_processes
+#   Walk the active cell + ancestors (nearest first), glob processes/*.sop.json,
+#   and emit one JSON record per process suitable for score_processes.
+#   Nearest-cell-wins dedup: if two cells have a process with the same logical
+#   name (basename without .sop.json), only the nearest one's record is emitted
+#   (identical precedence rule as local_list --conflicts).
+#
+#   Record shape (matches what score_processes expects under .processes[]):
+#     { name, description, tags, inputs_summary, outputs_summary }
+#   corpus fields are extracted from the .sop.json; non-string scalars are
+#   coerced to strings so jq's ascii_downcase doesn't choke on them.
+#
+#   Output: a single JSON object { processes: [...] } on stdout.
+#
+#   bash 3.2 compat: dedup tracked via a space-padded string of basenames
+#   (no associative arrays).
+_enumerate_local_processes() {
+  local cell; cell="$(_find_scope_root)"
+
+  # Build the list of cells to walk (active + ancestors).
+  local -a cell_dirs=()
+  if [[ -n "$cell" ]]; then
+    cell_dirs+=("$cell")
+    while IFS= read -r anc; do
+      [[ -n "$anc" ]] && cell_dirs+=("$anc")
+    done < <(_enumerate_ancestors "$cell")
+  fi
+
+  local _seen_names=" "
+  local records_json="[]"
+
+  local d
+  for d in "${cell_dirs[@]+"${cell_dirs[@]}"}"; do
+    [[ -d "$d/processes" ]] || continue
+    while IFS= read -r f; do
+      [[ -f "$f" ]] || continue
+      local bn; bn="$(basename "$f" .sop.json)"
+      # Dedup: if this basename was already seen in a nearer cell, skip it.
+      case "$_seen_names" in
+        *" $bn "*)  continue ;;
+      esac
+      _seen_names="$_seen_names$bn "
+
+      # Extract searchable fields from the .sop.json.
+      # inputs_summary: comma-joined list of input field names.
+      # outputs_summary: comma-joined list of output field names across all steps.
+      # Handles both flat process (inputs: {}) and wrapped envelope.
+      local rec
+      rec="$(jq -c '
+        # Resolve process root — may be wrapped under "process" key or flat.
+        (if has("process") then .process else . end) as $p |
+        # name
+        ($p.name // "") as $name |
+        # description
+        ($p.description // "") as $desc |
+        # tags
+        ($p.tags // []) as $tags |
+        # inputs: declared at process level — support array or object keys.
+        (if ($p.inputs | type) == "array"  then [$p.inputs[]?.name // empty]
+         elif ($p.inputs | type) == "object" then [$p.inputs | keys[]]
+         else []
+         end | join(", ")) as $inp_sum |
+        # outputs: declared across steps (steps[].outputs[].name).
+        ([$p.steps[]?.outputs[]?.name // empty] | unique | join(", ")) as $out_sum |
+        {name: $name, description: $desc, tags: $tags,
+         inputs_summary: $inp_sum, outputs_summary: $out_sum}
+      ' "$f" 2>/dev/null)" || continue
+      [[ -z "$rec" ]] && continue
+      records_json="$(jq -c --argjson r "$rec" '. + [$r]' <<<"$records_json")"
+    done < <(find "$d/processes" -maxdepth 1 -name '*.sop.json' 2>/dev/null)
+  done
+
+  jq -nc --argjson procs "$records_json" '{processes: $procs}'
+}
+
+# local_search <keyword> [keyword2 ...]
+#   Ranked text search over the cell-chain process corpus (no server).
+#   Mirrors cmd_search output shape exactly.
+local_search() {
+  [[ $# -lt 1 ]] && die "usage: opensop search <keyword> [keyword2 ...]" "usage_error" "run opensop help"
+  local -a keywords=("$@")
+  local keywords_json
+  keywords_json=$(printf '%s\n' "${keywords[@]}" | jq -Rsc '[split("\n")[] | select(length > 0)]')
+
+  local resp; resp="$(_enumerate_local_processes)"
+  local results; results=$(score_processes "$keywords_json" "$resp")
+
+  # Top 5 only — same cap as remote.
+  local top5; top5=$(echo "$results" | jq -c '.[0:5]')
+
+  local count; count=$(echo "$top5" | jq 'length')
+  if [[ "$count" -eq 0 ]]; then
+    printf 'no matches for: %s\n' "${keywords[*]}" >&2
+    exit 0
+  fi
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    echo "$top5" | jq -r '.[] | "\(.score)\t\(.name)\t\(.tags | join(", "))\t\(.description)"' | \
+      while IFS=$'\t' read -r score name tags desc; do
+        local snippet="${desc:0:60}"
+        [[ "${#desc}" -gt 60 ]] && snippet="${snippet}…"
+        printf '%s%-4s%s  %s%-30s%s %s%s%s  %s\n' \
+          "$C_DIM" "$score" "$C_RESET" \
+          "$C_BOLD" "$name" "$C_RESET" \
+          "$C_DIM" "(${tags})" "$C_RESET" \
+          "$snippet"
+      done
+  else
+    local query_arr; query_arr=$(printf '%s\n' "${keywords[@]}" | jq -Rsc '[split("\n")[] | select(length > 0)]')
+    echo "$top5" | jq -c --argjson q "$query_arr" '{query: $q, results: .}'
+  fi
+}
+
+# local_suggest "<task>" [--threshold N]
+#   Intent scoring over the cell-chain process corpus (no server).
+#   Mirrors cmd_suggest output shape exactly.
+local_suggest() {
+  [[ $# -lt 1 ]] && die "usage: opensop suggest \"<task description>\"" "usage_error" "run opensop help"
+  local task="$*"
+  local -a keywords
+  IFS=' ' read -r -a keywords <<< "$task"
+
+  local threshold="0.0"
+  local -a remaining_args=("$@")
+  local -a parsed_keywords=()
+  local i=0
+  while [[ $i -lt ${#remaining_args[@]} ]]; do
+    local a="${remaining_args[$i]}"
+    if [[ "$a" == "--threshold" ]]; then
+      (( i++ ))
+      threshold="${remaining_args[$i]:-0.0}"
+    else
+      parsed_keywords+=("$a")
+    fi
+    (( i++ ))
+  done
+
+  if (( ${#parsed_keywords[@]} > 0 )); then
+    task="${parsed_keywords[*]}"
+    IFS=' ' read -r -a keywords <<< "$task"
+  fi
+
+  [[ ${#keywords[@]} -eq 0 ]] && die "usage: opensop suggest \"<task description>\"" "usage_error" "run opensop help"
+
+  local keywords_json
+  keywords_json=$(printf '%s\n' "${keywords[@]}" | jq -Rsc '[split("\n")[] | select(length > 0)]')
+  local num_kws="${#keywords[@]}"
+
+  local resp; resp="$(_enumerate_local_processes)"
+  local results; results=$(score_processes "$keywords_json" "$resp")
+
+  # Top-1 with confidence — identical formula as remote cmd_suggest.
+  local top1; top1=$(echo "$results" | jq -c --argjson nk "$num_kws" '
+    if length == 0 then null
+    else
+      .[0] |
+      . + {confidence: ([1.0, (.score / ([$nk, 1] | max))] | min)}
+    end
+  ')
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    if [[ "$top1" == "null" ]]; then
+      printf 'no clear match for "%s"\n' "$task"
+    else
+      local name confidence desc
+      name=$(echo "$top1" | jq -r '.name')
+      confidence=$(echo "$top1" | jq -r '.confidence | (. * 100 | round / 100 | tostring)')
+      desc=$(echo "$top1" | jq -r '.description')
+      local passes; passes=$(echo "$top1" | jq -r --arg t "$threshold" '(.confidence >= ($t | tonumber)) | tostring')
+      if [[ "$passes" == "true" ]]; then
+        printf '%s→%s this looks like %s%s%s (confidence: %s)\n' \
+          "$C_GREEN" "$C_RESET" "$C_BOLD" "$name" "$C_RESET" "$confidence"
+        printf '  %s\n' "$desc"
+      else
+        printf 'no clear match for "%s"\n' "$task"
+      fi
+    fi
+  else
+    local match_json
+    if [[ "$top1" == "null" ]]; then
+      match_json="null"
+    else
+      local passes; passes=$(echo "$top1" | jq -r --arg t "$threshold" '(.confidence >= ($t | tonumber)) | tostring')
+      if [[ "$passes" == "true" ]]; then
+        match_json=$(echo "$top1" | jq -c '{name, confidence, description}')
+      else
+        match_json="null"
+      fi
+    fi
+    jq -nc --arg task "$task" --argjson match "$match_json" '{task: $task, match: $match}'
+  fi
+}
+
+# local_dry_run <name|file.sop.json> [--input K=V ...] [--inputs '<json>'] [--inputs-file <path>]
+#
+# Preview a local process: resolves the process file (explicit path or name
+# via cell chain), validates provided --input/--inputs against the process's
+# declared inputs (same required/type/enum/format checks as cmd_dry_run), and
+# prints the step walkthrough via walk_steps_preview. No run is created.
+#
+# Output mirrors cmd_dry_run exactly:
+#   pretty mode: prose header, validation status, step list
+#   JSON  mode : {process, valid, validation_errors, steps}   ← identical shape
+# Exits 1 when validation fails (same as remote).
+local_dry_run() {
+  [[ $# -lt 1 ]] && die "usage: opensop dry-run <name|file.sop.json> [--input KEY=VALUE ...] [--inputs '<json>'] [--inputs-file <path>]" "usage_error" "run opensop help"
+  local proc_arg="$1"; shift
+
+  # Resolve process file — same logic as local_run.
+  local proc_file=""
+  if [[ "$proc_arg" == *.sop.json ]] || [[ "$proc_arg" == */* ]]; then
+    proc_file="$proc_arg"
+  else
+    proc_file="$(_find_skill_in_cells "$proc_arg")"
+    [[ -z "$proc_file" ]] && die "skill not found: '$proc_arg' (looked in active cell + ancestors)" "file_not_found" \
+        "create processes/${proc_arg}.sop.json in a cell, or pass an explicit path"
+  fi
+  [[ -f "$proc_file" ]] || die "process file not found: $proc_file" "file_not_found"
+  jq -e . "$proc_file" >/dev/null 2>&1 || die "process file is not valid JSON: $proc_file" "invalid_json"
+
+  local name; name="$(jq -r '.name // "unnamed"' "$proc_file")"
+
+  # Parse input flags — same flag set as cmd_dry_run.
+  local json_blob="" file_path=""
+  local -a kv_pairs=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --inputs)       json_blob="$2";  shift 2 ;;
+      --inputs-file)  file_path="$2";  shift 2 ;;
+      --input)        kv_pairs+=("$2"); shift 2 ;;
+      *) die "unknown flag for dry-run: $1" "unknown_flag" "run opensop dry-run --help" ;;
+    esac
+  done
+
+  # Build input object.
+  local inputs="{}"
+  if [[ -n "$json_blob" ]]; then
+    inputs=$(echo "$json_blob" | jq .) || die "invalid JSON in --inputs" "invalid_json"
+  elif [[ -n "$file_path" ]]; then
+    inputs=$(jq . "$file_path") || die "could not read $file_path as JSON" "invalid_json"
+  fi
+  if (( ${#kv_pairs[@]} > 0 )); then
+    for kv in "${kv_pairs[@]}"; do
+      [[ "$kv" != *=* ]] && die "--input expects KEY=VALUE, got: $kv" "usage_error"
+      local k="${kv%%=*}" v="${kv#*=}"
+      if echo "$v" | jq -e . >/dev/null 2>&1; then
+        inputs=$(echo "$inputs" | jq --arg k "$k" --argjson v "$v" '.[$k] = $v')
+      else
+        inputs=$(echo "$inputs" | jq --arg k "$k" --arg v "$v" '.[$k] = $v')
+      fi
+    done
+  fi
+
+  # Build a schema-shaped JSON object that walk_steps_preview and the validator
+  # expect: {process: {name, inputs: [...], steps: [...]}}
+  # The .sop.json may have inputs as an array (new style) or an object (dict-style).
+  # Normalise to an array of {name, type?, required?, ...} for the validator.
+  local schema_json
+  schema_json="$(jq -c '
+    # Resolve process root — may be wrapped under "process" key or flat.
+    (if has("process") then .process else . end) as $p |
+    # Normalise inputs to array form for the validator.
+    (if ($p.inputs | type) == "array" then $p.inputs
+     elif ($p.inputs | type) == "object" then
+       [$p.inputs | to_entries[] | {name: .key} + (
+         if (.value | type) == "object" then .value else {} end)]
+     else []
+     end) as $inputs_arr |
+    {process: ($p + {inputs: $inputs_arr})}
+  ' "$proc_file")"
+
+  # Validate inputs against process.inputs definition — same jq as cmd_dry_run.
+  local errors_json
+  errors_json=$(echo "$schema_json" | jq -c \
+    --argjson supplied "$inputs" '
+    [ .process.inputs[]? |
+      . as $field |
+      ($supplied[$field.name]) as $val |
+      # Required check.
+      (if ($field.required == true) and ($val == null) then
+        {path: ("inputs." + $field.name), message: ("required field missing: " + $field.name)}
+      else null end),
+      # Type check (best-effort).
+      (if $val != null then
+        if   $field.type == "number"  and ($val | type) != "number"  then
+          {path: ("inputs." + $field.name), message: ($field.name + " must be a number")}
+        elif $field.type == "boolean" and ($val | type) != "boolean" then
+          {path: ("inputs." + $field.name), message: ($field.name + " must be a boolean")}
+        elif $field.type == "enum" and ($field.values != null) and ([$field.values[] | . == $val] | any | not) then
+          {path: ("inputs." + $field.name), message: ($field.name + " must be one of: " + ($field.values | join(", ")))}
+        elif $field.type == "string" and $field.format == "email" and ($val | type) == "string" and ($val | test("^[^@]+@[^@]+\\.[^@]+$") | not) then
+          {path: ("inputs." + $field.name), message: ($field.name + " does not look like an email address")}
+        else null end
+      else null end)
+    ] | map(select(. != null))
+  ')
+
+  local valid=true
+  local err_count; err_count=$(echo "$errors_json" | jq 'length')
+  (( err_count > 0 )) && valid=false
+
+  # Walk steps — build per-step JSON array (same shape as cmd_dry_run).
+  local steps_preview; steps_preview=$(walk_steps_preview "$schema_json")
+  local steps_json
+  steps_json=$(echo "$schema_json" | jq -c '
+    [.process.steps[]? | {step_id: .id, type, preview: ("would execute \(.type) step")}]
+  ')
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    printf '%sdry-run:%s %s\n\n' "$C_BOLD" "$C_RESET" "$name"
+
+    printf '%sinputs validation:%s\n' "$C_BOLD" "$C_RESET"
+    if [[ "$valid" == "true" ]]; then
+      ok "inputs valid"
+    else
+      echo "$errors_json" | jq -r '.[] | "  ✗ \(.message)"' | sed "s/^  ✗/$(printf '%s' "${C_RED}✗${C_RESET}")/g"
+      printf '%svalidation failed (%s error(s))%s\n' "$C_RED" "$err_count" "$C_RESET"
+    fi
+
+    printf '\n%sstep preview:%s\n' "$C_BOLD" "$C_RESET"
+    echo "$steps_preview"
+  else
+    local valid_bool; valid_bool=$( [[ "$valid" == "true" ]] && echo 'true' || echo 'false')
+    jq -nc \
+      --arg process "$name" \
+      --argjson valid "$valid_bool" \
+      --argjson validation_errors "$errors_json" \
+      --argjson steps "$steps_json" \
+      '{process: $process, valid: $valid, validation_errors: $validation_errors, steps: $steps}'
+  fi
+
+  [[ "$valid" == "false" ]] && exit 1
+  return 0
+}
+
+# _find_skill_in_cells <name>
+#   Walk the cell chain (active cell + ancestors, nearest first) looking for
+#   processes/<name>.sop.json. Echo first match (nearest wins), empty if none.
+_find_skill_in_cells() {
+  local name="$1"
+  local cell; cell="$(_find_scope_root)"
+  [[ -z "$cell" ]] && return 0
+  if [[ -f "$cell/processes/${name}.sop.json" ]]; then
+    echo "$cell/processes/${name}.sop.json"
+    return 0
+  fi
+  while IFS= read -r ancestor; do
+    [[ -z "$ancestor" ]] && continue
+    if [[ -f "$ancestor/processes/${name}.sop.json" ]]; then
+      echo "$ancestor/processes/${name}.sop.json"
+      return 0
+    fi
+  done < <(_enumerate_ancestors "$cell")
+}
+
+# opensop status <run_id> --local  — mirror remote cmd_status over a local run
+#
+# Reads manifest.json for top-level state + waiting block.
+# Derives per-step state from audit.jsonl (completed/failed/waiting receipts).
+# JSON output shape mirrors the remote GET /sop/:name/:id response so that
+# Phase-2 default-flip is transparent.
+#
+# Remote shape (what cmd_status's pretty path reads from the API response):
+#   .id, .process.name, .state, .started_at, .completed_at,
+#   .steps[].{step_id, type, state, sub_state}
+local_status() {
+  [[ $# -lt 1 ]] && die "usage: opensop status <run_id>" "usage_error" "run opensop runs"
+  local rid="$1"
+  local run_dir="$OPENSOP_LOCAL_HOME/runs/$rid"
+  [ -d "$run_dir" ] || die "no such local run: $rid (see: opensop runs)" "instance_not_found" "opensop runs"
+  local mf="$run_dir/manifest.json"
+  [ -f "$mf" ] || die "run directory found but manifest.json is missing: $run_dir" "cli_error"
+
+  # Build response JSON that mirrors remote cmd_status's API response shape.
+  # audit.jsonl → steps array: each line is one receipt; status → state;
+  # waiting receipts carry .reason → sub_state.
+  local resp
+  resp="$(jq -nc \
+    --argjson m "$(cat "$mf")" \
+    --argjson steps "$(jq -s '[.[] | {step_id: .step, type, state: .status, sub_state: (.reason // null), started_at, ended_at}]' "$run_dir/audit.jsonl" 2>/dev/null || echo '[]')" \
+    '{
+       id:           $m.run_id,
+       process:      {name: $m.process},
+       state:        $m.status,
+       started_at:   $m.started_at,
+       completed_at: ($m.ended_at // null),
+       waiting:      ($m.waiting  // null),
+       steps:        $steps
+     }')"
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local state ended
+    state=$(echo "$resp" | jq -r '.state')
+    ended=$(echo "$resp" | jq -r '.completed_at // ""')
+    local color="$C_BLUE"
+    [[ "$state" == "completed" ]] && color="$C_GREEN"
+    [[ "$state" == "failed"    ]] && color="$C_RED"
+    [[ "$state" == "cancelled" ]] && color="$C_YELLOW"
+    printf '%sinstance:%s %s\n' "$C_BOLD" "$C_RESET" "$rid"
+    printf '%sprocess:%s  %s\n' "$C_BOLD" "$C_RESET" "$(echo "$resp" | jq -r '.process.name')"
+    printf '%sstate:%s    %s%s%s%s\n' "$C_BOLD" "$C_RESET" "$color" "$state" "$C_RESET" "${ended:+ ($ended)}"
+    echo
+    echo "$resp" | jq -r '.steps[]? | "\(.step_id)\t\(.type)\t\(.state)\t\(.sub_state // "")"' | \
+      while IFS=$'\t' read -r step_id stype sstate sub; do
+        local glyph
+        case "$sstate" in
+          completed) glyph="${C_GREEN}✓${C_RESET}" ;;
+          failed)    glyph="${C_RED}✗${C_RESET}" ;;
+          waiting)   glyph="${C_YELLOW}⏳${C_RESET}" ;;
+          active)    glyph="${C_YELLOW}⏳${C_RESET}" ;;  # remote-equivalent state name (parity with cmd_status)
+          skipped)   glyph="${C_DIM}—${C_RESET}" ;;
+          *)         glyph="${C_DIM}·${C_RESET}" ;;
+        esac
+        printf '  %s %-30s %s%s%s%s\n' "$glyph" "$step_id" "$C_DIM" "$stype" "${sub:+ · $sub}" "$C_RESET"
+      done
+  else
+    echo "$resp" | emit_pretty_or_json
+  fi
+}
+
+# opensop steps <run_id> --local  — mirror remote cmd_steps over a local run
+#
+# Derives per-step state from audit.jsonl (same source as local_status's steps
+# array) and emits through emit_pretty_or_json — matches remote cmd_steps which
+# calls api_get "/sop/:name/:id/steps" | emit_pretty_or_json.
+#
+# Remote shape (GET /sop/:name/:id/steps):
+#   {steps: [{id, step_id, name, type, state, sub_state, inputs, outputs,
+#             decided_by, confidence, position, started_at, completed_at, error, links}]}
+#
+# Local shape (canonical local envelope — run_id is a local-only extra for run lookup):
+#   {run_id, steps: [{step_id, type, state, sub_state, started_at, ended_at,
+#                     decided_by, confidence,           # mirrors remote StepSerializer fields
+#                     exit_code?,   # local-only extra (shell step metadata not in remote)
+#                     output?}]}    # local-only extra (raw step stdout/json; remote uses outputs:{})
+local_steps() {
+  [[ $# -lt 1 ]] && die "usage: opensop steps <run_id>" "usage_error" "run opensop runs"
+  local rid="$1"
+  local run_dir="$OPENSOP_LOCAL_HOME/runs/$rid"
+  [ -d "$run_dir" ] || die "no such local run: $rid (see: opensop runs)" "instance_not_found" "opensop runs"
+  [ -f "$run_dir/manifest.json" ] || die "run directory found but manifest.json is missing: $run_dir" "cli_error"
+
+  jq -nc \
+    --arg rid "$rid" \
+    --argjson steps "$(jq -s '[.[] | {
+        step_id:    .step,
+        type,
+        state:      .status,
+        sub_state:  (.reason // null),
+        started_at,
+        ended_at:   (.ended_at // null),
+        decided_by: (.decided_by // null),   # mirrors remote StepSerializer.decided_by
+        confidence: (.confidence // null),   # mirrors remote StepSerializer.confidence
+        exit_code:  (.exit_code // null),    # local-only extra (shell exit status)
+        output:     (.output // null)        # local-only extra (raw stdout/merged json)
+      }]' "$run_dir/audit.jsonl" 2>/dev/null || echo '[]')" \
+    '{run_id: $rid, steps: $steps}' | emit_pretty_or_json
+}
+
+# opensop list --local [dir]  — discover internal .sop.json processes
+#
+# v0.6: when called with no arg AND cwd is inside a cell, enumerate skills
+# from the active cell's processes/ then from each ancestor's processes/
+# (nearest first). Tags each row with [cell-name]. When given an explicit
+# dir, falls back to the original find-based behavior for backwards compat.
+local_list() {
+  # Parse local-engine flags. Positional args (a directory) preserved.
+  local conflicts_mode=false dir=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --conflicts) conflicts_mode=true; shift ;;
+      --*) die "unknown flag for list: $1" "unknown_flag" "run opensop help" ;;
+      *)
+        if [[ -z "$dir" ]]; then dir="$1"; shift
+        else die "unexpected arg: $1" "usage_error" "usage: opensop list [dir] [--conflicts]"
+        fi
+        ;;
+    esac
+  done
+
+  if [[ -n "$dir" ]]; then
+    # Explicit dir: original behavior — pure find, no cell awareness, no
+    # --conflicts (there's no cell chain to shadow against).
+    find "$dir" -maxdepth 2 -name '*.sop.json' 2>/dev/null | while read -r f; do
+      printf "%-28s %s\n" "$(jq -r '.name // "?"' "$f" 2>/dev/null)" "$f"
+    done
+    return 0
+  fi
+
+  local cell; cell="$(_find_scope_root)"
+  if [[ -z "$cell" ]]; then
+    # Not in a cell: original cwd-scoped find
+    find . -maxdepth 2 -name '*.sop.json' 2>/dev/null | while read -r f; do
+      printf "%-28s %s\n" "$(jq -r '.name // "?"' "$f" 2>/dev/null)" "$f"
+    done
+    return 0
+  fi
+
+  # Inside a cell: walk active + ancestors, tag each with [cell-name].
+  # When --conflicts is set, mark the first occurrence of each filename
+  # as active and subsequent ones as shadowed (PATH-style nearest-wins).
+  #
+  # Tracking uses a space-separated string ("basename:cellname" entries
+  # bookended with spaces) rather than an associative array, so the
+  # function works on bash 3.2 too. Basename characters that contain
+  # spaces would break this — but .sop.json basenames are conventionally
+  # [a-z0-9_-] and the convention pre-dates this PR.
+  local _seen=" "
+  local d cell_name
+  for d in "$cell" $(_enumerate_ancestors "$cell"); do
+    [[ -d "$d/processes" ]] || continue
+    cell_name="$(_read_manifest_field "$d" name)"
+    while IFS= read -r f; do
+      local bn; bn="$(basename "$f" .sop.json)"
+      local n; n="$(jq -r '.name // "?"' "$f" 2>/dev/null)"
+      if $conflicts_mode; then
+        case "$_seen" in
+          *" $bn:"*)
+            local marker_cell="${_seen##* $bn:}"; marker_cell="${marker_cell%% *}"
+            printf "[%s]  %-28s %s  ← shadowed by [%s]\n" "$cell_name" "$n" "$f" "$marker_cell" ;;
+          *)
+            _seen="$_seen$bn:$cell_name "
+            printf "[%s]  %-28s %s  ← active\n" "$cell_name" "$n" "$f" ;;
+        esac
+      else
+        printf "[%s]  %-28s %s\n" "$cell_name" "$n" "$f"
+      fi
+    done < <(find "$d/processes" -maxdepth 1 -name '*.sop.json' 2>/dev/null)
+  done
+}
+
+# local_instances [--state X] [--process Y] [--limit N] [--offset N]
+#
+# Enumerate $OPENSOP_LOCAL_HOME/runs/*/manifest.json, apply optional filters and
+# pagination, and emit a shape mirroring remote cmd_instances:
+#   pretty : header + one row per instance (id / process / state / started_at)
+#   JSON   : {instances:[...], total:N}          (total = unfiltered post-filter count)
+#
+# Each instance entry mirrors the remote shape:
+#   {id, process:{name}, state, started_at}
+#
+# Deduplication is not needed here — each run_id is unique. Pagination:
+#   offset rows skipped, limit rows emitted (default 50/0 — same as cmd_instances).
+local_instances() {
+  local state="" process="" limit=50 offset=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state)   state="$2";   shift 2 ;;
+      --process) process="$2"; shift 2 ;;
+      --limit)   limit="$2";   shift 2 ;;
+      --offset)  offset="$2";  shift 2 ;;
+      *) die "unknown flag for instances: $1" "unknown_flag" "run opensop instances --help" ;;
+    esac
+  done
+
+  # Collect all manifests, build a JSON array, filter, paginate — all inside jq.
+  # Building an array of compact JSON is bash-3.2 safe (no mapfile/assoc arrays).
+  local raw_json="[]"
+  if [[ -d "$OPENSOP_LOCAL_HOME/runs" ]]; then
+    local d
+    for d in "$OPENSOP_LOCAL_HOME"/runs/*/; do
+      [[ -f "$d/manifest.json" ]] || continue
+      local rec
+      rec="$(jq -c '{id:.run_id, process:{name:.process}, state:.status, started_at:.started_at}' \
+             "$d/manifest.json" 2>/dev/null)" || continue
+      [[ -z "$rec" ]] && continue
+      raw_json="$(jq -c --argjson r "$rec" '. + [$r]' <<<"$raw_json")"
+    done
+  fi
+
+  # Sort newest-first (lexicographic desc on started_at — ISO-8601 sorts correctly),
+  # then filter and paginate entirely in jq.
+  local resp
+  resp="$(jq -nc \
+    --argjson rows "$raw_json" \
+    --arg state    "$state" \
+    --arg process  "$process" \
+    --argjson limit  "$limit" \
+    --argjson offset "$offset" '
+    ($rows | sort_by(.started_at) | reverse) as $sorted |
+    ($sorted
+      | if $state   != "" then map(select(.state           == $state))   else . end
+      | if $process != "" then map(select(.process.name    == $process)) else . end
+    ) as $filtered |
+    {
+      instances: ($filtered[$offset:($offset+$limit)]),
+      total:     ($filtered | length)
+    }
+  ')"
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local total
+    total=$(echo "$resp" | jq -r '.total')
+    info "$total run(s)"
+    echo "$resp" | jq -r '.instances[]? | "\(.id)\t\(.process.name)\t\(.state)\t\(.started_at // "")"' | \
+      while IFS=$'\t' read -r id name pstate started; do
+        local color="$C_BLUE"
+        [[ "$pstate" == "completed" ]] && color="$C_GREEN"
+        [[ "$pstate" == "failed"    ]] && color="$C_RED"
+        [[ "$pstate" == "cancelled" ]] && color="$C_YELLOW"
+        [[ "$pstate" == "waiting"   ]] && color="$C_YELLOW"
+        printf '  %s  %-25s %s%-10s%s %s\n' "$id" "$name" "$color" "$pstate" "$C_RESET" "$C_DIM$started$C_RESET"
+      done
+  else
+    echo "$resp" | emit_pretty_or_json
+  fi
+}
+
+# local_compass
+#
+# Produce {by_runs, by_recency, by_failure_rate} over $OPENSOP_LOCAL_HOME/runs/*/
+# mirroring cmd_compass's documented output shape exactly. Reads every manifest.json
+# and computes the three rankings with the same jq formula as the remote path.
+local_compass() {
+  local raw_json="[]"
+  if [[ -d "$OPENSOP_LOCAL_HOME/runs" ]]; then
+    local d
+    for d in "$OPENSOP_LOCAL_HOME"/runs/*/; do
+      [[ -f "$d/manifest.json" ]] || continue
+      local rec
+      # Shape mirrors what cmd_compass receives from api_get /sop/instances:
+      #   {process:{name}, state, started_at}
+      rec="$(jq -c '{process:{name:.process}, state:.status, started_at:.started_at}' \
+             "$d/manifest.json" 2>/dev/null)" || continue
+      [[ -z "$rec" ]] && continue
+      raw_json="$(jq -c --argjson r "$rec" '. + [$r]' <<<"$raw_json")"
+    done
+  fi
+
+  # Exact same jq logic as cmd_compass (copy, not diverge).
+  local stats
+  stats=$(echo "$raw_json" | jq -c '
+    group_by(.process.name) |
+    map(
+      . as $grp |
+      ($grp | map(select(.state == "failed" or .state == "cancelled")) | length) as $failures |
+      ($grp | length) as $total |
+      {
+        name:         $grp[0].process.name,
+        total:        $total,
+        last_run_at:  ($grp | map(.started_at) | sort | last),
+        failures:     $failures,
+        rate:         ($failures / $total)
+      }
+    ) | {
+      by_runs:         (sort_by(-.total)        | .[0:10] | map({name, total})),
+      by_recency:      (sort_by(.last_run_at) | reverse | .[0:10] | map({name, last_run_at})),
+      by_failure_rate: (sort_by(-.rate)         | .[0:10] | map({name, total, failures, rate}))
+    }
+  ')
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local by_runs by_recency by_failure
+    by_runs=$(   echo "$stats" | jq -c '.by_runs')
+    by_recency=$(echo "$stats" | jq -c '.by_recency')
+    by_failure=$(echo "$stats" | jq -c '.by_failure_rate')
+
+    printf '%sMost-run:%s\n' "$C_BOLD" "$C_RESET"
+    echo "$by_runs" | jq -r '.[] | "  \(.name) × \(.total)"'
+
+    printf '\n%sMost-recent:%s\n' "$C_BOLD" "$C_RESET"
+    echo "$by_recency" | jq -r '.[] | "  \(.name)  \(.last_run_at // "-")"'
+
+    printf '\n%sHighest failure rate:%s\n' "$C_BOLD" "$C_RESET"
+    echo "$by_failure" | jq -r '.[] | "  \(.name)  \(.rate * 100 | round | tostring)%  (\(.failures)/\(.total))"'
+  else
+    echo "$stats" | emit_pretty_or_json
+  fi
+}
+
+# local_history --process <name> [--limit N]
+#
+# Show instances filtered to one process (newest-first). Delegates to
+# local_instances, mirroring how cmd_history delegates to cmd_instances.
+local_history() {
+  local process="" limit=10
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --process) process="$2"; shift 2 ;;
+      --limit)   limit="$2";   shift 2 ;;
+      *) die "unknown flag for history: $1" "unknown_flag" "run opensop history --help" ;;
+    esac
+  done
+  [[ -z "$process" ]] && die "usage: opensop history --process <name> [--limit N]" "usage_error" "run opensop help"
+  local_instances --process "$process" --limit "$limit"
+}
+
+# local_diff <run_id1> <run_id2>
+#
+# Compare two local runs and emit a diff in the same shape as remote cmd_diff:
+#
+#   JSON:   {a:{id,state,started_at}, b:{id,state,started_at},
+#            differences:[{path,a,b}], identical:true|false}
+#   pretty: table of differing paths with a/b values (same rendering as cmd_diff)
+#
+# What is compared (mirrors the remote fields cmd_diff inspects):
+#   top-level : state   (manifest.status ↔ remote .state)
+#               outputs (final context.json ↔ remote .outputs)    — local equivalent of remote outputs
+#               metadata (manifest.metadata ↔ remote .metadata)
+#   per-step  : state      (receipt.status ↔ remote step.state)
+#               sub_state  (receipt.reason ↔ remote step.sub_state)
+#               outputs    (receipt.output ↔ remote step.outputs)
+#               decided_by (receipt.decided_by ↔ remote step.decided_by)
+#               confidence (receipt.confidence ↔ remote step.confidence)  — matches remote StepSerializer
+#               duration_ms (receipt.duration_ms ↔ remote step.duration_ms)
+#               exit_code  (receipt.exit_code) — local-only extra (shell exit status; no remote equivalent)
+#
+# NOT compared: inputs — remote cmd_diff does not diff inputs; omitted for parity.
+#
+# Error paths: unknown run_id → die instance_not_found; same process guard (mirrors remote).
+local_diff() {
+  [[ $# -lt 2 ]] && die "usage: opensop diff <run_id1> <run_id2>" "usage_error" "run opensop help"
+  local rid1="$1" rid2="$2"
+
+  local dir1="$OPENSOP_LOCAL_HOME/runs/$rid1"
+  local dir2="$OPENSOP_LOCAL_HOME/runs/$rid2"
+  [ -d "$dir1" ] || die "no such local run: $rid1 (see: opensop runs)" "instance_not_found" "opensop runs"
+  [ -d "$dir2" ] || die "no such local run: $rid2 (see: opensop runs)" "instance_not_found" "opensop runs"
+  [ -f "$dir1/manifest.json" ] || die "run directory found but manifest.json is missing: $dir1" "cli_error"
+  [ -f "$dir2/manifest.json" ] || die "run directory found but manifest.json is missing: $dir2" "cli_error"
+
+  local mf1; mf1="$(cat "$dir1/manifest.json")"
+  local mf2; mf2="$(cat "$dir2/manifest.json")"
+
+  # Same-process guard (mirrors remote cmd_diff).
+  local proc1 proc2
+  proc1="$(jq -r '.process // ""' <<<"$mf1")"
+  proc2="$(jq -r '.process // ""' <<<"$mf2")"
+  [[ "$proc1" != "$proc2" ]] && \
+    die "runs are from different processes ($proc1 vs $proc2); diff requires the same process" "cli_error"
+
+  # Read audit receipts for each run (one JSON object per line → array via jq -s).
+  local steps1 steps2
+  steps1="$(jq -s '.' "$dir1/audit.jsonl" 2>/dev/null || echo '[]')"
+  steps2="$(jq -s '.' "$dir2/audit.jsonl" 2>/dev/null || echo '[]')"
+
+  # Read final context for each run.
+  local ctx1 ctx2
+  ctx1="$(cat "$dir1/context.json" 2>/dev/null || echo 'null')"
+  ctx2="$(cat "$dir2/context.json" 2>/dev/null || echo 'null')"
+
+  # Build the diff entirely in jq — mirrors cmd_diff's jq block.
+  local diff_json
+  diff_json="$(jq -nc \
+    --argjson mf1   "$mf1" \
+    --argjson mf2   "$mf2" \
+    --argjson s1    "$steps1" \
+    --argjson s2    "$steps2" \
+    --argjson ctx1  "$ctx1" \
+    --argjson ctx2  "$ctx2" \
+    --arg     id1   "$rid1" \
+    --arg     id2   "$rid2" '
+    def maybe_diff(p; va; vb):
+      if va != vb then [{path: p, a: va, b: vb}] else [] end;
+
+    # Top-level field comparisons — mirrors remote cmd_diff exactly:
+    #   state    (manifest.status   → remote .state)
+    #   outputs  (final context.json → remote .outputs; local equivalent of server-side outputs)
+    #   metadata (manifest.metadata  → remote .metadata)
+    # NOTE: inputs is NOT diffed here — remote cmd_diff does not diff inputs (parity match).
+    (maybe_diff("state";    $mf1.status;    $mf2.status)) +
+    (maybe_diff("outputs";  $ctx1;          $ctx2)) +
+    (maybe_diff("metadata"; ($mf1.metadata // null); ($mf2.metadata // null))) +
+
+    # Per-step diffs — iterate all step IDs seen in either run.
+    ([$s1[]?.step, $s2[]?.step] | unique | map(select(. != null)) |
+      map(. as $sid |
+        # Last receipt per step-id (in case of waiting→completed two-line audit).
+        ($s1 | map(select(.step == $sid)) | last // null) as $ra |
+        ($s2 | map(select(.step == $sid)) | last // null) as $rb |
+        maybe_diff("steps.\($sid).state";      $ra.status;      $rb.status) +
+        maybe_diff("steps.\($sid).sub_state";  $ra.reason;      $rb.reason) +
+        maybe_diff("steps.\($sid).outputs";    $ra.output;      $rb.output) +
+        maybe_diff("steps.\($sid).decided_by"; $ra.decided_by;  $rb.decided_by) +
+        maybe_diff("steps.\($sid).confidence"; $ra.confidence;  $rb.confidence) +  # mirrors remote StepSerializer.confidence
+        maybe_diff("steps.\($sid).duration_ms";$ra.duration_ms; $rb.duration_ms) +
+        maybe_diff("steps.\($sid).exit_code";  $ra.exit_code;   $rb.exit_code)     # local-only extra (shell exit status)
+      ) | add // []) |
+
+    {
+      a:           {id: $id1, state: $mf1.status, started_at: $mf1.started_at},
+      b:           {id: $id2, state: $mf2.status, started_at: $mf2.started_at},
+      differences: .,
+      identical:   (length == 0)
+    }
+  ')"
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    local identical; identical="$(jq -r '.identical' <<<"$diff_json")"
+    if [[ "$identical" == "true" ]]; then
+      ok "runs are identical"
+      return 0
+    fi
+    printf '%sdiff%s  %s  vs  %s\n\n' "$C_BOLD" "$C_RESET" "$rid1" "$rid2"
+    jq -r '.differences[] | "\(.path)\t\(.a // "null")\t\(.b // "null")"' <<<"$diff_json" | \
+      while IFS=$'\t' read -r path va vb; do
+        printf '  %s%-50s%s\n' "$C_BOLD" "$path" "$C_RESET"
+        printf '    %sa:%s %s\n' "$C_RED"   "$C_RESET" "$va"
+        printf '    %sb:%s %s\n' "$C_GREEN" "$C_RESET" "$vb"
+      done
+  else
+    jq -c . <<<"$diff_json" | emit_pretty_or_json
+  fi
+}
+
+# local_cancel <run_id> [--reason TEXT]
+#
+# Cancel a local run that is running or waiting.
+# Mirrors remote cmd_cancel semantics:
+#   - Only running/waiting runs can be cancelled (completed/failed/cancelled → rejected,
+#     same invalid-transition behaviour as the runtime).
+#   - Sets manifest.status = "cancelled", clears the waiting block, writes ended_at.
+#   - Appends a "cancelled" receipt to audit.jsonl (includes reason if given).
+#
+# Output (JSON):  the updated manifest (same shape as local_submit's manifest echo).
+# Output (pretty): ok line + optional reason (mirrors remote cmd_cancel's pretty output).
+local_cancel() {
+  [[ $# -lt 1 ]] && die "usage: opensop cancel <run_id> [--reason TEXT]" "usage_error" "run opensop help"
+  local run_id="$1"; shift
+
+  local reason=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --reason) reason="$2"; shift 2 ;;
+      *) die "unknown flag for cancel: $1" "unknown_flag" "run opensop cancel --help" ;;
+    esac
+  done
+
+  local run_dir="$OPENSOP_LOCAL_HOME/runs/$run_id"
+  [ -d "$run_dir" ] || die "no such local run: $run_id (see: opensop runs)" "instance_not_found" "opensop runs"
+  local mf="$run_dir/manifest.json"
+  [ -f "$mf" ] || die "run directory found but manifest.json is missing: $run_dir" "cli_error"
+
+  # Status gate: only running/waiting runs can be cancelled.
+  local mf_status; mf_status="$(jq -r '.status' "$mf")"
+  case "$mf_status" in
+    running|waiting) ;;
+    completed|failed|cancelled)
+      die "run $run_id is '$mf_status' — only running or waiting runs can be cancelled" \
+          "usage_error" "use opensop status $run_id to inspect the run" ;;
+    *)
+      die "run $run_id has unexpected status '$mf_status' — cannot cancel" \
+          "cli_error" ;;
+  esac
+
+  local cancelled_at; cancelled_at="$(_local_now)"
+  local proc_name; proc_name="$(jq -r '.process' "$mf")"
+
+  # Append a cancelled receipt to audit.jsonl.
+  local audit="$run_dir/audit.jsonl"
+  jq -nc \
+    --arg rid "$run_id" \
+    --arg t   "$cancelled_at" \
+    --arg r   "$reason" \
+    '{run_id: $rid, step: null, type: "cancel", executor: "internal",
+      status: "cancelled", started_at: $t, ended_at: $t}
+     + (if $r != "" then {reason: $r} else {} end)' >> "$audit"
+
+  # Update manifest: set status=cancelled, clear waiting block, write ended_at.
+  jq -c \
+    --arg s "cancelled" \
+    --arg e "$cancelled_at" \
+    '.status=$s | .ended_at=$e | del(.waiting) | del(.cursor)' \
+    "$mf" > "$mf.tmp" && mv "$mf.tmp" "$mf"
+
+  if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
+    ok "cancelled $proc_name $run_id"
+    [[ -n "$reason" ]] && info "  reason: $reason"
+  else
+    # Emit a normalized envelope matching the runtime's InstanceSerializer shape
+    # (GET /sop/:name/:id after cancel returns the same InstanceSerializer response).
+    # Keys: id, process.{name}, state, inputs, outputs, metadata, started_at,
+    #       completed_at, error — so local and remote JSON output are structurally identical.
+    jq -c '{
+      id:           .run_id,
+      process:      {name: .process},
+      state:        .status,
+      inputs:       (.inputs // {}),
+      outputs:      (.outputs // {}),
+      metadata:     (.metadata // {}),
+      started_at:   .started_at,
+      completed_at: .ended_at,
+      error:        null
+    }' "$mf" | emit_pretty_or_json
+  fi
+}
+
+# opensop runs  — list local runs (always local; the server analogue is `instances`)
+local_runs() {
+  [ -d "$OPENSOP_LOCAL_HOME/runs" ] || { info "(no local runs yet — opensop run <process.sop.json>)"; return 0; }
+  for d in "$OPENSOP_LOCAL_HOME"/runs/*/; do
+    [ -f "$d/manifest.json" ] || continue
+    jq -r '"\(.run_id)\t\(.status)\t\(.process)\t\(.started_at)"' "$d/manifest.json"
+  done | sort
+}
+
+# opensop show <run_id>  — a local run's manifest + per-step receipts
+local_show() {
+  local rid="${1:-}"; [ -n "$rid" ] || die "usage: opensop show <run_id>" "usage_error" "run opensop runs"
+  local d="$OPENSOP_LOCAL_HOME/runs/$rid"
+  [ -d "$d" ] || die "no such local run: $rid (see: opensop runs)" "instance_not_found"
+  if [[ "$OUTPUT_MODE" == "json" ]]; then
+    jq -nc --argjson m "$(cat "$d/manifest.json")" --argjson s "$(jq -s '.' "$d/audit.jsonl" 2>/dev/null || echo '[]')" \
+      '{manifest:$m, steps:$s}'
+  else
+    info "── manifest ──"; jq . "$d/manifest.json"
+    info "── steps ──";   jq -c '{step,status,exit_code} + (if .stderr then {stderr:(.stderr|.[0:200])} else {} end)' "$d/audit.jsonl" 2>/dev/null
+  fi
+}
+
+main() {
+  require_jq
+
+  # Strip global flags anywhere in the argument list.
+  # v0.8: default backend is LOCAL. --remote uses the configured server URL;
+  # --server <url> sets the URL for this invocation and implies --remote.
+  # --local is accepted as a deprecated no-op (local is already the default).
+  local -a args=()
+  local _i=0 _all_args=("$@")
+  local _n="${#_all_args[@]}"
+  local _saw_local=false
+  while [[ $_i -lt $_n ]]; do
+    local _a="${_all_args[$_i]}"
+    case "$_a" in
+      --json)              OUTPUT_MODE="json" ;;
+      --pretty)            OUTPUT_MODE="pretty" ;;
+      --local)
+        _saw_local=true
+        LOCAL_MODE=true  # kept for backward compat; does not change routing
+        ;;
+      --remote)            REMOTE_MODE=true ;;
+      --server)
+        # --server <url>: set URL for this invocation and enable remote mode.
+        _i=$((_i + 1))
+        if [[ $_i -lt $_n ]]; then
+          OPENSOP_URL="${_all_args[$_i]}"
+          REMOTE_MODE=true
+        else
+          die "--server requires a URL argument" "usage_error" "opensop --server <url> <command>"
+        fi
+        ;;
+      --help|-h|help)      cmd_help; exit 0 ;;
+      --version|-v|version) cmd_version; exit 0 ;;
+      *) args+=("$_a") ;;
+    esac
+    _i=$((_i + 1))
+  done
+
+  # Emit the --local deprecation note now (after --json/--pretty are processed)
+  # so it doesn't pollute JSON output when --json is active.
+  if $_saw_local && [[ "$OUTPUT_MODE" != "json" ]]; then
+    printf 'note: --local is now the default and can be omitted\n' >&2
+  fi
+
+  if (( ${#args[@]} == 0 )); then
+    cmd_help; exit 0
+  fi
+  set -- "${args[@]}"
+
+  local cmd="$1"; shift
+
+  # Config (~/.opensop) is only needed for the remote backend (OPENSOP_URL, OPENSOP_TOKEN).
+  # Local-mode runs are fully self-contained and never need the config file.
+  if [[ "$REMOTE_MODE" == true ]]; then
+    load_config
+    # --remote with no configured URL → helpful die.
+    if [[ -z "${OPENSOP_URL:-}" ]]; then
+      die "no remote server configured" "config_missing" \
+          "set one with: opensop config set url <URL>, or use --server <url>"
+    fi
+  fi
+
+  # v0.6: when cwd is inside a cell AND the user didn't explicitly set
+  # OPENSOP_LOCAL_HOME, default it to the active cell's .opensop/ so
+  # local-mode receipts (cmd_run / runs / show) land in the cell that
+  # produced them. Explicit env override wins.
+  if ! $_OPENSOP_LOCAL_HOME_EXPLICIT; then
+    local _cell_for_runs; _cell_for_runs="$(_find_scope_root)"
+    [[ -n "$_cell_for_runs" ]] && OPENSOP_LOCAL_HOME="$_cell_for_runs/.opensop"
+  fi
+
+  # curl is only needed for the remote (server) backend.
+  # Local-default commands (runs, show, init, scope, annotate, lineage, fork,
+  # and all dual commands in local mode) need no curl.
+  if [[ "$REMOTE_MODE" == true ]]; then
+    require_curl
+  fi
+
+  case "$cmd" in
+    list)       cmd_list "$@" ;;
+    runs)       local_runs "$@" ;;
+    show)       local_show "$@" ;;
+    search)     cmd_search "$@" ;;
+    suggest)    cmd_suggest "$@" ;;
+    schema)
+      # schema can be: schema <name>  OR  schema validate <file>
+      if [[ "${1:-}" == "validate" ]]; then
+        shift; cmd_schema_validate "$@"
+      else
+        cmd_schema "$@"
+      fi
+      ;;
+    run)        cmd_run "$@" ;;
+    dry-run)    cmd_dry_run "$@" ;;
+    status)     cmd_status "$@" ;;
+    steps)      cmd_steps "$@" ;;
+    submit)     cmd_submit "$@" ;;
+    cancel)     cmd_cancel "$@" ;;
+    diff)       cmd_diff "$@" ;;
+    compass)    cmd_compass "$@" ;;
+    history)    cmd_history "$@" ;;
+    register)   cmd_register "$@" ;;
+    instances)  cmd_instances "$@" ;;
+    config)     cmd_config "$@" ;;
+    init)       cmd_init "$@" ;;
+    scope)      cmd_scope "$@" ;;
+    annotate)   cmd_annotate "$@" ;;
+    lineage)    cmd_lineage "$@" ;;
+    fork)       cmd_fork "$@" ;;
+    *)          die "unknown command '$cmd' — run 'opensop help' for usage" "unknown_command" "run opensop help" ;;
+  esac
+}
+
+main "$@"

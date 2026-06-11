@@ -1,0 +1,20 @@
+{
+  "name": "greet",
+  "version": "1.0",
+  "description": "Minimal example for opensop-local. One automated step produces JSON, a shell step renders it from the threaded context. Demonstrates context threading + the on-disk audit, with no server.",
+  "inputs": { "name": "world" },
+  "steps": [
+    {
+      "id": "build",
+      "type": "automated",
+      "run": "steps/build.sh",
+      "description": "Produce a greeting payload as JSON (merged into context under 'build')."
+    },
+    {
+      "id": "render",
+      "type": "shell",
+      "description": "Render the greeting from the prior step's output.",
+      "run": "jq -r '\"\\(.build.greeting) (built at \\(.build.when))\"' <<< \"$OSL_CONTEXT\""
+    }
+  ]
+}
