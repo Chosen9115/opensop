@@ -1,13 +1,15 @@
 # `processes/` — the process library
 
-This directory holds `.sop.yaml` process definitions that the engine loads at runtime. It is the source of truth; the database is a cache rebuilt from these files on boot or via `bin/rails opensop:load_processes`.
+This directory is the OpenSOP process library: example `.sop.json` and `.sop.yaml` process definitions that demonstrate the spec and serve as starting points.
+
+The local CLI (`opensop run`) executes `.sop.json` files directly — no server, no database. The reference server ([Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails)) loads from a `processes/` directory on boot and registers definitions into a database cache. Both consumers read the same files; the format is the same.
 
 ## Layout
 
 ```
 processes/
 ├── README.md                   ← this file
-├── examples/                   ← public, shipped-with-engine examples
+├── examples/                   ← public, canonical examples
 │   ├── customer-onboarding.sop.yaml
 │   ├── lead-qualification.sop.yaml
 │   └── steps/                  ← scripts the example YAMLs reference
@@ -22,31 +24,23 @@ processes/
         └── my-script.rb
 ```
 
-## How the engine finds processes
+## Running a process locally
 
-`Opensop::Registry.load_all` (see `app/services/opensop/registry.rb`) does a recursive glob for `**/*.sop.yaml` under this directory, so **any subdirectory works**. You can add `processes/coba/`, `processes/private/`, `processes/my-team/` — whatever convention your fork uses — and the engine picks it up automatically.
+```bash
+opensop run ./processes/examples/customer-onboarding.sop.yaml --input company_name="Acme Corp"
+```
+
+The CLI runs the process on-machine: no server, no network, no account. Paused steps (form, approval, wait with `until:`) resume via `opensop submit <run_id> <step-id> --output key=value`.
 
 ## How `run:` paths resolve
 
-When an `automated` step references a script via `run:`, the engine resolves the path **relative to `processes/`**, not relative to the YAML file. For example, a YAML at `processes/examples/customer-onboarding.sop.yaml` references its script as:
+When an `automated` step references a script via `run:`, the path resolves differently depending on the backend:
 
-```yaml
-run: ./examples/steps/verify-documents.rb
-```
-
-…which resolves to `processes/examples/steps/verify-documents.rb`. If you're authoring a private process at `processes/coba/onboarding-v2.sop.yaml` with a script at `processes/coba/steps/kyb.rb`, reference it as:
-
-```yaml
-run: ./coba/steps/kyb.rb
-```
-
-The implementation lives in `app/services/opensop/step_executors/automated.rb#resolve_script_path`.
+- **Local CLI:** path is relative to the process file.
+- **Reference server (opensop-rails):** path is relative to the `processes/` root, not the YAML file. A YAML at `processes/examples/customer-onboarding.sop.yaml` must write `run: ./examples/steps/verify-documents.rb`.
 
 ## For forks with private processes
 
-The public repo's `.gitignore` reserves the names `/processes/coba/` and `/processes/private/`, so:
+The public repo's `.gitignore` reserves `/processes/coba/` and `/processes/private/`. In a private downstream fork, add your process files under the reserved name — they track in your fork but never leak upstream on a merge-down. If you need a different name, add the entry to your fork's `.gitignore` (and remove the ignore in the fork so the files track there).
 
-- **In the public repo (`Chosen9115/opensop`)**: those directories are invisible. Nothing to see here.
-- **In a private downstream fork**: add your process files under the reserved name and they'll track in your fork but never leak upstream on a merge-down. If you need a different name, add the entry to your fork's `.gitignore` (and remember to remove the ignore in the fork itself so the files track there).
-
-See `CONTRIBUTING.md` for the full upstream-first sync workflow.
+See `CONTRIBUTING.md` for the upstream-first sync workflow.

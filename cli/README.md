@@ -1,4 +1,4 @@
-# opensop-cli
+# OpenSOP CLI
 
 A bash CLI for running and managing OpenSOP processes — locally on your machine, or against any OpenSOP server. One file; only `jq` required for local use.
 
@@ -66,14 +66,16 @@ Execution re-enters at `cursor.next_index` — never re-runs completed steps.
 ### One line
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop-cli/main/bin/opensop -o /usr/local/bin/opensop && chmod +x /usr/local/bin/opensop
+curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/opensop -o /usr/local/bin/opensop && chmod +x /usr/local/bin/opensop
 ```
+
+The CLI is a single bash file living at `cli/bin/opensop` in the [opensop](https://github.com/Chosen9115/opensop) repo (the `opensop-cli` repo is archived — all development continues here).
 
 ### From source
 
 ```bash
-git clone https://github.com/Chosen9115/opensop-cli.git
-cp opensop-cli/bin/opensop /usr/local/bin/
+git clone https://github.com/Chosen9115/opensop.git
+cp opensop/cli/bin/opensop /usr/local/bin/
 chmod +x /usr/local/bin/opensop
 ```
 

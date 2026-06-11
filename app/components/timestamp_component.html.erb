@@ -1,8 +1,0 @@
-<% if present? %>
-  <span class="font-mono text-[12px] tabular-nums text-fg" title="<%= absolute %>">
-    <time datetime="<%= iso %>"><%= time.strftime("%b %-d %H:%M") %></time>
-  </span>
-  <span class="ml-1 font-mono text-[10px] text-fg-faint tabular-nums"><%= relative %></span>
-<% else %>
-  <span class="text-fg-faint">—</span>
-<% end %>

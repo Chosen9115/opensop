@@ -30,16 +30,20 @@ If a report is out of scope (e.g. social engineering, physical attacks, denial-o
 
 ## Scope
 
-In scope:
+This repo is the spec and the CLI. Server/runtime security belongs in the reference server repo.
 
-- The OpenSOP engine (`app/`, `lib/`) — parsing, instance execution, step executors, REST API, admin UI.
+In scope (this repo):
+
+- `cli/bin/opensop` — the local execution backend: shell step execution, local file access, `run:` path resolution, subprocess depth enforcement.
+- `SPEC.md` — the format and API contract: ambiguities or underspecified behavior that would lead a conforming implementation to be insecure.
+- Sandbox / privilege boundaries between user-supplied `.sop.json` process definitions and the host environment (local CLI execution).
+
+Out of scope (report to [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) instead):
+
+- The Rails server engine — parsing, instance execution, step executors, REST API, admin UI.
 - Authentication and authorization (`X-SOP-Token`, basic auth on `/ui`).
-- Sandbox / privilege boundaries between user-supplied process definitions and the host environment.
-- Default deployment configuration in `Dockerfile`, `bin/deploy`, `config/`.
-
-Out of scope:
-
-- Issues that require the attacker to already have valid `X-SOP-Token` AND `OPENSOP_UI_*` credentials and admin access.
+- Default server deployment configuration (`Dockerfile`, `bin/deploy`, `config/`).
+- Issues that require the attacker to already have valid `X-SOP-Token` AND admin credentials.
 - Vulnerabilities in third-party gems — please report those upstream. We'll bump the dep once a fix is published.
 - Process definitions in `processes/examples/` having unsafe patterns when run in a real deployment — those are illustrative, not hardened. We'll harden them on request, but it's not a CVE.
 - Issues only reachable in a custom downstream fork's private processes.

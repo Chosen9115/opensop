@@ -52,3 +52,13 @@
 /processes/private/
 /tools/denchclaw-bridge/
 /tools/private/
+
+# Agent/session working state and worktrees (local only — can carry private
+# fork data; never track in the public repo).
+/.claude/
+/.worktrees/
+/research/
+
+# Local marketing/screenshot scratch + planning drafts (not part of the standard).
+/*.png
+/docs/*-draft.md
