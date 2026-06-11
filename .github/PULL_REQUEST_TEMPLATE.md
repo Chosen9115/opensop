@@ -20,11 +20,10 @@ delete the template entirely and write a one-liner.
 
 ## Test plan
 
-<!-- Concrete commands or steps. CI runs the suite; here, document anything
-     a human would do to verify (e.g. UI flow, manual API call, ran
-     bin/rails opensop:demo). -->
+<!-- Concrete commands or steps. Document anything a human would do to verify
+     (e.g. manual CLI run, spec fidelity check). -->
 
-- [ ] `bin/rspec` passes locally
-- [ ] Added or updated specs covering the change (or n/a — explain)
-- [ ] Updated `config/locales/opensop.en.yml` for any new UI strings (or n/a)
-- [ ] Updated `CHANGELOG.md` if the change is user-visible (or n/a)
+- [ ] `bash -n cli/bin/opensop && bash cli/test/test.sh` passes (CLI changes)
+- [ ] Spec-fidelity check: change is consistent with `SPEC.md` semantics (or `SPEC.md` updated in this PR)
+- [ ] Public-repo hygiene: no secrets, no PII, no internal identifiers in the diff
+- [ ] Updated `cli/CHANGELOG.md` if the change is user-visible (or n/a)

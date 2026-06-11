@@ -11,21 +11,35 @@
 > running code. Where the prior documents said one thing and the code does
 > another, the code governs — discrepancies are noted inline.
 
+**This is the OpenSOP specification.** It defines the process definition format,
+step-type semantics, local execution backend, and HTTP API surface that any
+conforming implementation must honor.
+
+**Reference server implementation:** [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails)
+implements the server profile described in this spec (sections 4 and 8). Anyone may
+build a compliant server against this document. The local CLI (`cli/`) implements
+the local profile; `opensop run` requires no server.
+
 ---
 
 ## 1. What OpenSOP Is
 
-OpenSOP is an open standard and runtime for defining, storing, executing, and
-exposing business processes as APIs. Define a process in YAML (or JSON), get a
-REST API. Humans and agents call the same endpoints.
+OpenSOP is process-as-infrastructure for agentic processes. A process is a file
+you declare, version, fork, run, and audit — living in your repo, not locked in
+a SaaS. The CLI runs processes locally with no server, no network, and no
+account required. The server is optional infrastructure for shared orchestration
+and monitoring.
+
+> **Terraform is to cloud resources what OpenSOP is to agentic processes.**
 
 **Core beliefs:**
 
-1. **The process definition IS the API contract.** Define a process, get an API.
-2. **Processes are company IP.** Self-hostable; never leaves your infrastructure unless you choose.
-3. **Every step has a type.** The platform knows which steps need a human, which need an LLM, and which just run.
-4. **Agents are first-class consumers.** The discovery endpoint lets any agent understand what a company does.
-5. **LLM creativity belongs inside deterministic gates.** Agent steps have typed inputs, explicit outputs, validation, receipts, and checks before side effects.
+1. **Local-first.** `opensop run` executes against `.sop.json` on your machine — no server, no curl, no account. The server is opt-in via `--remote`.
+2. **A process is a file.** One declarative artifact: inputs, steps, outputs. It lives in your repo, reviews in your PRs, ships in your commits.
+3. **Processes are company IP.** Self-hostable; never leaves your infrastructure unless you choose.
+4. **Every step has a type.** The engine knows which steps need a human, which need an LLM, and which just run.
+5. **Agents are first-class consumers.** The discovery endpoint (server profile) lets any agent understand what a company does.
+6. **LLM creativity belongs inside deterministic gates.** Agent steps have typed inputs, explicit outputs, validation, receipts, and checks before side effects.
 
 ---
 
@@ -35,6 +49,21 @@ REST API. Humans and agents call the same endpoints.
 
 A process definition is a single logical object. It can be serialized two ways,
 and both are canonical. The parser accepts either form.
+
+**Flat local shorthand (`.sop.json` — primary format for local execution):**
+
+```json
+{
+  "name": "greet",
+  "inputs": { "name": "World" },
+  "steps": [
+    { "id": "say-hello", "type": "shell", "run": "echo Hello $( jq -r .name <<<"$OSL_CONTEXT" )" }
+  ]
+}
+```
+
+The flat form omits the `opensop` version key and the `process:` wrapper.
+The CLI accepts this by default — no server required.
 
 **Wrapped envelope (standard — for server registration and YAML files):**
 
@@ -82,21 +111,8 @@ process:
           type: string
 ```
 
-**Flat local shorthand (`.sop.json` — for local execution without a server):**
-
-```json
-{
-  "name": "greet",
-  "inputs": { "name": "World" },
-  "steps": [
-    { "id": "say-hello", "type": "shell", "run": "echo Hello $( jq -r .name <<<"$OSL_CONTEXT" )" }
-  ]
-}
-```
-
-The flat form omits the `opensop` version key and the `process:` wrapper.
-The CLI (`bin/opensop`) accepts both; the server runtime requires the wrapped
-form for registration.
+The CLI (`cli/bin/opensop`) accepts both serializations; the server runtime
+requires the wrapped form for registration.
 
 **Spec version policy:**
 
@@ -434,7 +450,7 @@ as a placeholder step during development.
 **Semantics:** the executor returns `{waiting: "waiting_for_input"}` immediately.
 The instance pauses. Submission via
 `POST /sop/<name>/<id>/steps/<step_id>/submit` (server) or
-`opensop submit <run_id> <step-id> --local --output k=v` (local) advances the step.
+`opensop submit <run_id> <step-id> --output k=v` (local) advances the step.
 
 ---
 
@@ -702,7 +718,7 @@ an error — `instance.state` becomes `"completed"`.
 
 | Component | Responsibility |
 |---|---|
-| **Definition Registry** (`Opensop::Registry`) | Loads `.sop.yaml` from `processes/`, upserts into `sop_processes`. `bin/rails opensop:load_processes` re-syncs. |
+| **Definition Registry** (`Opensop::Registry`) | Loads `.sop.yaml` from `processes/`, upserts into `sop_processes`. `bin/rails opensop:load_processes` re-syncs. _(This is a command of the reference server — [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) — not of this repo.)_ |
 | **Instance Executor** (`Opensop::InstanceExecutor`) | Orchestrates an instance: resolves inputs, evaluates conditions, dispatches step executors, handles early exit. |
 | **Step Executors** (`Opensop::StepExecutors::*`) | One class per step type. See §3. |
 | **Condition Evaluator** (`Opensop::ConditionEvaluator`) | The only safe path for user-authored expressions. No `eval`, no `instance_eval`. |
@@ -710,24 +726,379 @@ an error — `instance.state` becomes `"completed"`.
 | **LLM Provider** (`Opensop::LlmProviders::Anthropic`) | Calls Anthropic for `llm` steps. Provider resolved by model name prefix (`claude-*`). |
 | **API Gateway** | Rails controllers under `/sop/*`. Auto-generated from process definitions. |
 
-### 4.2 Server API surface
+### 4.2 Server HTTP API
 
-```
-GET  /sop/                                  List processes
-GET  /sop/:name/schema                      Process definition
-POST /sop/:name/start                       Start an instance
-GET  /sop/:name/:id                         Instance state + steps
-GET  /sop/:name/:id/steps                   All step states
-POST /sop/:name/:id/steps/:step_id/submit   Advance a waiting step
-POST /sop/:name/:id/cancel                  Cancel an instance
-GET  /sop/instances                         List all instances (paginated)
-GET  /sop/metrics                           Process metrics
-POST /sop/webhooks/:callback_id             Receive inbound webhook callbacks
-POST /sop/triggers/:name                    Webhook-triggered process start
+All endpoints are rooted under `/sop/`. This section is the normative HTTP API
+contract — implementers build against it; clients depend on it.
+
+**Conventions:**
+
+| | |
+|---|---|
+| **Content-Type** | `application/json` for all request bodies |
+| **Response format** | JSON, UTF-8 |
+| **Timestamps** | ISO 8601 with `Z` suffix (UTC) |
+| **IDs** | UUIDs (v4) |
+| **Pagination** | `limit` + `offset` query params where supported |
+| **Process name** | Pattern: `[a-z0-9][a-z0-9_-]*` |
+
+**Endpoints at a glance:**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/sop/` | List all active processes (discovery) |
+| `GET` | `/sop/:name/schema` | Full YAML-derived process definition as JSON |
+| `POST` | `/sop/:name/start` | Start a new instance |
+| `GET` | `/sop/:name/:id` | Instance state + all steps |
+| `GET` | `/sop/:name/:id/steps` | Step states only (compact) |
+| `POST` | `/sop/:name/:id/steps/:step_id/submit` | Submit outputs → advance a waiting step |
+| `POST` | `/sop/:name/:id/cancel` | Cancel an instance |
+| `GET` | `/sop/instances` | List all instances across processes (admin) |
+| `GET` | `/sop/metrics` | Process metrics |
+| `POST` | `/sop/webhooks/:callback_id` | Inbound webhook callback (unauthenticated) |
+| `POST` | `/sop/triggers/:process_name` | Third-party webhook-triggered start (HMAC-authenticated) |
+
+#### Authentication
+
+OpenSOP uses a single header: **`X-SOP-Token`**.
+
+The server reads the expected token from `OPENSOP_API_TOKEN`.
+
+**Dev mode (token unset):** In development/test, authentication is skipped and
+every request is allowed. The server logs a warning on first request. In
+production, the engine refuses to serve `/sop/*` when the token is unset —
+every request returns `503 server_misconfigured`. This fail-closed behaviour
+prevents exposing instance data (including PII from inputs) on an unguarded
+deploy. Set the token via your platform's secret manager before directing
+traffic at the deploy.
+
+**Strict mode (token set):** Every non-webhook request must include
+`X-SOP-Token` with a matching value. Mismatch returns `401`.
+
+The `actor` field on events and step submissions derives from this: `"agent"` when
+a valid token was presented, `"system"` when anonymous (dev mode).
+
+**Exception:** `POST /sop/webhooks/:callback_id` and `POST /sop/triggers/:name`
+never require `X-SOP-Token` — third parties call these and would not know the token.
+Trigger endpoints authenticate via the declared HMAC scheme (§2.3).
+
+#### `GET /sop/`
+
+Returns every active process (latest version per name). Agents use this for
+discovery.
+
+**Response — 200 OK**
+
+```json
+{
+  "processes": [
+    {
+      "name": "lead-qualification",
+      "version": "1.0",
+      "description": "Qualify an inbound lead and score their fit",
+      "tags": ["growth", "sales", "qualification"],
+      "inputs_summary":  "lead_name (string, required), lead_email (string, required), source (enum: website|linkedin|referral, required)",
+      "outputs_summary": "score (number), qualified (boolean)",
+      "sla": null,
+      "schema_url": "/sop/lead-qualification/schema"
+    }
+  ]
+}
 ```
 
-Auth: `X-SOP-Token: <api_key>`. Trigger endpoints authenticate via the declared
-HMAC scheme instead; `X-SOP-Token` is not required there.
+`inputs_summary` / `outputs_summary` are human-readable strings for agent prompts
+and admin lists. For full field types fetch the schema.
+
+#### `GET /sop/:name/schema`
+
+Returns the full YAML-derived definition as JSON. Agents consume this to understand
+exact inputs, outputs, and step structure before starting an instance.
+
+**Query parameters:**
+
+| Param | Type | Default | Meaning |
+|---|---|---|---|
+| `version` | string | latest | Pin to a specific version (e.g. `"1.0"`) |
+
+**Response — 200 OK** — the raw definition with `opensop` (format version) and
+`process` (the definition body).
+
+**Errors:**
+
+| Status | `error` | When |
+|---|---|---|
+| `404` | `not_found` | No active process by that name (or no matching version) |
+
+#### `POST /sop/:name/start`
+
+Starts a new instance. The engine validates `inputs` against the process's declared
+input schema, then advances through any auto-executing prefix (e.g. `automated`
+steps before the first `form`). The response is the instance state after that initial
+advance — a `form` step typically shows up in `sub_state=waiting_for_input` on
+first response.
+
+**Request body:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `inputs` | object | yes | Values for every required process input. Keys must match `process.inputs[*].name`. |
+| `metadata` | object | no | Free-form key/value for your own tracking. The engine adds `actor` automatically. |
+
+**Response — 201 Created**
+
+```json
+{
+  "id": "fea4a13c-227d-40e6-8713-4208b4ee983b",
+  "process": { "name": "lead-qualification", "version": "1.0" },
+  "state": "running",
+  "inputs":  { "lead_name": "Alice", "lead_email": "alice@example.com", "source": "website" },
+  "outputs": {},
+  "metadata": { "actor": "agent" },
+  "started_at":   "2026-04-21T13:25:45Z",
+  "completed_at": null,
+  "error": null,
+  "links": {
+    "self":   "/sop/lead-qualification/fea4a13c-...",
+    "steps":  "/sop/lead-qualification/fea4a13c-.../steps",
+    "cancel": "/sop/lead-qualification/fea4a13c-.../cancel"
+  },
+  "steps": [
+    {
+      "id": "eb7c0072-...",
+      "step_id": "collect-context",
+      "name": "Collect lead context",
+      "type": "form",
+      "state": "active",
+      "sub_state": "waiting_for_input",
+      "inputs":  { "lead_name": "Alice" },
+      "outputs": {},
+      "decided_by": null,
+      "confidence": null,
+      "position": 1,
+      "started_at":   "2026-04-21T13:25:45Z",
+      "completed_at": null,
+      "error": null,
+      "links": { "submit": "/sop/lead-qualification/fea4a13c-.../steps/collect-context/submit" }
+    }
+  ]
+}
+```
+
+**Errors:**
+
+| Status | `error` | When |
+|---|---|---|
+| `404` | `not_found` | No active process by that name |
+| `422` | `invalid_inputs` | Required input missing, type mismatch, enum value not allowed, etc. |
+| `422` | `unknown_step_type` | Process YAML references a step type the engine doesn't implement |
+
+#### `GET /sop/:name/:id`
+
+Fetch the full current state of an instance plus every step. Poll this while
+waiting on long-running work. Response shape is identical to the `POST .../start`
+response.
+
+**Errors:**
+
+| Status | `error` | When |
+|---|---|---|
+| `404` | `not_found` | No instance with that `id` under that process name |
+
+#### `GET /sop/:name/:id/steps`
+
+Compact view — just the steps, no instance envelope. Useful when you only need
+step state.
+
+**Response — 200 OK**
+
+```json
+{
+  "steps": [
+    { "step_id": "collect-context", "type": "form",      "state": "completed", "outputs": { "budget": 12000 } },
+    { "step_id": "score-lead",      "type": "automated", "state": "completed", "outputs": { "score": 84, "qualified": true } },
+    { "step_id": "notify-team",     "type": "notification", "state": "completed" }
+  ]
+}
+```
+
+#### `POST /sop/:name/:id/steps/:step_id/submit`
+
+Submit outputs for an active step. Used for:
+
+- **`form` steps** — human or agent supplies the fields (`sub_state=waiting_for_input`)
+- **`judgment` steps** — human or agent supplies the decision (`sub_state=escalated`)
+- **`approval` steps** — human approves or rejects (`sub_state=waiting_for_approval`)
+- **Retrying `failed` steps** — supply corrected outputs after a failure
+
+For `automated`, `webhook`, `notification`, `wait`, and `subprocess` steps the
+engine submits internally — do not call this endpoint for them. Webhook callbacks
+arrive via `POST /sop/webhooks/:callback_id`.
+
+**Request body:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `outputs` | object | yes | Values matching the step's declared outputs. Keys must match `step.outputs[*].name`. |
+| `decided_by` | string | no | Who made the decision. Defaults to the token's actor. Conventionally `"human:<id>"`, `"agent:<id>"`, or `"webhook"`. |
+| `confidence` | number | no | 0.0–1.0 confidence score. For `judgment` steps, below the process's `confidence_threshold` may trigger escalation. |
+
+**Response — 200 OK**
+
+```json
+{
+  "step": {
+    "step_id": "collect-context",
+    "state": "completed",
+    "outputs": { "budget": 12000, "timeline": "immediate" },
+    "decided_by": "agent:sales-copilot",
+    "confidence": 0.93,
+    "completed_at": "2026-04-21T13:26:12Z"
+  },
+  "instance": {
+    "state": "completed",
+    "outputs": { "score": 84, "qualified": true },
+    "completed_at": "2026-04-21T13:26:13Z",
+    "steps": [ "...all steps, including ones that auto-advanced after submission..." ]
+  }
+}
+```
+
+The engine may advance through several steps after a single submission (all
+`automated` / `notification` / `wait` steps between this one and the next
+human-gated step). The response always reflects state after all cascading advances
+complete.
+
+**Errors:**
+
+| Status | `error` | When |
+|---|---|---|
+| `404` | `not_found` | Instance or step not found |
+| `422` | `step_not_submittable` | Step is not in an active or failed state |
+| `422` | `invalid_inputs` | `outputs` don't match declared schema |
+| `422` | `invalid_transition` | Step could not be advanced (rare; usually a race condition) |
+
+#### `POST /sop/:name/:id/cancel`
+
+Cancels an instance. Sets `state` to `"cancelled"`, records the reason, and writes
+a `Sop::Event` of type `"instance.cancelled"`. All active steps are marked
+`skipped`. No cascading rollback — whatever already happened (account created,
+email sent) stays happened.
+
+**Request body:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `reason` | string | no | Free-form. Stored on the instance and in the cancellation event. |
+
+**Response — 200 OK** — same shape as `GET /sop/:name/:id` with `state: "cancelled"`.
+
+**Errors:**
+
+| Status | `error` | When |
+|---|---|---|
+| `404` | `not_found` | Instance not found |
+| `422` | `invalid_transition` | Instance is already in a terminal state (completed/failed/cancelled) |
+
+#### `GET /sop/instances`
+
+List instances across all processes. Intended for ops dashboards and monitoring.
+
+**Query parameters:**
+
+| Param | Type | Default | Meaning |
+|---|---|---|---|
+| `state` | string | — | Filter by instance state (`running`, `completed`, `failed`, `cancelled`) |
+| `process` | string | — | Filter by process name |
+| `limit` | int | 50 | Max rows. Clamped to 200. |
+| `offset` | int | 0 | Pagination offset |
+
+**Response — 200 OK**
+
+```json
+{
+  "instances": [
+    {
+      "id": "fea4a13c-...",
+      "process": { "name": "lead-qualification", "version": "1.0" },
+      "state": "running",
+      "inputs":  {},
+      "outputs": {},
+      "metadata": { "actor": "agent" },
+      "started_at": "2026-04-21T13:25:45Z",
+      "completed_at": null,
+      "error": null,
+      "links": {}
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+`steps` is omitted from the list view. Fetch the instance individually if you need them.
+
+#### `POST /sop/webhooks/:callback_id`
+
+Inbound webhook receiver. A `webhook` step creates a `Sop::Callback` with a unique
+`callback_id`. The third-party provider POSTs here when it has an answer. The engine
+records the payload, merges it into the step's outputs, and advances the instance.
+
+**This endpoint does not require `X-SOP-Token`.** If you need callback-level auth,
+encode a secret in the `callback_id` itself (it is a random UUID, so it is
+unguessable) or add HMAC verification at the application layer.
+
+The JSON body keys should match the declared `outputs:` of the webhook step that
+registered this callback.
+
+**Response — 200 OK:** `{ "status": "received" }`
+
+**Errors:**
+
+| Status | `error` | When |
+|---|---|---|
+| `404` | `not_found` | No pending callback at that path |
+| `409` | `callback_already_resolved` | Callback was already received or marked expired |
+| `422` | `invalid_callback_payload` | Payload didn't satisfy declared outputs. Raw payload is still persisted — no data loss. |
+
+#### `POST /sop/triggers/:process_name`
+
+Lets a SaaS provider (Cal.com, Stripe, Typeform, HubSpot, DocuSign, etc.) start
+an OpenSOP process instance directly from its own webhook delivery — no host-side
+adapter required. Auth is HMAC signature verification, configured per-process in
+the YAML (§2.3).
+
+**This endpoint does not require `X-SOP-Token`.** The declared HMAC scheme is the
+authentication.
+
+For setup instructions, response codes, and supported provider signatures, see §2.3.
+
+#### Error response shape
+
+All error responses share a common envelope:
+
+```json
+{
+  "error":   "short_machine_code",
+  "message": "human-readable description"
+}
+```
+
+Possible `error` values:
+
+| Value | HTTP | Source |
+|---|---|---|
+| `unauthorized` | 401 | Missing/invalid `X-SOP-Token` in strict mode |
+| `not_found` | 404 | Process or instance not found |
+| `callback_already_resolved` | 409 | Webhook callback already received or expired |
+| `invalid_inputs` | 422 | Process inputs or step outputs don't match schema |
+| `invalid_transition` | 422 | Cannot advance/cancel from current state |
+| `invalid_definition` | 422 | Malformed process definition |
+| `unresolved_reference` | 422 | A `from:` reference couldn't be resolved (indicates a YAML bug) |
+| `unknown_step_type` | 422 | Process references a step type the engine doesn't implement |
+| `step_not_submittable` | 422 | Tried to submit to a step that isn't in `active` or `failed` state |
+| `invalid_callback_payload` | 422 | Webhook payload doesn't match declared outputs |
+| `server_misconfigured` | 503 | `OPENSOP_API_TOKEN` not set in production |
 
 ### 4.3 Server instance lifecycle
 
@@ -754,7 +1125,16 @@ start() → RUNNING
 
 **Step states:** `pending` → `active` → `completed` | `failed` | `skipped`
 
-**Step sub-states (while active):** `running` | `waiting_for_input` | `waiting_for_approval` | `waiting_for_callback` | `escalated`
+**Step sub-states (while active):**
+
+| `sub_state` | Meaning |
+|---|---|
+| `waiting_for_input` | `form` step awaiting `POST .../submit` |
+| `escalated` | `judgment` step awaiting submission (LLM low-confidence or no router wired) |
+| `waiting_for_approval` | `approval` step awaiting a human decision |
+| `waiting_for_callback` | `webhook` step awaiting `POST /sop/webhooks/:callback_id` |
+| `waiting_for_subprocess` | `subprocess` step awaiting child instance completion |
+| `waiting_for_timer` | `wait` step with a `seconds:` or `until:` condition |
 
 ### 4.4 Server data model
 
@@ -834,9 +1214,11 @@ CREATE TABLE sop_callbacks (
 
 ### 5.1 What it is
 
-The CLI (`bin/opensop`) includes a self-contained local execution engine. When
-`--local` is passed, no server, no network, and no curl are required. Steps run
-as ordinary processes on the local machine.
+The CLI (`cli/bin/opensop`) includes a self-contained local execution engine.
+Local execution is the **default**: `opensop run` executes on your machine with
+no server, no network, and no curl required. Remote execution is opt-in via
+`--remote` (configured server) or `--server <url>`. The `--local` flag is a
+deprecated no-op retained for backwards compatibility.
 
 **Trust boundary:** local steps run arbitrary shell on the host — the same
 posture as a Makefile. Only run process files you trust.
@@ -851,7 +1233,7 @@ The local engine accepts:
 - The flat shorthand format: `{ "name", "inputs", "steps" }` (no version key, no `process` wrapper).
 
 Files use the `.sop.json` extension. YAML files are not parsed locally (the CLI's
-`schema validate` subcommand handles YAML validation, but `run --local` requires JSON).
+`schema validate` subcommand handles YAML validation, but `run` in local mode requires JSON).
 
 ### 5.3 Step dispatch (local engine)
 
@@ -963,7 +1345,7 @@ The completion receipt added by `local_submit` always includes `exit_code: 0`.
 2. `local_run` writes `manifest.status = "waiting"` with `cursor` and `waiting` blocks.
 3. The CLI exits 0 (a clean pause is not a failure).
 
-**Resume (`opensop submit <run_id> <step-id> --local`):**
+**Resume (`opensop submit <run_id> <step-id>`):**
 
 1. `local_submit` reads `manifest.json`; asserts `status == "waiting"` and `waiting.step == <step-id>`.
 2. Validates submitted outputs against `waiting.expects.schema` (required, type, enum).
@@ -1032,7 +1414,8 @@ parent: ../parent-cell    # relative or absolute path; or "null" for a root cell
 
 ### 7.3 Name resolution
 
-When `opensop run <name> --local` is called with a bare name (not a file path):
+When `opensop run <name>` is called with a bare name (not a file path) in local
+mode (the default):
 
 1. Walk up from cwd to find the active cell root.
 2. Check `<cell-root>/processes/<name>.sop.json`.
@@ -1041,9 +1424,9 @@ When `opensop run <name> --local` is called with a bare name (not a file path):
 
 This is nearest-wins resolution, analogous to `$PATH`.
 
-`opensop list --local` enumerates the full chain with cell name tags.
-`opensop list --local --conflicts` marks shadowed entries (later in chain,
-same filename as an earlier entry).
+`opensop list` enumerates the full chain with cell name tags.
+`opensop list --conflicts` marks shadowed entries (later in chain, same
+filename as an earlier entry).
 
 ### 7.4 `OPENSOP_LOCAL_HOME`
 
@@ -1080,80 +1463,53 @@ The substrate stores; policies (external) populate via `annotate` and read via
 
 ## 8. The Agent Interface
 
-### 8.1 Discovery
+### 8.1 Agent workflow against the server API
 
-```
-GET /sop/
-```
+The complete HTTP API is documented in §4.2. The typical agent loop against a
+server instance:
 
-Returns the process catalog. Agents use this to discover what a company can do.
+1. `GET /sop/` — discover what processes are available.
+2. `GET /sop/<name>/schema` — read the full process definition before starting.
+3. `POST /sop/<name>/start` — start an instance with the required inputs.
+4. `GET /sop/<name>/<id>` — poll for state. When a step is `active` with
+   `sub_state=waiting_for_input` (or `waiting_for_approval`, `escalated`), the
+   instance is waiting for a submission.
+5. `POST /sop/<name>/<id>/steps/<step_id>/submit` — supply the step's outputs to
+   advance the instance.
+6. Repeat 4–5 until `instance.state` is `completed`, `failed`, or `cancelled`.
 
-```json
-{
-  "processes": [
-    {
-      "name": "lead-qualification",
-      "version": "1.0",
-      "description": "Qualify an inbound lead",
-      "tags": ["sales", "qualification"],
-      "inputs_summary": "lead_name (string, required), lead_email (email, required), source (enum)",
-      "outputs_summary": "qualified (boolean), assigned_to (string)",
-      "schema_url": "/sop/lead-qualification/schema"
-    }
-  ]
-}
-```
+### 8.2 CLI agent integration
 
-### 8.2 Schema
+Agents can use the CLI (`cli/bin/opensop`) to drive OpenSOP without hand-writing HTTP.
 
-```
-GET /sop/lead-qualification/schema
-```
-
-Returns the full process definition. Agents use this to understand exact inputs,
-outputs, and step structure before starting an instance.
-
-### 8.3 Execution flow
-
-```
-POST /sop/lead-qualification/start
-  Body: { "inputs": { "lead_name": "Alice", "lead_email": "alice@example.com", "source": "website" } }
-  Response: { "id": "<instance-id>", "state": "running", "steps": [...] }
-
-GET /sop/lead-qualification/<id>
-  → check state; if a step is waiting_for_input, fill it
-
-POST /sop/lead-qualification/<id>/steps/collect/submit
-  Body: { "outputs": { "assigned_to": "rep-bob" } }
-  Response: { "instance": { "state": "completed" }, "step": { "state": "completed" } }
-```
-
-### 8.4 CLI agent integration
-
-Agents can use the CLI (`bin/opensop`) to drive OpenSOP without hand-writing HTTP.
+Local execution (default — no server required):
 
 ```bash
-opensop list                                    # discover processes
-opensop suggest "qualify a new inbound lead"    # intent-based lookup
-opensop schema lead-qualification              # inspect full definition
-opensop run lead-qualification \
+opensop list                                          # discover local processes
+opensop suggest "qualify a new inbound lead"          # intent-based lookup
+opensop run ./lead-qualification.sop.json \
   --input lead_name="Alice" \
   --input lead_email="alice@example.com" \
   --input source=website
-opensop status <instance-id>
-opensop submit <instance-id> collect \
+opensop show <run_id>
+opensop submit <run_id> collect --output assigned_to="rep-bob"
+```
+
+Remote execution (opt-in — requires a configured server):
+
+```bash
+opensop --remote list                                 # discover server processes
+opensop --remote schema lead-qualification            # inspect full definition
+opensop --remote run lead-qualification \
+  --input lead_name="Alice" \
+  --input lead_email="alice@example.com" \
+  --input source=website
+opensop --remote status <instance-id>
+opensop --remote submit <instance-id> collect \
   --output assigned_to="rep-bob"
 ```
 
-For local processes (no server needed):
-
-```bash
-opensop run ./lead-qualification.sop.json --local --input lead_name="Alice"
-opensop show <run_id>
-opensop submit <run_id> collect --local --output assigned_to="rep-bob"
-```
-
-### 8.5 The `.well-known/opensop` convention (roadmapped)
+### 8.3 The `.well-known/opensop` convention (roadmapped)
 
 Long-term: `GET https://api.example.com/.well-known/opensop` → process catalog.
 Makes any company running OpenSOP discoverable without prior configuration, the
@@ -1199,7 +1555,7 @@ All examples use generic placeholders. No real credentials, no real PII.
 }
 ```
 
-Run: `opensop run ./greet.sop.json --local --input name=Alice`
+Run: `opensop run ./greet.sop.json --input name=Alice`
 
 ### 10.2 Form pause and resume
 
@@ -1224,11 +1580,11 @@ Run: `opensop run ./greet.sop.json --local --input name=Alice`
 
 ```bash
 # Start — pauses at collect
-opensop run ./collect-contact.sop.json --local --json
+opensop run ./collect-contact.sop.json --json
 # → { "status": "waiting", "waiting": { "step": "collect", ... } }
 
 # Resume
-opensop submit <run_id> collect --local \
+opensop submit <run_id> collect \
   --output email=alice@example.com \
   --output opt_in=true
 # → { "status": "completed" }

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`opensop-cli` is the entire product: a single bash file, `bin/opensop` (~1600 lines), that is a client for any [OpenSOP](https://github.com/Chosen9115/opensop) runtime. There is no build step, no package manager, no compiled artifact — the file *is* the binary. Read it top-to-bottom to understand it; it's organized into banner-delimited sections.
+`opensop-cli` is the **primary execution surface** for OpenSOP: a single bash file, `bin/opensop` (~1600 lines), that runs processes **locally** against `.sop.json` files with no server, no network, and no account required. There is no build step, no package manager, no compiled artifact — the file *is* the binary. It can also talk to an optional OpenSOP Rails server via `--remote` or `--server <url>`. Read it top-to-bottom to understand it; it's organized into banner-delimited sections.
 
 ## Commands
 
@@ -65,4 +65,4 @@ Follow [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https:/
 
 ## Agent integration
 
-This CLI exists so agents can drive OpenSOP without hand-writing HTTP. `docs/CLAUDE-INTEGRATION.md` is the canonical guide (run existing processes; recognize reusable multi-step work as a candidate `.sop.yaml`; author + register). For discovery prefer `opensop search` / `opensop suggest` (intent-based) over scanning `opensop list`.
+Agents use this CLI to run processes **locally** — no server, no HTTP — for the core loop. `docs/CLAUDE-INTEGRATION.md` is the canonical integration guide (run existing processes; recognize reusable multi-step work as a candidate `.sop.yaml`; author + register). The `--remote` path is opt-in for shared orchestration against a running OpenSOP Rails server. For discovery prefer `opensop search` / `opensop suggest` (intent-based) over scanning `opensop list`.

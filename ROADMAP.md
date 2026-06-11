@@ -1,22 +1,25 @@
 # OpenSOP roadmap
 
-OpenSOP is a v0.1 developer preview. The core runtime is useful today, but the spec is intentionally ahead of some side effects. This roadmap keeps the public repo honest about what we plan to harden next.
+OpenSOP is Process as Infrastructure for agentic processes. The CLI (v0.8.0) is local-first: `opensop run/list/search` execute locally against `.sop.json` with no server; remote is opt-in via `--remote`. The SPEC is at v0.6. This roadmap keeps the public repo honest about what ships next.
 
-## Now
+## Shipped
 
-- YAML process parser
-- Instance executor
+- YAML process parser (SPEC v0.6; accepts 0.1/0.2 for legacy)
+- Instance executor with 10 step-type executors
 - REST API under `/sop/`
-- Admin UI
+- Admin UI (Hotwire + Tailwind + ViewComponent)
 - RSpec coverage
-- Real step execution for `form`, `automated`, and `notification`
-- Modeled state transitions for `judgment`, `approval`, `webhook`, `subprocess`, and `wait`
+- Real step execution for `form`, `automated`, `shell`, `noop`, `webhook`, `llm`, `loop`
+- Modeled state transitions for `judgment`, `approval`, `subprocess`, and `wait`
+- CLI v0.8.0 — local-first default, `--remote` opt-in, `--local` deprecated no-op
 
 ## Next
 
-- Real outbound webhook delivery
+- Real outbound webhook delivery (HTTParty + ActiveJob background call)
 - LLM-backed `judgment` steps with confidence thresholds and escalation
 - Human approval UI for `approval` steps
+- Real `subprocess` execution (child instance spawn + parent pause)
+- Real `notification` delivery (email, Slack, SMS)
 - Process metrics and run dashboards
 - Example SOP library for common ops and engineering workflows
 - More agent-harness examples: PR review, dependency bumping, CI re-runs, release notes
