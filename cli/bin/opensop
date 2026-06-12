@@ -143,11 +143,20 @@ ensure_home() {
 
 load_config() {
   ensure_home
+  # Precedence: explicit flag (--server) / env var > config file. Capture any
+  # value already set BEFORE sourcing — `source "$CONFIG_FILE"` does a plain
+  # assignment that would otherwise clobber a `--server <url>` the user passed
+  # on the command line (or an exported OPENSOP_URL). The config file is the
+  # lowest-priority source.
+  local _url_preset="${OPENSOP_URL:-}" _token_preset="${OPENSOP_TOKEN:-}"
   if [[ -f "$CONFIG_FILE" ]]; then
     # shellcheck source=/dev/null
     source "$CONFIG_FILE"
   fi
-  # Env vars override config file.
+  # Restore the flag/env values over anything the config file just set.
+  [[ -n "$_url_preset" ]]   && OPENSOP_URL="$_url_preset"
+  [[ -n "$_token_preset" ]] && OPENSOP_TOKEN="$_token_preset"
+  # Fall back to legacy *_OVERRIDE env vars only if still unset.
   : "${OPENSOP_URL:=${OPENSOP_URL_OVERRIDE:-}}"
   : "${OPENSOP_TOKEN:=${OPENSOP_TOKEN_OVERRIDE:-}}"
 }
@@ -1908,7 +1917,16 @@ local_run() {
   name="$(jq -r '.name // "unnamed"' "$proc_file")"
   built="$(build_payload_object input "$@")"          # reuse the same input parsing as remote run
   inputs="$(echo "$built" | jq -c '.payload')"
-  ctx="$(jq -c --argjson i "$inputs" '(.inputs // {}) * $i' "$proc_file")"  # declared defaults, overridden by --input
+  # Declared defaults, overridden by --input. `inputs` may be declared as an
+  # object (name → default) or, per SPEC v0.6, as an array of {name,type,default?}.
+  # Normalise the array form to a name → default object first, otherwise the `*`
+  # merge fails with "array and object cannot be multiplied".
+  ctx="$(jq -c --argjson i "$inputs" '
+    ((.inputs // {}) as $decl
+     | if ($decl | type) == "array"
+       then ($decl | map(select(.name != null and has("default"))) | map({(.name): .default}) | add // {})
+       else $decl end) * $i
+  ' "$proc_file")"
 
   # Validate the steps array up front — before creating a run dir — so an empty
   # or malformed process fails loudly instead of "completing" trivially.
