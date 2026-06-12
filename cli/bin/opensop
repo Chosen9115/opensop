@@ -1257,12 +1257,12 @@ cmd_suggest() {
   while [[ $i -lt ${#remaining_args[@]} ]]; do
     local a="${remaining_args[$i]}"
     if [[ "$a" == "--threshold" ]]; then
-      (( i++ ))
+      i=$((i + 1))
       threshold="${remaining_args[$i]:-0.0}"
     else
       parsed_keywords+=("$a")
     fi
-    (( i++ ))
+    i=$((i + 1))
   done
 
   # Rebuild task and keywords from parsed args (stripping --threshold).
@@ -3258,12 +3258,12 @@ local_suggest() {
   while [[ $i -lt ${#remaining_args[@]} ]]; do
     local a="${remaining_args[$i]}"
     if [[ "$a" == "--threshold" ]]; then
-      (( i++ ))
+      i=$((i + 1))
       threshold="${remaining_args[$i]:-0.0}"
     else
       parsed_keywords+=("$a")
     fi
-    (( i++ ))
+    i=$((i + 1))
   done
 
   if (( ${#parsed_keywords[@]} > 0 )); then

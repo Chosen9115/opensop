@@ -7,6 +7,22 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **`suggest` aborted with empty output and exit 1 on strict-`set -e` bashes (`--local` and `--remote`).**
+  The threshold-parse loop in both `local_suggest` and `cmd_suggest` used `(( i++ ))`.
+  A standalone `(( i++ ))` returns **exit status 1** when `i` is `0` (the post-increment
+  yields the old value `0`, which `((…))` reports as false). Under `set -euo pipefail` on
+  bashes that abort on arithmetic-evaluating-to-zero (common on Linux; Apple's bash 3.2 does
+  not), this killed `suggest` on the first loop iteration before any output — reproducing as
+  `opensop suggest "…" --local --json` exiting 1 with empty stdout. `search` was unaffected
+  because it has no such loop, which is why a no-match `search` passed while `suggest` failed
+  in the same run. Replaced both occurrences with the assignment form `i=$((i + 1))`, which
+  always returns 0. Added a source-level guard in `test/test.sh` forbidding standalone
+  `(( var++ ))` / `(( var-- ))` increments so the footgun cannot reappear.
+
 ## [0.8.0] — 2026-06-11
 
 > **BREAKING:** The default backend is now **LOCAL**. Commands that previously hit a remote server by default now run locally (no server, no curl). Scripts relying on the old default-remote behaviour must add `--remote` (uses the configured `OPENSOP_URL`) or `--server <url>`. The `--local` flag is now a deprecated no-op and can be omitted — it is still accepted for script compatibility but prints a deprecation note to stderr.
