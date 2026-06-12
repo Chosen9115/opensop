@@ -23,6 +23,18 @@ This project follows [Semantic Versioning](https://semver.org/) and the
   always returns 0. Added a source-level guard in `test/test.sh` forbidding standalone
   `(( var++ ))` / `(( var-- ))` increments so the footgun cannot reappear.
 
+- **`register --server <unreachable>` exited 0 instead of failing.**
+  `cmd_register` ran its own `curl` with `… || true`, discarding curl's exit
+  code, and `-w "%{http_code}"` prints `000` when no connection is made. Both
+  the fallback check (`4xx`) and the error check (`>= 400`) are false for `000`,
+  so an unreachable server fell through to the success path and exited 0 — the
+  CLI silently reported a registration that never happened. Now curl's exit code
+  is captured (no `|| true`) and a non-zero exit or an HTTP `000` code is treated
+  as a `network_error` (mirroring `api_call`), applied to both the JSON-wrapped
+  POST and the raw-YAML fallback. The regression test isolates `OPENSOP_HOME` so
+  `--server` is the only URL source and asserts the `network_error` code, rather
+  than passing for the wrong reason when a developer `~/.opensop` is present.
+
 ## [0.8.0] — 2026-06-11
 
 > **BREAKING:** The default backend is now **LOCAL**. Commands that previously hit a remote server by default now run locally (no server, no curl). Scripts relying on the old default-remote behaviour must add `--remote` (uses the configured `OPENSOP_URL`) or `--server <url>`. The `--local` flag is now a deprecated no-op and can be omitted — it is still accepted for script compatibility but prints a deprecation note to stderr.

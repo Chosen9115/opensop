@@ -3475,13 +3475,19 @@ echo "$u2a_reg_out" | jq -r '.hint' | grep -q "\-\-remote\|\-\-server" \
 echo "PASS: U2a register no --remote — exits non-zero with usage_error, hint mentions --remote/--server"
 
 # --- (10) 'register --server http://127.0.0.1:1' → attempts remote (fails with network error) ---
+# OPENSOP_HOME isolates from any developer ~/.opensop config so --server is the
+# only URL source — otherwise a configured URL would mask the network failure
+# and the test could pass for the wrong reason. A curl that can't connect prints
+# HTTP code "000"; register must treat that as a network_error, not a success.
 set +e
-"$cli" --server http://127.0.0.1:1 register "$u2a_proc" --json >/dev/null 2>&1
+u2a_reg_server_out="$(OPENSOP_HOME="$u2a_home" "$cli" --server http://127.0.0.1:1 register "$u2a_proc" --json 2>&1)"
 u2a_reg_server_rc=$?
 set -e
 [ "$u2a_reg_server_rc" -ne 0 ] \
   || { echo "FAIL: U2a register --server <url> should fail (no server at 127.0.0.1:1), got exit 0"; exit 1; }
-echo "PASS: U2a register --server <url> — attempts remote (fails with network error, not usage_error)"
+echo "$u2a_reg_server_out" | jq -e '.error == "network_error"' >/dev/null \
+  || { echo "FAIL: U2a register --server <unreachable> should emit network_error (curl 000 must not be treated as success), got: $u2a_reg_server_out"; exit 1; }
+echo "PASS: U2a register --server <url> — unreachable server yields network_error (curl 000 not treated as success)"
 
 # --- (11) 'run' with NO flag, explicitly NO --local — the file path form ---
 # Exercise that the default-local path works when --local is ABSENT entirely.

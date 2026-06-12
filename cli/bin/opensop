@@ -1662,7 +1662,17 @@ cmd_register() {
   [[ -n "${OPENSOP_TOKEN:-}" ]] && curl_args+=(-H "X-SOP-Token: $OPENSOP_TOKEN")
   curl_args+=(-d "$body")
 
-  status=$(curl "${curl_args[@]}" "$url" 2>/dev/null || true)
+  # A failed connection is a network error, NOT a success. curl exits non-zero
+  # (e.g. 7, connection refused) and `-w "%{http_code}"` prints "000" when no
+  # HTTP response was received. Capture curl's exit (don't `|| true` it away)
+  # and treat either signal as a network_error — otherwise an unreachable
+  # `--server` falls through to the success path and exits 0. Mirrors api_call.
+  local curl_rc=0
+  status=$(curl "${curl_args[@]}" "$url" 2>/dev/null) || curl_rc=$?
+  if (( curl_rc != 0 )) || [[ "$status" == "000" ]]; then
+    rm -f "$tmp_resp"
+    die "request failed: POST $url" "network_error" "is the server reachable at ${OPENSOP_URL%/}?"
+  fi
 
   if [[ "$status" -ge 400 && "$status" -lt 500 ]]; then
     # Fall back to raw YAML body.
@@ -1673,7 +1683,12 @@ cmd_register() {
       -w "%{http_code}")
     [[ -n "${OPENSOP_TOKEN:-}" ]] && curl_args+=(-H "X-SOP-Token: $OPENSOP_TOKEN")
     curl_args+=(--data-binary "@$file")
-    status=$(curl "${curl_args[@]}" "$url" 2>/dev/null || true)
+    curl_rc=0
+    status=$(curl "${curl_args[@]}" "$url" 2>/dev/null) || curl_rc=$?
+    if (( curl_rc != 0 )) || [[ "$status" == "000" ]]; then
+      rm -f "$tmp_resp"
+      die "request failed: POST $url" "network_error" "is the server reachable at ${OPENSOP_URL%/}?"
+    fi
   fi
 
   resp=$(cat "$tmp_resp")
