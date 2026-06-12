@@ -2451,6 +2451,19 @@ jq -e '.match == null' <<<"$ps_sug_empty" >/dev/null \
   || { echo "FAIL: suggest --local in empty cell should have null match"; exit 1; }
 echo "PASS: suggest --local — empty corpus yields null match, exits 0"
 
+# (10b) set-e guard: the threshold-parse loops must not use `(( i++ ))`.
+#   `(( i++ ))` returns exit status 1 when i is 0 (the post-increment yields the
+#   old value 0, which `((...))` reports as false). Under `set -euo pipefail` on
+#   bashes that abort on arithmetic-evaluating-to-zero (common on Linux), that
+#   killed `local_suggest` before any output — "exit 1, empty output" — while
+#   `local_search` (no such loop) was unaffected. Use the assignment form
+#   `i=$((i + 1))`, which always returns 0. Guard the whole source against the
+#   footgun so it can't creep back in on a bash where it doesn't bite locally.
+if grep -nE '\(\( *[A-Za-z_][A-Za-z_0-9]*(\+\+|--) *\)\)|\(\( *(\+\+|--)[A-Za-z_]' "$cli"; then
+  echo "FAIL: source uses a standalone (( var++ )) / (( var-- )) — returns rc=1 at zero and aborts under set -e; use i=\$((i + 1))"; exit 1
+fi
+echo "PASS: source — no set-e-unsafe standalone (( var++ )) increments"
+
 # (11) search NOT inside a cell (no cell chain): still works, searches nothing → no match
 set +e
 ps_nocell_out="$( cd "$OPENSOP_LOCAL_HOME" && env -u OPENSOP_LOCAL_HOME "$cli" search lead --local --json 2>/dev/null )"; ps_nocell_rc=$?
