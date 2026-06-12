@@ -82,6 +82,31 @@ set +e; "$cli" run "$empty_proc" --local --json >/dev/null 2>&1; erc=$?; set -e
 [ "$erc" -ne 0 ] || { echo "FAIL: empty-steps process should be rejected"; exit 1; }
 echo "PASS: empty-steps process rejected"
 
+# --- run: array-form `inputs` declaration must not crash the merge ---
+# `inputs` may be declared as an object (name → default) or, per SPEC v0.6, as an
+# array of {name,type,default?}. local_run previously did `(.inputs // {}) * $i`,
+# which fails ("array and object cannot be multiplied") on the array form.
+arr_dir="$OPENSOP_LOCAL_HOME/arr-form"; mkdir -p "$arr_dir"
+cat > "$arr_dir/arr.sop.json" <<'JSON'
+{
+  "name": "arr-form",
+  "inputs": [
+    { "name": "customer_name",  "type": "string" },
+    { "name": "customer_email", "type": "string" }
+  ],
+  "steps": [ { "id": "s", "type": "noop" } ]
+}
+JSON
+set +e
+arr_out="$("$cli" run "$arr_dir/arr.sop.json" --input customer_name=Alice --input customer_email=alice@example.com --json 2>&1)"; arr_rc=$?
+set -e
+[ "$arr_rc" -eq 0 ] || { echo "FAIL: run on array-form inputs should exit 0, got $arr_rc: $arr_out"; exit 1; }
+echo "$arr_out" | jq -e '.status == "completed"' >/dev/null \
+  || { echo "FAIL: array-form run should complete, got: $arr_out"; exit 1; }
+echo "$arr_out" | jq -e '.inputs.customer_name == "Alice"' >/dev/null \
+  || { echo "FAIL: provided --input should override into context for array-form inputs, got: $arr_out"; exit 1; }
+echo "PASS: run — array-form inputs declaration no longer crashes (normalised before merge)"
+
 # --------------------------------------------------------------------------- #
 # Cell primitive (v0.6): init + scope.
 # --------------------------------------------------------------------------- #
@@ -3488,6 +3513,25 @@ set -e
 echo "$u2a_reg_server_out" | jq -e '.error == "network_error"' >/dev/null \
   || { echo "FAIL: U2a register --server <unreachable> should emit network_error (curl 000 must not be treated as success), got: $u2a_reg_server_out"; exit 1; }
 echo "PASS: U2a register --server <url> — unreachable server yields network_error (curl 000 not treated as success)"
+
+# --- (11) '--server <url>' overrides a configured OPENSOP_URL (flag > config file) ---
+# load_config sources the config file; that source must NOT clobber an explicit
+# --server. With config URL :9 and --server :1, the request must target :1, not :9.
+prec_home="$(mktemp -d)"
+OPENSOP_HOME="$prec_home" "$cli" config set url http://127.0.0.1:9 >/dev/null 2>&1
+set +e
+prec_out="$(OPENSOP_HOME="$prec_home" "$cli" --server http://127.0.0.1:1 register "$u2a_proc" --json 2>&1)"
+prec_rc=$?
+set -e
+rm -rf "$prec_home"
+[ "$prec_rc" -ne 0 ] || { echo "FAIL: register --server over a configured URL should still fail"; exit 1; }
+echo "$prec_out" | jq -e '.error == "network_error"' >/dev/null \
+  || { echo "FAIL: --server over a configured URL should yield network_error, got: $prec_out"; exit 1; }
+echo "$prec_out" | jq -e '.message | contains("127.0.0.1:1")' >/dev/null \
+  || { echo "FAIL: --server must override the configured URL (expected target :1), got: $prec_out"; exit 1; }
+echo "$prec_out" | jq -e '(.message | contains("127.0.0.1:9")) | not' >/dev/null \
+  || { echo "FAIL: configured URL :9 leaked despite --server :1, got: $prec_out"; exit 1; }
+echo "PASS: U2a --server <url> overrides a configured OPENSOP_URL (flag > config file)"
 
 # --- (11) 'run' with NO flag, explicitly NO --local — the file path form ---
 # Exercise that the default-local path works when --local is ABSENT entirely.

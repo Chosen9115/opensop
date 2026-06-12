@@ -35,6 +35,24 @@ This project follows [Semantic Versioning](https://semver.org/) and the
   `--server` is the only URL source and asserts the `network_error` code, rather
   than passing for the wrong reason when a developer `~/.opensop` is present.
 
+- **`--server <url>` was silently overridden by a configured `~/.opensop`.**
+  `load_config` `source`d the config file *after* `--server` had set `OPENSOP_URL`,
+  so a plain `OPENSOP_URL=…` assignment in the file clobbered the explicit flag —
+  requests went to the configured server instead of the one the user named. Now
+  `load_config` captures any flag/env value before sourcing and restores it after,
+  establishing the precedence **flag (`--server`) / env var > config file**. (This
+  also restores the intended `OPENSOP_URL` env override, which the unconditional
+  `source` had likewise defeated.)
+
+- **`run` crashed on array-form `inputs` declarations.**
+  `local_run` merged declared defaults with provided values via `(.inputs // {}) * $i`,
+  which fails with `jq: array ([…]) and object ({…}) cannot be multiplied` when
+  `inputs` is declared as an array of `{name,type,default?}` (valid per SPEC v0.6)
+  rather than an object. The array form is now normalised to a name → default object
+  (taking each entry's `default`, if present) before the merge, so both declaration
+  shapes run. `opensop run <array-form-process> --input k=v` now completes instead of
+  exiting 5.
+
 ## [0.8.0] — 2026-06-11
 
 > **BREAKING:** The default backend is now **LOCAL**. Commands that previously hit a remote server by default now run locally (no server, no curl). Scripts relying on the old default-remote behaviour must add `--remote` (uses the configured `OPENSOP_URL`) or `--server <url>`. The `--local` flag is now a deprecated no-op and can be omitted — it is still accepted for script compatibility but prints a deprecation note to stderr.
