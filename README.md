@@ -259,6 +259,7 @@ OpenSOP is at MVP per [`SPEC.md`](./SPEC.md) §8. Honest accounting:
 | [`MANIFESTO.md`](./MANIFESTO.md) | Everyone | The thesis — why processes are infrastructure |
 | [`SPEC.md`](./SPEC.md) | Architects + implementors | Formal OpenSOP 0.6 specification and `/sop/*` API contract |
 | [`docs/AGENTS.md`](./docs/AGENTS.md) | Agent builders + process authors | Install, format reference, authoring playbook, self-check rubric |
+| [`docs/CLAUDE-INTEGRATION.md`](./docs/CLAUDE-INTEGRATION.md) | Agent integrators | How any agent consumes OpenSOP — the CLI as a tool, plus the zero-dep [`mcp/`](./mcp) MCP server |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | Forks | PR workflow + private process libraries |
 | [opensop-rails](https://github.com/Chosen9115/opensop-rails) | Self-hosters | Reference server: install, API docs, architecture |
 

@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+# =============================================================================
+# opensop-mcp — a zero-dependency MCP server for OpenSOP
+# =============================================================================
+# Exposes the local-first OpenSOP CLI to any MCP-speaking agent (Claude
+# Desktop, Hermes, etc.) as a set of tools covering the full agent loop:
+# discover → preview → run → resume → audit.
+#
+# Like the CLI it fronts, the file IS the binary: no build step, no package
+# manager, no runtime beyond `bash` + `jq` (both already required by the CLI).
+#
+# Transport: MCP stdio — newline-delimited JSON-RPC 2.0 on stdin/stdout.
+#   * stdout carries ONLY protocol messages (one compact JSON object per line).
+#   * ALL diagnostics go to stderr. Never print anything else to stdout.
+#
+# Environment:
+#   OPENSOP_BIN        Path to the opensop CLI. Default: resolve `opensop` on
+#                      PATH, else ../cli/bin/opensop relative to this script.
+#   OPENSOP_SERVER     If set, dual commands run against this server URL
+#                      (adds `--server <url>`). Unset = local-first (default).
+#   OPENSOP_MCP_READONLY  If set (any value), the mutating tools (opensop_run,
+#                      opensop_submit) are hidden from tools/list and refused —
+#                      discovery + preview only. Safe default for untrusted
+#                      process corpora.
+#
+# Trust boundary: `opensop_run`/`opensop_submit` execute local processes, whose
+# automated/shell steps run arbitrary shell on this host — same posture as a
+# Makefile. Only expose this server over a corpus you trust, or set
+# OPENSOP_MCP_READONLY=1.
+# =============================================================================
+
+set -euo pipefail
+
+readonly OPENSOP_MCP_VERSION="0.1.0"
+# Default protocol version advertised when a client doesn't request one.
+readonly DEFAULT_PROTOCOL_VERSION="2025-06-18"
+
+# --------------------------------------------------------------------------- #
+# CLI resolution
+# --------------------------------------------------------------------------- #
+_script_dir() { cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd; }
+
+resolve_cli() {
+  if [[ -n "${OPENSOP_BIN:-}" ]]; then
+    printf '%s' "$OPENSOP_BIN"; return 0
+  fi
+  if command -v opensop >/dev/null 2>&1; then
+    command -v opensop; return 0
+  fi
+  local sd; sd="$(_script_dir)"
+  if [[ -x "$sd/../cli/bin/opensop" ]]; then
+    printf '%s' "$sd/../cli/bin/opensop"; return 0
+  fi
+  return 1
+}
+
+CLI=""
+if ! CLI="$(resolve_cli)"; then
+  printf 'opensop-mcp: cannot find the opensop CLI. Set OPENSOP_BIN or put `opensop` on PATH.\n' >&2
+  exit 1
+fi
+readonly CLI
+
+log() { printf 'opensop-mcp: %s\n' "$*" >&2; }
+
+readonly READONLY_MODE="${OPENSOP_MCP_READONLY:+1}"
+
+# --------------------------------------------------------------------------- #
+# JSON-RPC response helpers (every line to stdout is one compact JSON object)
+# --------------------------------------------------------------------------- #
+send() { jq -cn "$@"; }   # compact, single line, to stdout
+
+# HAS_ID is set per-message in the dispatch loop. JSON-RPC 2.0 forbids replying
+# to a notification (a message with no `id`), so both helpers no-op when the
+# current message had no id — this guards every response branch at once.
+HAS_ID="false"
+
+respond_result() {  # <id-json> <result-json>
+  [[ "$HAS_ID" == "true" ]] || return 0
+  send --argjson id "$1" --argjson result "$2" '{jsonrpc:"2.0", id:$id, result:$result}'
+}
+
+respond_error() {   # <id-json> <code> <message>
+  [[ "$HAS_ID" == "true" ]] || return 0
+  send --argjson id "$1" --argjson code "$2" --arg msg "$3" \
+    '{jsonrpc:"2.0", id:$id, error:{code:$code, message:$msg}}'
+}
+
+# --------------------------------------------------------------------------- #
+# Tool catalog — tools/list result. Mutating tools are dropped in readonly mode.
+# Each tool maps 1:1 onto a CLI subcommand; see run_tool() for the wiring.
+# --------------------------------------------------------------------------- #
+tools_catalog() {
+  jq -cn --arg ro "$READONLY_MODE" '
+    [
+      {name:"opensop_list",
+       description:"List OpenSOP processes visible from a directory (the cell chain). Start here to see what already exists before authoring new work.",
+       inputSchema:{type:"object", properties:{dir:{type:"string", description:"Directory to scope the listing to. Default: current working directory."}}}},
+      {name:"opensop_search",
+       description:"Ranked keyword search over available processes. Returns the top matches as {query, results:[{score,name,tags,description}]}.",
+       inputSchema:{type:"object", required:["keywords"], properties:{keywords:{type:"string", description:"One or more space-separated keywords."}}}},
+      {name:"opensop_suggest",
+       description:"Inverse retrieval: describe a task in natural language and get the single best-matching process with a confidence score. Returns {task, match}.",
+       inputSchema:{type:"object", required:["task"], properties:{task:{type:"string", description:"Natural-language task description, e.g. \"qualify a new sales lead\"."}, threshold:{type:"number", description:"Minimum confidence 0.0-1.0; below it match is null."}}}},
+      {name:"opensop_dry_run",
+       description:"Preview a process without running it: validates inputs against the declared schema and shows the step walkthrough. Returns {process, valid, validation_errors, steps}.",
+       inputSchema:{type:"object", required:["process"], properties:{process:{type:"string", description:"Process name (resolved via the cell chain) or a path to a .sop.json file."}, inputs:{type:"object", description:"Input key/value pairs to validate."}}}},
+      {name:"opensop_run",
+       description:"Run a process locally. Returns the run manifest; if a step pauses (form/approval/wait/webhook) the manifest shows status \"waiting\" and what it expects — resume with opensop_submit. Executes arbitrary shell for automated/shell steps; only use on trusted processes.",
+       inputSchema:{type:"object", required:["process"], properties:{process:{type:"string", description:"Process name or path to a .sop.json file."}, inputs:{type:"object", description:"Input key/value pairs."}}}},
+      {name:"opensop_status",
+       description:"Get the current state of a run: {id, process, state, started_at, completed_at, waiting, steps}.",
+       inputSchema:{type:"object", required:["run_id"], properties:{run_id:{type:"string"}}}},
+      {name:"opensop_submit",
+       description:"Resume a paused run by submitting outputs for the waiting step (form/approval). Returns the updated manifest.",
+       inputSchema:{type:"object", required:["run_id","step_id","outputs"], properties:{run_id:{type:"string"}, step_id:{type:"string"}, outputs:{type:"object", description:"Output key/value pairs the waiting step expects."}, decided_by:{type:"string", description:"Actor name recorded in the audit receipt."}, confidence:{type:"number", description:"Decision confidence 0.0-1.0."}}}},
+      {name:"opensop_show",
+       description:"Show the full audit trail of a run: {manifest, steps:[receipts]}. Use for inspecting what happened, step by step.",
+       inputSchema:{type:"object", required:["run_id"], properties:{run_id:{type:"string"}}}},
+      {name:"opensop_runs",
+       description:"List all local runs (id, status, process, started_at).",
+       inputSchema:{type:"object", properties:{}}}
+    ]
+    | if $ro == "1"
+      then map(select(.name | . != "opensop_run" and . != "opensop_submit"))
+      else . end
+  '
+}
+
+# --------------------------------------------------------------------------- #
+# Tool execution
+# --------------------------------------------------------------------------- #
+
+# Append `--input k=v` args for each entry of a JSON object onto a named array.
+# NUL-delimited so values containing newlines survive. Non-string scalars are
+# rendered as their JSON form (numbers/bools become "30"/"true").
+_append_kv_args() {  # <array-name> <flag> <object-json>
+  local -n _arr="$1"; local flag="$2" obj="$3"
+  local kv
+  while IFS= read -r -d '' kv; do
+    _arr+=("$flag" "$kv")
+  done < <(jq -j '(. // {}) | to_entries[] | "\(.key)=\(.value)\u0000"' <<<"$obj")
+}
+
+# Run the CLI and emit an MCP tools/call result {content,isError}.
+# Guarded for set -e: a non-zero CLI exit is captured, not fatal.
+exec_cli_result() {  # <args...>
+  local -a cmd=("$CLI" "$@")
+  # Local-first; opt into a server only when OPENSOP_SERVER is set.
+  if [[ -n "${OPENSOP_SERVER:-}" ]]; then
+    cmd+=(--server "$OPENSOP_SERVER")
+  fi
+  local errf out rc=0
+  # Guard mktemp: a failure here (unwritable TMPDIR, full disk) must not abort
+  # the whole server under set -e — degrade to an isError result instead.
+  if ! errf="$(mktemp 2>/dev/null)"; then
+    jq -cn '{content:[{type:"text", text:"opensop-mcp: mktemp failed (cannot capture CLI stderr)"}], isError:true}'
+    return 0
+  fi
+  out="$("${cmd[@]}" 2>"$errf")" || rc=$?
+  local errtext; errtext="$(cat "$errf")"; rm -f "$errf"
+
+  local text="$out"
+  if (( rc != 0 )); then
+    # Surface the CLI's JSON error envelope (stderr) so the agent can read it.
+    text="${out:+$out$'\n'}${errtext}"
+    [[ -z "$text" ]] && text="opensop exited with code $rc"
+  fi
+  jq -cn --arg text "$text" --argjson isErr "$([[ $rc -eq 0 ]] && echo false || echo true)" \
+    '{content:[{type:"text", text:$text}], isError:$isErr}'
+}
+
+# Map a tool name + arguments object onto a CLI invocation; print the result.
+run_tool() {  # <name> <arguments-json>
+  local name="$1" args_json="$2"
+  local -a a=()
+
+  # Block mutating tools in readonly mode regardless of catalog visibility.
+  if [[ -n "$READONLY_MODE" && ( "$name" == "opensop_run" || "$name" == "opensop_submit" ) ]]; then
+    jq -cn --arg t "tool '$name' is disabled (OPENSOP_MCP_READONLY is set)" \
+      '{content:[{type:"text", text:$t}], isError:true}'
+    return 0
+  fi
+
+  case "$name" in
+    opensop_list)
+      local dir; dir="$(jq -r '.dir // empty' <<<"$args_json")"
+      a=(list); [[ -n "$dir" ]] && a+=("$dir")
+      exec_cli_result "${a[@]}"
+      ;;
+    opensop_search)
+      local kws; kws="$(jq -r '.keywords // empty' <<<"$args_json")"
+      if [[ -z "$kws" ]]; then _missing keywords; return 0; fi
+      # Split on whitespace WITHOUT glob expansion: `read -ra` word-splits on
+      # IFS but never pathname-expands, so a keyword like `*` stays literal
+      # (a bare `kwarr=($kws)` would glob against the CWD).
+      local -a kwarr; read -ra kwarr <<<"$kws"
+      a=(search "${kwarr[@]}" --json)
+      exec_cli_result "${a[@]}"
+      ;;
+    opensop_suggest)
+      local task thr
+      task="$(jq -r '.task // empty' <<<"$args_json")"
+      if [[ -z "$task" ]]; then _missing task; return 0; fi
+      thr="$(jq -r '.threshold // empty' <<<"$args_json")"
+      a=(suggest "$task")
+      [[ -n "$thr" ]] && a+=(--threshold "$thr")
+      a+=(--json)
+      exec_cli_result "${a[@]}"
+      ;;
+    opensop_dry_run)
+      local proc; proc="$(jq -r '.process // empty' <<<"$args_json")"
+      if [[ -z "$proc" ]]; then _missing process; return 0; fi
+      a=(dry-run "$proc")
+      _append_kv_args a --input "$(jq -c '.inputs // {}' <<<"$args_json")"
+      a+=(--json)
+      exec_cli_result "${a[@]}"
+      ;;
+    opensop_run)
+      local proc; proc="$(jq -r '.process // empty' <<<"$args_json")"
+      if [[ -z "$proc" ]]; then _missing process; return 0; fi
+      a=(run "$proc")
+      _append_kv_args a --input "$(jq -c '.inputs // {}' <<<"$args_json")"
+      a+=(--json)
+      exec_cli_result "${a[@]}"
+      ;;
+    opensop_status)
+      local rid; rid="$(jq -r '.run_id // empty' <<<"$args_json")"
+      if [[ -z "$rid" ]]; then _missing run_id; return 0; fi
+      exec_cli_result status "$rid" --json
+      ;;
+    opensop_submit)
+      local rid sid; rid="$(jq -r '.run_id // empty' <<<"$args_json")"; sid="$(jq -r '.step_id // empty' <<<"$args_json")"
+      if [[ -z "$rid" ]]; then _missing run_id; return 0; fi
+      if [[ -z "$sid" ]]; then _missing step_id; return 0; fi
+      a=(submit "$rid" "$sid")
+      _append_kv_args a --output "$(jq -c '.outputs // {}' <<<"$args_json")"
+      local dby conf
+      dby="$(jq -r '.decided_by // empty' <<<"$args_json")"; [[ -n "$dby" ]] && a+=(--decided-by "$dby")
+      conf="$(jq -r '.confidence // empty' <<<"$args_json")"; [[ -n "$conf" ]] && a+=(--confidence "$conf")
+      a+=(--json)
+      exec_cli_result "${a[@]}"
+      ;;
+    opensop_show)
+      local rid; rid="$(jq -r '.run_id // empty' <<<"$args_json")"
+      if [[ -z "$rid" ]]; then _missing run_id; return 0; fi
+      exec_cli_result show "$rid" --json
+      ;;
+    opensop_runs)
+      exec_cli_result runs
+      ;;
+    *)
+      jq -cn --arg t "unknown tool: $name" '{content:[{type:"text", text:$t}], isError:true}'
+      ;;
+  esac
+}
+
+# Emit an isError result for a missing required argument.
+_missing() {  # <arg-name>
+  jq -cn --arg t "missing required argument: $1" '{content:[{type:"text", text:$t}], isError:true}'
+}
+
+# --------------------------------------------------------------------------- #
+# Dispatch loop — one JSON-RPC message per line
+# --------------------------------------------------------------------------- #
+main() {
+  local line method id params has_id
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    # Tolerate malformed input without crashing the server.
+    if ! method="$(jq -re '.method // empty' <<<"$line" 2>/dev/null)"; then
+      log "skipping non-JSON or method-less line"
+      continue
+    fi
+    has_id="$(jq -r 'has("id")' <<<"$line" 2>/dev/null || echo false)"
+    id="$(jq -c '.id // null' <<<"$line" 2>/dev/null || echo null)"
+    HAS_ID="$has_id"   # gates respond_result/respond_error — notifications get no reply
+
+    case "$method" in
+      initialize)
+        local client_pv result
+        client_pv="$(jq -r '.params.protocolVersion // empty' <<<"$line")"
+        [[ -z "$client_pv" ]] && client_pv="$DEFAULT_PROTOCOL_VERSION"
+        result="$(jq -cn --arg pv "$client_pv" --arg v "$OPENSOP_MCP_VERSION" \
+          '{protocolVersion:$pv, capabilities:{tools:{listChanged:false}}, serverInfo:{name:"opensop", version:$v}}')"
+        respond_result "$id" "$result"
+        ;;
+      notifications/initialized|initialized|notifications/*)
+        : # notifications get no response
+        ;;
+      ping)
+        respond_result "$id" '{}'
+        ;;
+      tools/list)
+        respond_result "$id" "$(jq -cn --argjson t "$(tools_catalog)" '{tools:$t}')"
+        ;;
+      tools/call)
+        local tname targs result
+        tname="$(jq -r '.params.name // empty' <<<"$line")"
+        targs="$(jq -c '.params.arguments // {}' <<<"$line")"
+        if [[ -z "$tname" ]]; then
+          respond_error "$id" -32602 "tools/call missing params.name"
+        else
+          result="$(run_tool "$tname" "$targs")"
+          respond_result "$id" "$result"
+        fi
+        ;;
+      *)
+        if [[ "$has_id" == "true" ]]; then
+          respond_error "$id" -32601 "method not found: $method"
+        fi
+        ;;
+    esac
+  done
+}
+
+main
