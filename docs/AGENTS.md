@@ -2,7 +2,7 @@
 
 **One place to learn everything an agent needs:** install the CLI, author a `.sop.json` process, run it locally, inspect and resume paused steps, and connect to a server when you need shared orchestration.
 
-Companion references: [`SPEC.md`](../SPEC.md) (full format grammar + HTTP API reference in §4.2), [`cli/README.md`](../cli/README.md) (CLI command reference).
+Companion references: [`SPEC.md`](../SPEC.md) (full format grammar + HTTP API reference in §4.2), [`cli/README.md`](../cli/README.md) (CLI command reference), [`CLAUDE-INTEGRATION.md`](./CLAUDE-INTEGRATION.md) (how any agent consumes OpenSOP — the CLI as a shell tool, plus the zero-dep [`mcp/opensop-mcp`](../mcp) MCP server for MCP-native agents).
 
 ---
 
@@ -526,6 +526,8 @@ Advance paused steps:
 ```
 
 **Recognizing when to propose a new process:** if you are about to do something with 3+ distinct steps, a clear input/output boundary, and likely repetition — pause and offer to write a `.sop.json` first.
+
+**MCP-native agents:** for Claude Desktop or any MCP client, the zero-dependency [`mcp/opensop-mcp`](../mcp) server exposes this same loop (discover → preview → run → resume → audit) as nine MCP tools over stdio. See [`CLAUDE-INTEGRATION.md`](./CLAUDE-INTEGRATION.md) for config snippets and the tool reference.
 
 ---
 
