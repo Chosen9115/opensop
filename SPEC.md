@@ -1721,7 +1721,11 @@ addressed in §11.4 (fault-record redaction).
 ### 10.3 Manifest-level run summary
 
 **Shipped today (C1a):** the run-level `manifest.json` (§5.5) carries a top-level
-`duration_ms` — total run wall time — for completed, failed, and waiting runs:
+`duration_ms` for completed, failed, and waiting runs. For a run that finishes
+without pausing this is total wall time. For a run that **pauses and resumes**,
+the current value reflects start-to-pause only — accurate total duration for
+resumed runs is **reserved** with the resumed-completion metrics follow-up (the
+same C1a follow-up scoped in §10.2):
 
 ```json
 { "run_id": "...", "process": "lead-qualification", "status": "completed",
