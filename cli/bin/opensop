@@ -4416,6 +4416,7 @@ main() {
   local _i=0 _all_args=("$@")
   local _n="${#_all_args[@]}"
   local _saw_local=false
+  local _want_help=false
   while [[ $_i -lt $_n ]]; do
     local _a="${_all_args[$_i]}"
     case "$_a" in
@@ -4436,12 +4437,16 @@ main() {
           die "--server requires a URL argument" "usage_error" "opensop --server <url> <command>"
         fi
         ;;
-      --help|-h)           cmd_help; exit 0 ;;
+      --help|-h)           _want_help=true ;;  # deferred: dispatch after all flags scanned
       --version|-v|version) cmd_version; exit 0 ;;
       *) args+=("$_a") ;;
     esac
     _i=$((_i + 1))
   done
+
+  # Dispatch --help/-h AFTER the whole scan so a later --json is honored
+  # (opensop --help --json and opensop --json --help must both emit JSON).
+  if $_want_help; then cmd_help; exit $?; fi
 
   # Emit the --local deprecation note now (after --json/--pretty are processed)
   # so it doesn't pollute JSON output when --json is active.

@@ -3740,4 +3740,13 @@ set -e
 echo "$bad_json" | grep -q "usage_error" || { echo "FAIL: 'help zzz --json' must emit usage_error"; exit 1; }
 echo "PASS: B1 help --json — per-command & agents JSON parseable, both flag orders, errors structured"
 
+# (14) Codex#6: --help/-h honors a trailing --json regardless of flag order.
+for combo in "--help --json" "--json --help" "-h --json" "--json -h"; do
+  # shellcheck disable=SC2086
+  out="$("$cli" $combo 2>&1)"
+  echo "$out" | jq -e 'type == "array"' >/dev/null \
+    || { echo "FAIL: 'opensop $combo' must emit a JSON array (order-independent --json)"; exit 1; }
+done
+echo "PASS: B1 --help honors --json in any order"
+
 echo "ALL PASS"
