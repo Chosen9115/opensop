@@ -1718,27 +1718,19 @@ addressed in §11.4 (fault-record redaction).
 
 ### 10.3 Manifest-level run summary
 
-The run-level `manifest.json` (§5.5) gains a `metrics` block written at
-completion:
+**Shipped today (C1a):** the run-level `manifest.json` (§5.5) carries a top-level
+`duration_ms` — total run wall time — for completed, failed, and waiting runs:
 
 ```json
-{
-  "run_id": "...",
-  "process": "lead-qualification",
-  "status": "completed",
-  "started_at": "...",
-  "ended_at": "...",
-  "metrics": {
-    "duration_ms": 4210,
-    "total_tokens_in": 312,
-    "total_tokens_out": 47,
-    "llm_step_count": 1
-  }
-}
+{ "run_id": "...", "process": "lead-qualification", "status": "completed",
+  "started_at": "...", "ended_at": "...", "duration_ms": 4210 }
 ```
 
-`total_tokens_in` and `total_tokens_out` are the sum of all `llm` steps in the
-run. `llm_step_count` is the count of steps with a non-null `model`.
+**Reserved for v0.7.x (not yet implemented):** an aggregated `metrics` block —
+`{ total_tokens_in, total_tokens_out, llm_step_count }` summed across the run's
+`llm` steps — lands with `opensop bench` (C1b). Until then, consumers that need
+per-run token totals aggregate them from the per-step `tokens_in`/`tokens_out`
+fields (§10.2). Do not rely on a `manifest.metrics` object on current receipts.
 
 ### 10.4 Server — no new columns required
 
