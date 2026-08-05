@@ -9,6 +9,23 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Added
+
+- **Robust help engine (B1).** `cmd_help` is now driven by a single command registry
+  (`_registry_raw`) that holds each subcommand's name, summary, usage, category, and
+  backend. All help output is rendered from this one table — no more duplicated command
+  descriptions.
+
+  - `opensop help <command>` — per-command detail: usage, backend label, and copy-paste
+    examples for every subcommand. Unknown command exits non-zero with `usage_error` and a
+    hint pointing back to `opensop help`.
+  - `opensop help agents` — concise agent-oriented orientation: discover (search/suggest),
+    run locally, read receipts, resume paused steps, and pointers to `docs/AGENTS.md` and
+    `docs/CLAUDE-INTEGRATION.md`.
+  - `opensop help --json` (and `opensop --json help`) — emits a JSON array of
+    `{command, summary, usage, category, backend}` objects built from the same registry.
+    Agents can parse this to self-discover the full CLI surface without screen-scraping.
+
 ### Fixed
 
 - **`suggest` aborted with empty output and exit 1 on strict-`set -e` bashes (`--local` and `--remote`).**
