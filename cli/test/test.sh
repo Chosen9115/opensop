@@ -3630,9 +3630,10 @@ echo "$help_json" | jq -e 'type == "array"' >/dev/null \
 echo "$help_json" | jq -e 'all(has("command") and has("summary") and has("usage") and has("category") and has("backend"))' >/dev/null \
   || { echo "FAIL: help --json entries must have command/summary/usage/category/backend fields"; exit 1; }
 
-# Count must match the registry (count lines in _registry_raw — 25 commands)
-# We count by counting lines in the registry that are non-empty (not header lines)
-registry_count="$(bash cli/bin/opensop help --json 2>/dev/null | jq 'length')"
+# Count must match the registry. Reuse the already-captured output ($cli is an
+# absolute path; do NOT recompute via a cwd-relative path — that breaks when the
+# suite is run from inside cli/).
+registry_count="$(echo "$help_json" | jq 'length')"
 [ "$registry_count" -gt 0 ] || { echo "FAIL: help --json array should be non-empty"; exit 1; }
 # 'list' must be in the output
 echo "$help_json" | jq -e 'any(.[]; .command == "list")' >/dev/null \
@@ -3675,5 +3676,40 @@ set -e
 echo "$help_noargs" | grep -q "opensop" \
   || { echo "FAIL: help with no args should show opensop branding"; exit 1; }
 echo "PASS: B1 help (no args) — full help renders from dispatch"
+
+# (8) Codex#1: history/compass are dual (local-capable), not remote-only —
+#     the registry must not tell agents to require --remote for local commands.
+help_json_b="$("$cli" help --json 2>&1)"
+for c in history compass; do
+  be="$(echo "$help_json_b" | jq -r --arg c "$c" '.[] | select(.command==$c) | .backend')"
+  [ "$be" = "dual" ] || { echo "FAIL: registry backend for '$c' should be 'dual' (routes locally by default), got '$be'"; exit 1; }
+done
+echo "PASS: B1 registry backends — history/compass classified dual (match local routing)"
+
+# (9) Codex#4: every registry row decodes to exactly 5 fields, so a stray pipe
+#     can't silently corrupt --json metadata. Backend must be a known enum.
+echo "$help_json_b" | jq -e 'all(.[]; (.backend | . == "local" or . == "remote" or . == "dual")
+                                       and (.command|length>0) and (.category|length>0))' >/dev/null \
+  || { echo "FAIL: registry JSON has a malformed row (bad backend/empty field — possible stray pipe)"; exit 1; }
+echo "PASS: B1 registry round-trip — all rows decode to valid 5-field records"
+
+# (10) Codex#2: multiword 'help schema validate' resolves to the registry entry.
+set +e
+help_sv="$("$cli" help schema validate 2>&1)"; help_sv_rc=$?
+set -e
+[ "$help_sv_rc" -eq 0 ] || { echo "FAIL: 'help schema validate' should exit 0, got $help_sv_rc"; exit 1; }
+echo "$help_sv" | grep -q "schema validate" \
+  || { echo "FAIL: 'help schema validate' should show the multiword command detail"; exit 1; }
+echo "PASS: B1 help schema validate — multiword command is addressable"
+
+# (11) Codex#3: 'opensop --remote help' renders instead of dying config_missing,
+#      even with no server configured (help is local-only, short-circuits init).
+set +e
+help_remote="$(env -u OPENSOP_URL OPENSOP_HOME="$(mktemp -d)" "$cli" --remote help 2>&1)"; help_remote_rc=$?
+set -e
+[ "$help_remote_rc" -eq 0 ] || { echo "FAIL: '--remote help' should render (exit 0), got $help_remote_rc: $help_remote"; exit 1; }
+echo "$help_remote" | grep -q "opensop" \
+  || { echo "FAIL: '--remote help' should render help, not a config error"; exit 1; }
+echo "PASS: B1 --remote help — renders regardless of server config (local-only short-circuit)"
 
 echo "ALL PASS"

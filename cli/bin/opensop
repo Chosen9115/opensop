@@ -696,6 +696,9 @@ cmd_fork() {
 # _registry_raw — emit the raw registry lines (one per command).
 # Intentionally NOT an associative array so we preserve insertion order
 # and work cleanly on bash 4+ without `declare -A` footguns.
+# Row format: name|summary|usage|category|backend  — EXACTLY 5 pipe fields.
+# No field may contain a literal '|' (it would shift/truncate the split and
+# corrupt --json metadata). test.sh asserts the 5-field invariant.
 _registry_raw() {
   cat <<'REGISTRY'
 list|list processes in the cell chain (or server with --remote)|list [dir] [--tag <tag>] [--conflicts]|discovery|dual
@@ -705,8 +708,8 @@ schema|show the full definition of a named process (remote only)|schema <name>|d
 status|show the current state of a run|status <run_id>|inspection|dual
 steps|list per-step state of a run|steps <run_id>|inspection|dual
 diff|compare two runs of the same process|diff <run_id1> <run_id2>|inspection|dual
-history|recent runs of a specific process, newest-first|history --process <name> [--limit N]|inspection|remote
-compass|top processes by run-count, recency, and failure rate|compass|inspection|remote
+history|recent runs of a specific process, newest-first|history --process <name> [--limit N]|inspection|dual
+compass|top processes by run-count, recency, and failure rate|compass|inspection|dual
 run|start a new run of a process|run <name/file.sop.json> [--input k=v ...]|execution|dual
 dry-run|validate inputs and preview steps — no run created|dry-run <name/file.sop.json> [--input k=v ...]|execution|dual
 submit|resume a paused (waiting) run by supplying step outputs|submit <run_id> <step-id> [--output k=v ...]|execution|dual
@@ -761,7 +764,7 @@ cmd_help() {
     case "$1" in
       --json) want_json=true ;;
       -*)     die "unknown flag '$1'" "unknown_flag" "opensop help [<command>|agents] [--json]" ;;
-      *)      subcmd="$1" ;;
+      *)      subcmd="${subcmd:+$subcmd }$1" ;;  # join words so 'help schema validate' resolves
     esac
     shift
   done
@@ -935,12 +938,14 @@ EX
       ;;
     history)
       cat <<'EX'
-  opensop --remote history --process lead-qualification --limit 10
+  opensop history --process lead-qualification --limit 10   # local runs of one process
+  opensop --remote history --process lead-qualification     # server-side history
 EX
       ;;
     compass)
       cat <<'EX'
-  opensop --remote compass             # top processes by usage and failure rate
+  opensop compass                      # local: top processes by usage and failure rate
+  opensop --remote compass             # server-side
 EX
       ;;
     run)
@@ -4421,6 +4426,12 @@ main() {
 
   local cmd="$1"; shift
 
+  # help is local-only and must render regardless of --remote / server config.
+  # Short-circuit BEFORE the remote config + curl init below, so that
+  # 'opensop --remote help', 'help <cmd>', and 'help --json' never die with
+  # config_missing on an unconfigured server.
+  if [[ "$cmd" == "help" ]]; then cmd_help "$@"; exit $?; fi
+
   # Config (~/.opensop) is only needed for the remote backend (OPENSOP_URL, OPENSOP_TOKEN).
   # Local-mode runs are fully self-contained and never need the config file.
   if [[ "$REMOTE_MODE" == true ]]; then
@@ -4479,9 +4490,7 @@ main() {
     annotate)   cmd_annotate "$@" ;;
     lineage)    cmd_lineage "$@" ;;
     fork)       cmd_fork "$@" ;;
-    # help is local-only: does not need curl, does not need config.
-    # Dispatch here so 'opensop help <cmd>' and 'opensop help --json' work.
-    help)       cmd_help "$@" ;;
+    # 'help' is handled by the local-only short-circuit above (before remote init).
     *)          die "unknown command '$cmd' — run 'opensop help' for usage" "unknown_command" "run opensop help" ;;
   esac
 }
