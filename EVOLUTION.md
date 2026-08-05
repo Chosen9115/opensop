@@ -8,7 +8,7 @@ A skill running in a cell is never done. It starts as prose, grows a structure, 
 
 The lineage/annotate/fork substrate this policy builds on is defined in `SPEC.md §7` (The Cell Substrate) — §7.2 the commands, §7.5 the `.opensop/lineage.json` schema. What is *experimental* here is only the mineralization **policy** layered on top: the `m`-tier values, the transition thresholds, and the not-yet-shipped `opensop evolve` command.
 
-**How current state is derived.** `opensop annotate` is append-only — it adds an event to `history[]` and does **not** mutate the entry's top-level `status`/`metadata`. So **history is canonical**: a skill's current tier/status is the `to`/`status` of its most recent `promote`/`demote`/`fork-inherit` event. Maintaining the derived top-level `status`/`metadata.m` fields is the job of the (experimental, unshipped) `opensop evolve` writer; until it ships, derive from history with the `jq` snippet in the CLI Substrate section below.
+**How current state is derived.** `opensop annotate` is append-only — it adds an event to `history[]` and does **not** mutate the entry's top-level `status`/`metadata`. So **history is canonical**, with each field carried forward independently: the current **tier** is the `to` of the most recent event that carries one, and the current **status** is the `status` of the most recent event that carries one (each persists until a later event overrides it). This is why not every payload needs to repeat both fields. Maintaining the derived top-level `status`/`metadata.m` fields is the job of the (experimental, unshipped) `opensop evolve` writer; until it ships, derive from history with the `jq` snippet in the CLI Substrate section below.
 
 ---
 
@@ -129,6 +129,12 @@ After the first successful run:
 opensop annotate <skill> promote '{"from":"m4.12","to":"m4.13","status":"mineralized","reason":"first run verified"}'
 ```
 
+If the first run instead **fails**, record the demotion carrying `status: fractured` (standard demotion applies; tier resets to `.1`):
+
+```bash
+opensop annotate <skill> demote '{"from":"m4.12","to":"m3.1","status":"fractured","reason":"first run in cell failed"}'
+```
+
 ---
 
 ## CLI substrate
@@ -163,9 +169,10 @@ The top-level `metadata` and `status` fields are open and unvalidated, but note 
 
 ```bash
 jq -r '
-  to_entries[] | .key as $k
-  | (.value.history | map(select(.type=="promote" or .type=="demote" or .type=="fork-inherit")) | last) as $e
-  | [$k, ($e.data.status // "-"), ($e.data.to // $e.data.m // "-")] | @tsv
+  to_entries[] | .key as $k | .value.history as $h
+  | ($h | map(select(.data.to     // .data.m)) | last | (.data.to // .data.m) // "-") as $tier
+  | ($h | map(select(.data.status))            | last | .data.status          // "-") as $status
+  | [$k, $status, $tier] | @tsv
 ' .opensop/lineage.json | column -t
 ```
 
