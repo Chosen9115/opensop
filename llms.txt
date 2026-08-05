@@ -2,7 +2,7 @@
 
 > Process as Infrastructure for agentic processes — declare, version, fork, run, and audit a process as a file in your repo.
 
-OpenSOP makes agentic processes reproducible. A naive prompt re-derives the procedure on every invocation — different shape, different fields, no audit trail. An OpenSOP process pins the steps, validates every output against a declared schema, and writes an append-only receipt to disk. The same file, the same behavior, every time.
+OpenSOP makes agentic processes reproducible *as procedures*. A naive prompt re-derives the procedure on every invocation — different shape, different fields, invented items, no audit trail. An OpenSOP process pins the steps, validates every output against a declared schema, and writes an append-only receipt to disk: the same procedure, the same output contract, and a full audit trail on every run. (Step *values* still depend on models, commands, inputs, and external services — what OpenSOP fixes is the procedure, the schema, and the receipt, not the laws of nondeterminism.)
 
 **Terraform is to cloud resources what OpenSOP is to agentic processes.**
 
@@ -12,7 +12,7 @@ OpenSOP makes agentic processes reproducible. A naive prompt re-derives the proc
 
 A process is a `.sop.json` (or `.sop.yaml`) file declaring typed inputs, an ordered list of steps, and typed outputs. It lives in your repo, reviews in your PRs, ships in your commits.
 
-Step types: `shell`, `automated`, `noop`, `form`, `approval`, `llm`, `wait`, `webhook`, `subprocess`, `loop`, `judgment`, `notification`. Each step declares what it requires and what it returns. When a required upstream output is missing, execution stops — the runtime does not ask an LLM to fill the gap.
+Step types executable by the local CLI today: `automated`, `shell`, `noop`, `form`, `approval`, `wait`, `llm`, `webhook`, `subprocess`. Additional types — `loop`, `judgment`, `notification` — are defined in the spec but run server-side (see the [SPEC.md](SPEC.md) §3 capability matrix for what runs where). Each step declares what it requires and what it returns. When a required upstream output is missing, execution stops — the runtime does not ask an LLM to fill the gap.
 
 Spec version: **0.7**. Full grammar in [SPEC.md](SPEC.md).
 
@@ -20,7 +20,7 @@ Spec version: **0.7**. Full grammar in [SPEC.md](SPEC.md).
 
 ## Why it helps an agent
 
-- **Reproducibility.** The process file is the source of truth. `opensop run extract-action-items.sop.json` produces the same structured output on run 1 and run 100 — same schema, same validation, same receipt.
+- **Reproducibility of procedure, not luck.** The process file is the source of truth: the same steps, the same declared output schema, and the same audit format on every run. Where a naive prompt drifts run-to-run — different fields, invented items, unstructured prose — the process holds the contract: output that conforms to the schema every time (step *values* still depend on models and inputs).
 - **Scope discipline.** The prompt is part of the file. Output fields are declared. The LLM step validates its response against `expected_output_schema` and retries on mismatch — it cannot silently return the wrong shape.
 - **Auditability.** Every run writes `manifest.json`, `audit.jsonl`, and `context.json` under `.opensop/runs/<run_id>/`. Inspect any run after the fact.
 - **Discovery before invention.** Before re-deriving a procedure, search for an existing process: `opensop search <keyword>` or `opensop suggest "<task description>"`. Write new only when no match clears a confidence threshold.
