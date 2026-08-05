@@ -1666,7 +1666,7 @@ The following fields must be written into each completed step receipt in
 | `tokens_in` | integer or `null` | LLM provider response | Input tokens consumed by this step. `null` for non-LLM steps. |
 | `tokens_out` | integer or `null` | LLM provider response | Output tokens produced by this step. `null` for non-LLM steps. |
 | `token_source` | string or `null` | computed | For `llm` steps: `"api"` when the provider returned a `usage` block, or `"chars"` when tokens were approximated from output length (stub path or absent usage). `null` for non-LLM steps. |
-| `result_hash` | string or `null` | computed | SHA-256 of the `jq -S` (sorted-key) canonicalization of the step's `output`, via a portable hasher (`sha256sum` → `shasum -a 256` → `openssl`). A fast same/different reproducibility signal; **field-level** comparison uses the `output` object directly (already in the receipt). Value is the 64-char hex digest, or `"unavailable"` when no hasher exists, or `"pending"` for a step paused before producing output. `null`/absent on pre-v0.7 receipts. |
+| `result_hash` | string or `null` | computed | SHA-256 of the **compact, sorted-key** canonicalization of the step's `output` — exactly the bytes of `jq -Sc . <<< "$output"` **with no trailing newline** (as when captured in `$(...)` and piped via `printf '%s'`), through a portable hasher (`sha256sum` → `shasum -a 256` → `openssl`). A fast same/different reproducibility signal; **field-level** comparison uses the `output` object directly (already in the receipt). Value is the 64-char hex digest, or `"unavailable"` when no hasher exists, or `"pending"` for a step paused before producing output. `null`/absent on pre-v0.7 receipts. |
 
 **Local receipt schema extension (adds to §5.6):**
 
@@ -1691,20 +1691,25 @@ The following fields must be written into each completed step receipt in
 ```
 
 **Optionality:** `tokens_in`, `tokens_out`, `token_source`, and `model` are
-present only for `llm` steps. `duration_ms` and `result_hash` are present for
-every step event.
+present only for `llm` steps. `duration_ms` and `result_hash` are present on
+every **ordinarily-executed** step event (automated/shell/llm/noop) and on
+every **waiting** event (`result_hash: "pending"`). See the scope note below for
+the one currently-reserved case (resumed completions).
 
 **Append-only audit semantics (§5.6):** `audit.jsonl` is never mutated. A step
-that pauses (form/approval) writes a **waiting** event carrying `duration_ms`
-(start → pause) and `result_hash: "pending"`. When the step later resumes,
-`local_submit` appends a separate **completed** event with its own `duration_ms`
-(resume → completion) and the real `result_hash` digest. The `"pending"` value
-on the waiting event is permanent — no event is edited or back-patched. Any
-reader that wants the final digest reads the completed event.
+that pauses (form/approval/`wait.until`) writes a **waiting** event carrying
+`duration_ms` (start → pause) and `result_hash: "pending"`. When the step later
+resumes, `local_submit` appends a *separate* **completed** event. The
+`"pending"` value on the waiting event is permanent — no event is edited or
+back-patched. Any reader that wants the final digest reads the completed event.
 
-Capturing `duration_ms` and `result_hash` on the resumed-completion event is
-landing with a C1a follow-up; the waiting event's `duration_ms` and
-`result_hash: "pending"` are written today.
+**Scope (reserved):** capturing `duration_ms` and `result_hash` **on the
+resumed-completion event** (the completed event appended by `local_submit`) is
+**reserved for v0.7.x** — not yet shipped (tracked as the C1a follow-up). Today
+the guarantee covers ordinarily-executed step events and the waiting event's
+`duration_ms` + `result_hash: "pending"`; a resumed step's completed event may
+omit these fields until the follow-up lands. Conforming implementations should
+not rely on the completed-event digest for resumed steps yet.
 
 **result_hash and PII:** `result_hash` is a digest, not the data, so it exposes
 no personal data. The `output` object it hashes is written verbatim (not a
@@ -1748,12 +1753,17 @@ the observability terminal (G1/A2).
 The `result_hash` field (§10.2) enables the benchmark harness (`opensop bench`,
 C1b) to detect whether two runs of the same process produced the same output
 without loading and diffing full JSON blobs. It is a portable SHA-256 of the
-`jq -S` (sorted-key) canonicalization of the step's `output`.
+**compact, sorted-key** canonicalization of the step's `output`.
 
 A conforming implementation must compute `result_hash` as the SHA-256 hex
-digest of `jq -S '.' <<< "$output_json"` (falling back to `shasum -a 256` or
-`openssl dgst -sha256` if `sha256sum` is absent). An implementation that
-cannot invoke any hasher writes `"unavailable"`.
+digest of the exact bytes produced by `jq -Sc . <<< "$output_json"` **with no
+trailing newline** — i.e. capture that value in a command substitution (which
+strips the trailing newline) and hash it via `printf '%s' "$canon" | sha256sum`
+(falling back to `shasum -a 256` or `openssl dgst -sha256` if `sha256sum` is
+absent). Two conforming implementations must produce identical digests for the
+same output, so the exact byte sequence (compact, sorted keys, no trailing
+newline) is normative. An implementation that cannot invoke any hasher writes
+`"unavailable"`.
 
 **Field-level comparison** uses the `output` object directly — it is already
 stored verbatim in the receipt. `result_hash` is a fast same/different signal
