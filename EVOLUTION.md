@@ -143,7 +143,7 @@ All policy state lives in `.opensop/lineage.json` in the active cell, keyed by `
 
 | Command | What it does |
 |---|---|
-| `opensop annotate <skill> <event-type> '<json>'` | Append a policy event to the skill's history. This is the only write path. |
+| `opensop annotate <skill> <event-type> '<json>'` | Append a policy event to the skill's history. This is the only path for *appending policy events* (`fork` also writes lineage, creating the child entry + `forked_from` snapshot). |
 | `opensop lineage <skill>` | Print the full lineage entry: status, metadata, forked_from, history. |
 | `opensop lineage <skill> --json` | Machine-readable. Pipe to `jq` for scripting. |
 | `opensop fork <skill>` | Copy from nearest ancestor + snapshot parent state. Child starts empty; apply `fork-inherit` annotation to record the inherited tier. |
