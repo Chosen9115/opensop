@@ -6,7 +6,9 @@
 
 A skill running in a cell is never done. It starts as prose, grows a structure, and — one step at a time — converts LLM judgment calls into deterministic code. Each conversion lowers cost and raises reliability. This document defines the rules for moving a skill forward, when to pull it back, what fork semantics apply, and how the CLI substrate records it all.
 
-The lineage/annotate/fork substrate this policy builds on is CLI-only today (`opensop annotate` / `lineage` / `fork`, storing per-cell state in `.opensop/lineage.json`); it is not yet in `SPEC.md`. The field contract is scheduled to land in the spec at S0b.
+The lineage/annotate/fork substrate this policy builds on is defined in `SPEC.md §7` (The Cell Substrate) — §7.2 the commands, §7.5 the `.opensop/lineage.json` schema. What is *experimental* here is only the mineralization **policy** layered on top: the `m`-tier values, the transition thresholds, and the not-yet-shipped `opensop evolve` command.
+
+**How current state is derived.** `opensop annotate` is append-only — it adds an event to `history[]` and does **not** mutate the entry's top-level `status`/`metadata`. So **history is canonical**: a skill's current tier/status is the `to`/`status` of its most recent `promote`/`demote`/`fork-inherit` event. Maintaining the derived top-level `status`/`metadata.m` fields is the job of the (experimental, unshipped) `opensop evolve` writer; until it ships, derive from history with the `jq` snippet in the CLI Substrate section below.
 
 ---
 
@@ -155,13 +157,16 @@ All policy state lives in `.opensop/lineage.json` in the active cell, keyed by `
 }
 ```
 
-The `metadata` and `status` fields are open — the substrate does not validate them. This policy owns what goes in them.
+The top-level `metadata` and `status` fields are open and unvalidated, but note (per "How current state is derived" above) that `annotate` does **not** write them — it only appends to `history[]`. Treat history as canonical and derive current tier/status from the latest event; the top-level fields are reserved for the future `opensop evolve` writer.
 
-**`opensop evolve status` (experimental command — not yet shipped).** When implemented, it reads `lineage.json` for all skills in the active cell and prints a tier table. Until it ships, compose it yourself:
+**`opensop evolve status` (experimental command — not yet shipped).** When implemented, it will maintain the derived top-level fields and print a tier table. Until it ships, derive the table from history yourself:
 
 ```bash
-jq -r 'to_entries[] | [.key, (.value.status // "-"), (.value.metadata.m // "-")] | @tsv' \
-  .opensop/lineage.json | column -t
+jq -r '
+  to_entries[] | .key as $k
+  | (.value.history | map(select(.type=="promote" or .type=="demote" or .type=="fork-inherit")) | last) as $e
+  | [$k, ($e.data.status // "-"), ($e.data.to // $e.data.m // "-")] | @tsv
+' .opensop/lineage.json | column -t
 ```
 
 ---
@@ -196,9 +201,9 @@ Auto-deletion is forbidden. All archives are recoverable.
 opensop annotate extract-action-items promote \
   '{"from":"m2.5","to":"m3.1","step":"validate-json","reason":"identical output on 3 consecutive runs"}'
 
-# Demote after a schema failure
+# Demote after a schema failure (tier change resets the iteration suffix to .1)
 opensop annotate extract-action-items demote \
-  '{"from":"m3.1","to":"m2.6","step":"validate-json","reason":"schema validation failed 2026-08-05"}'
+  '{"from":"m3.1","to":"m2.1","step":"validate-json","reason":"schema validation failed 2026-08-05"}'
 
 # Fork into a new cell and record inherited tier
 opensop fork extract-action-items --from /workspace/shared-cell
