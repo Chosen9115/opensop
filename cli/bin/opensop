@@ -729,22 +729,49 @@ help|show help for a command or the full command reference|help [<command>] [--j
 REGISTRY
 }
 
+# _registry_row_json name summary usage category backend — one command object.
+_registry_row_json() {
+  jq -nc \
+    --arg cmd      "$1" \
+    --arg summary  "$2" \
+    --arg usage    "$3" \
+    --arg category "$4" \
+    --arg backend  "$5" \
+    '{command:$cmd, summary:$summary, usage:$usage, category:$category, backend:$backend}'
+}
+
+# _registry_lookup name — echo the raw registry row for a command, or return 1.
+# Byte-exact first-field match (see _cmd_help_command for why not grep/awk -v).
+_registry_lookup() {
+  local name="$1" row
+  while IFS= read -r row; do
+    [[ "${row%%|*}" == "$name" ]] && { printf '%s\n' "$row"; return 0; }
+  done < <(_registry_raw)
+  return 1
+}
+
 # _registry_json — emit the full registry as a JSON array.
 _registry_json() {
-  local first=true
-  printf '[\n'
-  while IFS='|' read -r name summary usage category backend; do
-    [[ -z "$name" ]] && continue
-    if $first; then first=false; else printf ',\n'; fi
-    jq -nc \
-      --arg cmd      "$name"     \
-      --arg summary  "$summary"  \
-      --arg usage    "$usage"    \
-      --arg category "$category" \
-      --arg backend  "$backend"  \
-      '{command:$cmd, summary:$summary, usage:$usage, category:$category, backend:$backend}'
-  done < <(_registry_raw)
-  printf '\n]\n'
+  { while IFS='|' read -r name summary usage category backend; do
+      [[ -z "$name" ]] && continue
+      _registry_row_json "$name" "$summary" "$usage" "$category" "$backend"
+    done < <(_registry_raw); } | jq -s '.'
+}
+
+# _registry_command_json name — emit one command's record, or die usage_error.
+_registry_command_json() {
+  local name="$1" row n s u c b
+  row="$(_registry_lookup "$name")" \
+    || die "no help for '${name}'" "usage_error" "run 'opensop help' for the command list"
+  IFS='|' read -r n s u c b <<< "$row"
+  _registry_row_json "$n" "$s" "$u" "$c" "$b"
+}
+
+# _registry_agents_json — machine-readable form of 'help agents'.
+_registry_agents_json() {
+  jq -nc '{topic:"agents",
+           discovery:["search","suggest","list","help --json"],
+           guides:["docs/AGENTS.md","docs/CLAUDE-INTEGRATION.md"]}'
 }
 
 # --------------------------------------------------------------------------- #
@@ -775,15 +802,15 @@ cmd_help() {
     return 0
   fi
 
-  # help agents: concise agent-oriented orientation.
+  # help agents: concise agent-oriented orientation (JSON honors --json).
   if [[ "$subcmd" == "agents" ]]; then
-    _cmd_help_agents
+    if $want_json; then _registry_agents_json; else _cmd_help_agents; fi
     return 0
   fi
 
-  # help <command>: per-command detail.
+  # help <command>: per-command detail (JSON honors --json).
   if [[ -n "$subcmd" ]]; then
-    _cmd_help_command "$subcmd"
+    if $want_json; then _registry_command_json "$subcmd"; else _cmd_help_command "$subcmd"; fi
     return 0
   fi
 
@@ -864,17 +891,12 @@ EOF
 # _cmd_help_command <name> — per-command detail from the registry.
 _cmd_help_command() {
   local name="$1"
-  local line="" row summary usage category backend
+  local line summary usage category backend
 
-  # Byte-exact match on the first field, in pure bash. Neither a grep regex nor
-  # awk -v is safe here: grep would let 'help .*' match a row, and awk -v decodes
-  # backslash escapes (so 'help \162un' would alias to 'run'). ${row%%|*} strips
-  # at the first '|' with no interpretation, so agents keying on the usage_error
-  # exit code get a truthful unknown-command signal.
-  while IFS= read -r row; do
-    if [[ "${row%%|*}" == "$name" ]]; then line="$row"; break; fi
-  done < <(_registry_raw)
-  [[ -n "$line" ]] \
+  # _registry_lookup is a byte-exact first-field match in pure bash. Neither a
+  # grep regex nor awk -v is safe: grep would let 'help .*' match a row, and
+  # awk -v decodes backslash escapes (so 'help \162un' would alias to 'run').
+  line="$(_registry_lookup "$name")" \
     || die "no help for '${name}'" "usage_error" "run 'opensop help' for the command list"
 
   IFS='|' read -r _ summary usage category backend <<< "$line"

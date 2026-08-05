@@ -3724,4 +3724,20 @@ for pat in '.*' 'schema.*' 'ru.' '\162un' '\x72un'; do
 done
 echo "PASS: B1 help lookup is literal — regex metacharacters do not match commands"
 
+# (13) Codex#5: --json must be honored for per-command and agents help, in both
+#      global-flag orders — a 0-exit JSON-mode call must emit parseable JSON.
+echo "$("$cli" help run --json 2>&1)" | jq -e '.command == "run" and (.backend|length>0)' >/dev/null \
+  || { echo "FAIL: 'help run --json' must emit the run command record as JSON"; exit 1; }
+echo "$("$cli" --json help run 2>&1)" | jq -e '.command == "run"' >/dev/null \
+  || { echo "FAIL: '--json help run' (alternate order) must emit JSON"; exit 1; }
+echo "$("$cli" help agents --json 2>&1)" | jq -e '.topic == "agents" and (.guides|type=="array")' >/dev/null \
+  || { echo "FAIL: 'help agents --json' must emit a JSON object"; exit 1; }
+# unknown command in JSON mode still errors (structured), not a bogus object
+set +e
+bad_json="$("$cli" help zzz --json 2>&1)"; bad_rc=$?
+set -e
+[ "$bad_rc" -ne 0 ] || { echo "FAIL: 'help zzz --json' must exit non-zero"; exit 1; }
+echo "$bad_json" | grep -q "usage_error" || { echo "FAIL: 'help zzz --json' must emit usage_error"; exit 1; }
+echo "PASS: B1 help --json — per-command & agents JSON parseable, both flag orders, errors structured"
+
 echo "ALL PASS"
