@@ -12,11 +12,12 @@
 #   curl -fsSL ... | bash -s -- --prefix /usr/local
 #
 # Flags:
-#   --version X.Y.Z   install a specific tagged release (default: latest = main)
-#   --prefix  PATH    install directory parent; binary lands at <prefix>/bin/opensop
-#                     (default: ~/.local — user-writable, no sudo needed)
-#   --dry-run         print what would happen without making changes
-#   --help            show this help
+#   --version X.Y.Z     install a specific tagged release (default: latest = main)
+#   --prefix  PATH      install directory parent; binary lands at <prefix>/bin/opensop
+#                       (default: ~/.local — user-writable, no sudo needed)
+#   --dry-run           print what would happen without making changes
+#   --allow-unverified  skip checksum verification if no .sha256 file is published yet
+#   --help              show this help
 #
 # Platform notes:
 #   Linux   — fully supported; bash 4+ is the distro default everywhere.
@@ -33,6 +34,12 @@
 #
 # The installer is idempotent: running it again on an already-installed system
 # simply re-downloads and replaces the binary with the same (or newer) version.
+#
+# Security:
+#   The installer fetches a companion <binary>.sha256 checksum file from the
+#   same release location and verifies the download before installing.  If no
+#   checksum file is published yet, the install aborts unless --allow-unverified
+#   is passed.  GPG signing is planned as a follow-up.
 
 set -euo pipefail
 
@@ -62,6 +69,7 @@ _bold()    { printf '\033[1m%s\033[0m' "$*"; }
 PIN_VERSION=""
 PREFIX="${HOME}/.local"
 DRY_RUN=false
+ALLOW_UNVERIFIED=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -74,6 +82,7 @@ while [[ $# -gt 0 ]]; do
       PREFIX="$2"; shift
       ;;
     --dry-run) DRY_RUN=true ;;
+    --allow-unverified) ALLOW_UNVERIFIED=true ;;
     --help|-h)
       grep '^#' "$0" | grep -v '^#!/' | sed 's/^# \{0,2\}//'
       exit 0
@@ -141,6 +150,7 @@ else
 fi
 
 FETCH_URL="${RAW_BASE}/${FETCH_REF}/cli/bin/${BINARY_NAME}"
+CHECKSUM_URL="${RAW_BASE}/${FETCH_REF}/cli/bin/${BINARY_NAME}.sha256"
 
 # --------------------------------------------------------------------------- #
 # Show plan
@@ -150,6 +160,7 @@ printf '\n'
 printf '  %s\n' "$(_bold "OpenSOP CLI installer")"
 printf '\n'
 printf '  source  : %s\n' "$FETCH_URL"
+printf '  checksum: %s\n' "$CHECKSUM_URL"
 printf '  target  : %s\n' "$INSTALL_PATH"
 [[ -n "$PIN_VERSION" ]] && printf '  version : %s\n' "$TAG"
 $DRY_RUN       && printf '  mode    : DRY RUN (no changes will be made)\n'
@@ -164,9 +175,22 @@ fi
 # Download
 # --------------------------------------------------------------------------- #
 
-TMP_BIN="$(mktemp)"
+# Create the install directory first so we can place temp files there.
+# This guarantees temp file and destination are on the same filesystem —
+# making mv(1) an atomic rename (no truncation window, no cp fallback).
+if [[ ! -d "$INSTALL_DIR" ]]; then
+  _info "creating ${INSTALL_DIR} …"
+  mkdir -p "$INSTALL_DIR" || _die "could not create ${INSTALL_DIR} — try --prefix with a writable path, or run with sudo"
+fi
+
+if [[ ! -w "$INSTALL_DIR" ]]; then
+  _die "${INSTALL_DIR} is not writable.  Try:\n  sudo bash -s -- --prefix /usr/local < install.sh\nor use a writable prefix:\n  bash install.sh --prefix \$HOME/.local"
+fi
+
+TMP_BIN="$(mktemp "${INSTALL_DIR}/.opensop-install.XXXXXX")"
+TMP_SUM="$(mktemp "${INSTALL_DIR}/.opensop-install-sum.XXXXXX")"
 # shellcheck disable=SC2064
-trap "rm -f '$TMP_BIN'" EXIT
+trap "rm -f '$TMP_BIN' '$TMP_SUM'" EXIT
 
 _info "downloading ${FETCH_URL} …"
 curl_exit=0
@@ -184,26 +208,59 @@ fi
 NEW_VERSION="$(grep -m1 'OPENSOP_CLI_VERSION=' "$TMP_BIN" | sed 's/.*OPENSOP_CLI_VERSION="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/')"
 
 # --------------------------------------------------------------------------- #
+# Checksum verification
+# --------------------------------------------------------------------------- #
+
+# Portable SHA-256: prefer sha256sum (coreutils), then shasum (macOS), then openssl.
+_portable_sha256() {
+  local f="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$f" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$f" | awk '{print $NF}'
+  else
+    return 1
+  fi
+}
+
+sum_curl_exit=0
+curl -fsSL "$CHECKSUM_URL" -o "$TMP_SUM" 2>/dev/null || sum_curl_exit=$?
+if [[ $sum_curl_exit -eq 0 && -s "$TMP_SUM" ]]; then
+  # Verify SHA-256 of the downloaded binary.
+  expected_sum="$(awk '{print $1}' "$TMP_SUM" | tr '[:upper:]' '[:lower:]')"
+  actual_sum="$(_portable_sha256 "$TMP_BIN" 2>/dev/null)" \
+    || _die "no SHA-256 tool found (need sha256sum, shasum, or openssl) — cannot verify download"
+  actual_sum="$(printf '%s' "$actual_sum" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$actual_sum" != "$expected_sum" ]]; then
+    _die "checksum mismatch — download may be corrupt or tampered with.\n  expected: ${expected_sum}\n  got:      ${actual_sum}"
+  fi
+  _ok "checksum verified (${actual_sum:0:16}…)"
+else
+  if [[ "$ALLOW_UNVERIFIED" != "true" ]]; then
+    _die "no checksum file found at ${CHECKSUM_URL} — cannot verify download integrity.\nPass --allow-unverified to skip (not recommended). GPG signing is planned."
+  fi
+  _warn "no checksum file found — proceeding unverified (--allow-unverified passed)"
+fi
+
+# --------------------------------------------------------------------------- #
 # Install
 # --------------------------------------------------------------------------- #
 
-# Create the install directory if it doesn't exist.
-if [[ ! -d "$INSTALL_DIR" ]]; then
-  _info "creating ${INSTALL_DIR} …"
-  mkdir -p "$INSTALL_DIR" || _die "could not create ${INSTALL_DIR} — try --prefix with a writable path, or run with sudo"
+# Preserve the existing binary's permissions (or default to 0755).
+TARGET_MODE="0755"
+if [[ -f "$INSTALL_PATH" ]]; then
+  existing_mode="$(stat -c '%a' "$INSTALL_PATH" 2>/dev/null \
+                || stat -f '%OLp' "$INSTALL_PATH" 2>/dev/null \
+                || echo "0755")"
+  [[ -n "$existing_mode" ]] && TARGET_MODE="$existing_mode"
 fi
+chmod "$TARGET_MODE" "$TMP_BIN"
 
-if [[ ! -w "$INSTALL_DIR" ]]; then
-  _die "${INSTALL_DIR} is not writable.  Try:\n  sudo bash -s -- --prefix /usr/local < install.sh\nor use a writable prefix:\n  bash install.sh --prefix \$HOME/.local"
-fi
-
-chmod +x "$TMP_BIN"
-# mv for an atomic replace on the same filesystem; fall back to cp.
-if ! mv "$TMP_BIN" "$INSTALL_PATH" 2>/dev/null; then
-  cp "$TMP_BIN" "$INSTALL_PATH"
-  chmod +x "$INSTALL_PATH"
-  rm -f "$TMP_BIN"
-fi
+# Atomic rename: TMP_BIN is in the same directory as INSTALL_PATH, so this
+# mv is guaranteed same-filesystem and is therefore atomic.
+mv "$TMP_BIN" "$INSTALL_PATH"
 
 _ok "installed opensop ${NEW_VERSION} → ${INSTALL_PATH}"
 

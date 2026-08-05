@@ -137,6 +137,39 @@ This project follows [Semantic Versioning](https://semver.org/) and the
     to target a specific tag; `--dry-run` to preview without writing.  Registered in
     the command registry (category `config`, backend `local`; requires `curl`).
 
+### Security (install/upgrade hardening — adversarial review)
+
+- **[high] Checksum verification before install/replace.** Both `install.sh` and
+  `opensop upgrade` now fetch a companion `<binary>.sha256` file from the same
+  release location.  If present, the download's SHA-256 is verified (portable:
+  `sha256sum` → `shasum -a 256` → `openssl dgst`) before any file is touched.
+  A mismatch aborts immediately without modifying the installed binary.  If no
+  checksum file is published yet, the operation refuses with a clear error unless
+  `--allow-unverified` is passed explicitly.  GPG signing of releases is planned
+  as a follow-up; SHA-256 verification is the current security posture.
+
+- **[high] `--pin` version match enforced.** When `--pin X.Y.Z` is requested, the
+  embedded `OPENSOP_CLI_VERSION` of the downloaded binary is checked against the
+  requested pin.  A mismatch aborts before installing.
+
+- **[high] Upgrade targets the running script (`BASH_SOURCE[0]`), not PATH.**
+  `cmd_upgrade` now derives its target from `BASH_SOURCE[0]` (the actual executing
+  file), canonicalized through symlinks via `readlink -f` / Python fallback.
+  A decoy `opensop` earlier on PATH can no longer redirect the upgrade to the
+  wrong binary.  The resolved path must be a regular file; non-files are rejected.
+
+- **[high] Atomic same-filesystem replace; truncation window eliminated.**
+  Temp files are now created inside the destination directory (not `/tmp`), so
+  `mv` is always a same-filesystem atomic rename.  The `cp`-over-live-binary
+  fallback (which had a corruption window) is removed from both `cmd_upgrade`
+  and `install.sh`.
+
+- **[medium] Executable permissions preserved.**  The temp file (created with
+  mode `0600` by `mktemp`) is `chmod`-ed to match the existing target's mode
+  before the atomic rename.  System installs at `/usr/local/bin` (typically
+  `0755`) no longer lose group/other read+execute bits.  Default is `0755` when
+  no existing file is present.  Fixed in both `cmd_upgrade` and `install.sh`.
+
 - **Robust help engine (B1).** `cmd_help` is now driven by a single command registry
   (`_registry_raw`) that holds each subcommand's name, summary, usage, category, and
   backend. All help output is rendered from this one table — no more duplicated command

@@ -100,6 +100,8 @@ curl -fsSL .../install.sh | bash -s -- --dry-run
 
 The installer checks bash version, verifies `jq` is available, and prints a `$PATH` hint if `~/.local/bin` is not yet on your path.
 
+**Verifying downloads / signing (planned):** the installer and `opensop upgrade` both fetch a companion `.sha256` checksum file from the same release location and verify the download's SHA-256 before writing anything. If no checksum file is published at the release URL the install aborts (unless `--allow-unverified` is passed). Full GPG signing of releases is planned as a follow-up; SHA-256 verification is the current security posture.
+
 ### Direct download (one line)
 
 ```bash
