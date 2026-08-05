@@ -866,7 +866,11 @@ _cmd_help_command() {
   local name="$1"
   local line summary usage category backend
 
-  line="$(_registry_raw | grep -m1 "^${name}|")" \
+  # Literal (non-regex) match on the first field — a grep pattern would let
+  # 'help .*' or 'help schema.*' spuriously match a row and exit 0, misleading
+  # agents that key on the usage_error exit code.
+  line="$(_registry_raw | awk -F'|' -v name="$name" '$1 == name { print; exit }')"
+  [[ -n "$line" ]] \
     || die "no help for '${name}'" "usage_error" "run 'opensop help' for the command list"
 
   IFS='|' read -r _ summary usage category backend <<< "$line"

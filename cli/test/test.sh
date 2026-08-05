@@ -3712,4 +3712,16 @@ echo "$help_remote" | grep -q "opensop" \
   || { echo "FAIL: '--remote help' should render help, not a config error"; exit 1; }
 echo "PASS: B1 --remote help — renders regardless of server config (local-only short-circuit)"
 
+# (12) Codex#2b: registry lookup is literal, not regex — 'help .*' / 'help schema.*'
+#      must NOT spuriously match a row; they must error like any unknown command.
+for pat in '.*' 'schema.*' 'ru.'; do
+  set +e
+  out="$("$cli" help "$pat" --json 2>&1)"; rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { echo "FAIL: 'help $pat' must not regex-match a command (should exit non-zero), got rc=$rc: $out"; exit 1; }
+  echo "$out" | grep -q "usage_error" \
+    || { echo "FAIL: 'help $pat' should emit usage_error (json), got: $out"; exit 1; }
+done
+echo "PASS: B1 help lookup is literal — regex metacharacters do not match commands"
+
 echo "ALL PASS"
