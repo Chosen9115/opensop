@@ -1655,7 +1655,8 @@ The following fields must be written into each completed step receipt in
 | `model` | string or `null` | step definition | Model identifier used for `llm` steps (e.g. `claude-haiku-4-5`). `null` for non-LLM steps. |
 | `tokens_in` | integer or `null` | LLM provider response | Input tokens consumed by this step. `null` for non-LLM steps. |
 | `tokens_out` | integer or `null` | LLM provider response | Output tokens produced by this step. `null` for non-LLM steps. |
-| `canonical_result` | string or `null` | computed | `jq -S` (sorted-key compact JSON) of the step's `output` object. Enables field-level reproducibility comparison without byte-hashing raw text. `null` when output is not valid JSON or the step failed without producing output. |
+| `token_source` | string or `null` | computed | For `llm` steps: `"api"` when the provider returned a `usage` block, or `"chars"` when tokens were approximated from output length (stub path or absent usage). `null` for non-LLM steps. |
+| `result_hash` | string or `null` | computed | SHA-256 of the `jq -S` (sorted-key) canonicalization of the step's `output`, via a portable hasher (`sha256sum` → `shasum -a 256` → `openssl`). A fast same/different reproducibility signal; **field-level** comparison uses the `output` object directly (already in the receipt). Value is the 64-char hex digest, or `"unavailable"` when no hasher exists, or `"pending"` for a step paused before producing output. `null`/absent on pre-v0.7 receipts. |
 
 **Local receipt schema extension (adds to §5.6):**
 
@@ -1674,19 +1675,20 @@ The following fields must be written into each completed step receipt in
   "model": "claude-haiku-4-5",
   "tokens_in": 312,
   "tokens_out": 47,
-  "canonical_result": "{\"rationale\":\"Strong fit.\",\"score\":8}"
+  "token_source": "api",
+  "result_hash": "9f2b1c0e5a7d3f48b6c1e0a9d2f4b7c8e1a0d3f6b9c2e5a8d1f4b7c0e3a6d9f2"
 }
 ```
 
-**Optionality:** `tokens_in`, `tokens_out`, and `model` are present only for
-`llm` steps. `duration_ms` is present for every step. `canonical_result` is
-present for every step that produces JSON output; it is `null` otherwise.
+**Optionality:** `tokens_in`, `tokens_out`, `token_source`, and `model` are
+present only for `llm` steps. `duration_ms` and `result_hash` are present for
+every step (`result_hash` is `"pending"` for a paused step, `"unavailable"`
+when no hasher exists).
 
-**No PII in canonical_result:** if a step's output may contain personal data,
-the canonical result must still be written — redaction of output fields is a
-separate concern addressed in §11.4 (fault-record redaction). The
-`canonical_result` is computed from the actual step output, not from a
-sanitized version.
+**result_hash and PII:** `result_hash` is a digest, not the data, so it exposes
+no personal data. The `output` object it hashes is written verbatim (not a
+sanitized copy); redaction of output/input fields is a separate concern
+addressed in §11.4 (fault-record redaction).
 
 ### 10.3 Manifest-level run summary
 
@@ -1797,18 +1799,16 @@ the process operates on personal data.
 1. Fault records are local files and must not be pushed to version control.
    Conforming implementations should include `**/*.fault.json` and
    `.opensop/faults/` in `.gitignore` templates.
-2. A conforming implementation must provide a redaction mechanism that strips
-   values matching declared `format: email`, `format: phone`, and any field
-   marked `pii: true` in the process definition before writing a fault record
-   that will be shared externally (e.g. via `opensop heal --share`).
-3. When the fault record redaction mechanism is not yet implemented, the
-   implementation must document this gap and warn the user before writing
-   a fault record containing input data.
-
-**DRAFT NOTE (for Opus review):** The `pii: true` field annotation and
-`format: phone` are not yet in the process definition schema (§2.2). This
-section assumes they will land with D2 (fault/heal). Flag if the shape should
-be specified here or deferred entirely to S0b.
+2. Before a fault record is shared externally (e.g. via a future
+   `opensop heal --share`), a conforming implementation must provide a
+   redaction mechanism. The **field-level annotations that drive redaction**
+   (e.g. marking a process input as personal data, or declaring a `format`)
+   are **not yet part of the §2.2 process schema** — they are specified in
+   v0.7.x together with the fault/heal work (D2). Until then, treat entire
+   fault records as sensitive.
+3. Until the redaction mechanism ships, the implementation must warn the user
+   before writing a fault record that contains input data, and keep such
+   records local (rule 1).
 
 ### 11.5 Stream and API authentication
 
