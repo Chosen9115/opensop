@@ -1699,11 +1699,13 @@ every **waiting** event (`result_hash: "pending"`). See the scope note below for
 the one currently-reserved case (resumed completions).
 
 **Append-only audit semantics (§5.6):** `audit.jsonl` is never mutated. A step
-that pauses (form/approval/`wait.until`) writes a **waiting** event carrying
-`duration_ms` (start → pause) and `result_hash: "pending"`. When the step later
-resumes, `local_submit` appends a *separate* **completed** event. The
-`"pending"` value on the waiting event is permanent — no event is edited or
-back-patched. Any reader that wants the final digest reads the completed event.
+that pauses writes a **waiting** event carrying `duration_ms` (start → pause) and
+`result_hash: "pending"`. This is shipped for `form`/`approval`/`wait.until`
+today; the remaining pause states (waiting subprocess / waiting callback) are
+covered as the resumed-metrics follow-up lands. When the step later resumes,
+`local_submit` appends a *separate* **completed** event. The `"pending"` value on
+the waiting event is permanent — no event is edited or back-patched. Any reader
+that wants the final digest reads the completed event.
 
 **Scope (reserved):** capturing `duration_ms` and `result_hash` **on the
 resumed-completion event** (the completed event appended by `local_submit`) is
