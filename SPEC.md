@@ -1564,14 +1564,16 @@ carries these rollup fields, derived from run history:
 
 | Field | Type | Description |
 |---|---|---|
-| `last_status` | `ok \| error \| never` | Result of the most recent completed run. `ok` = completed without error; `error` = completed in `failed` state; `never` = no completed run exists. |
+| `last_status` | `ok \| error \| never` | Result of the most recent run that reached `completed` or `failed`. `ok` = latest such run was `completed`; `error` = latest such run was `failed`; `never` = no `completed`/`failed` run exists. Runs in `cancelled` or `interrupted` state are **skipped** — they are neither success nor failure — so a cancelled latest run does not change `last_status`. |
 | `last_run_at` | ISO 8601 UTC or `null` | Timestamp of the most recently started run, regardless of outcome. `null` when no run exists. |
 | `next_run_at` | ISO 8601 UTC or `null` | When the next trigger fires. Non-null only when state is `scheduled` and the active scheduler can provide the value. `null` for `open` and `running` processes, and for any process whose trigger is configured but whose scheduler is not active. |
 
 **Local derivation:** scan all `manifest.json` files for this process under
 `$OPENSOP_LOCAL_HOME/runs/`. The most recent `started_at` is `last_run_at`.
 `last_status` is derived from the `status` field of the manifest with the
-latest `ended_at` that is not `running`/`waiting`/`interrupted`.
+latest `ended_at` whose status is `completed` or `failed` (manifests in
+`running`/`waiting`/`interrupted`/`cancelled` state are skipped). Server
+derivation applies the same rule to instance state.
 `next_run_at` is always `null` in the local engine until A3 (the local
 scheduler daemon) ships; until then, a process with a trigger declared is
 still reported as `open` with `next_run_at: null`.
@@ -2001,7 +2003,7 @@ process:
 | 0.1 | Initial spec: process model, 8 step types, instance lifecycle, API surface, server data model |
 | 0.2 | `llm` step, `tools:`, collection outputs, `exit_when:`, `loop:` step, interval trigger (parser-only), `post_review:` hook (roadmapped), shared state (roadmapped), `validation:` on `automated` |
 | 0.6 | Local execution backend (genuine local execution, no server), `.sop.json` flat format, run-dir artifacts (manifest/audit/context), pause/resume state machine, cell substrate (init/scope/annotate/lineage/fork), `shell` and `noop` local-only step types, `executor` audit field, `--conflicts` for list |
-| 0.7 | Process status model (§9): canonical process states (`open`/`scheduled`/`running`) and rollup fields (`last_status`, `last_run_at`, `next_run_at`). Reliability metrics contract (§10): per-step `duration_ms`, `model`, `tokens_in`, `tokens_out`, `result_hash`, `token_source` in run receipts; manifest-level `metrics` block. Security model (§11): no-telemetry statement, shell-step trust boundary, daemon secrets posture, fault-record redaction rules, stream auth requirement. Stream protocol, self-heal semantics, scheduler-trigger promotion, and server metrics API reserved for v0.7.x. `/sop/*` HTTP contract unchanged. |
+| 0.7 | Process status model (§9): canonical process states (`open`/`scheduled`/`running`) and rollup fields (`last_status`, `last_run_at`, `next_run_at`). Reliability metrics contract (§10): per-step `duration_ms`, `model`, `tokens_in`, `tokens_out`, `result_hash`, `token_source` in run receipts; top-level manifest `duration_ms` (the aggregated `metrics` block is reserved for v0.7.x). Security model (§11): no-telemetry statement, shell-step trust boundary, daemon secrets posture, fault-record redaction rules, stream auth requirement. Stream protocol, self-heal semantics, scheduler-trigger promotion, and server metrics API reserved for v0.7.x. `/sop/*` HTTP contract unchanged. |
 
 ## Appendix B — Flat vs. wrapped envelope quick reference
 
