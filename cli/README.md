@@ -63,27 +63,74 @@ Execution re-enters at `cursor.next_index` — never re-runs completed steps.
 
 ## Install
 
-### One line
+### Platform matrix
+
+| Platform | Status | Notes |
+|---|---|---|
+| Linux | Supported | bash 4+ is the distro default |
+| macOS | Supported | Requires bash 4+ — see below |
+| Windows | WSL only | Run inside a WSL Ubuntu/Debian shell |
+
+**macOS bash caveat:** macOS ships bash 3.2 (GPL licensing prevented Apple from updating it). The CLI requires bash 4+. Install a current bash via Homebrew:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/opensop -o /usr/local/bin/opensop && chmod +x /usr/local/bin/opensop
+brew install bash
+echo "$(brew --prefix)/bin/bash" | sudo tee -a /etc/shells
+chsh -s "$(brew --prefix)/bin/bash"
 ```
 
-The CLI is a single bash file living at `cli/bin/opensop` in the [opensop](https://github.com/Chosen9115/opensop) repo (the `opensop-cli` repo is archived — all development continues here).
+### Installer (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/install.sh | bash
+```
+
+Installs to `~/.local/bin/opensop` (user-writable, no sudo). Options:
+
+```bash
+# Pin to a specific release
+curl -fsSL .../install.sh | bash -s -- --version 0.8.1
+
+# Install system-wide (requires write access to /usr/local/bin)
+curl -fsSL .../install.sh | bash -s -- --prefix /usr/local
+
+# Preview without making changes
+curl -fsSL .../install.sh | bash -s -- --dry-run
+```
+
+The installer checks bash version, verifies `jq` is available, and prints a `$PATH` hint if `~/.local/bin` is not yet on your path.
+
+### Direct download (one line)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/opensop \
+  -o ~/.local/bin/opensop && chmod +x ~/.local/bin/opensop
+```
 
 ### From source
 
 ```bash
 git clone https://github.com/Chosen9115/opensop.git
-cp opensop/cli/bin/opensop /usr/local/bin/
-chmod +x /usr/local/bin/opensop
+cp opensop/cli/bin/opensop ~/.local/bin/
+chmod +x ~/.local/bin/opensop
+```
+
+The CLI is a single bash file living at `cli/bin/opensop` in the [opensop](https://github.com/Chosen9115/opensop) repo (the `opensop-cli` repo is archived — all development continues here).
+
+### Upgrade
+
+Once installed, keep it current with:
+
+```bash
+opensop upgrade              # latest release
+opensop upgrade --pin 0.9.0  # specific version
 ```
 
 ### Requirements
 
-- `bash` 4+ (any modern macOS or Linux)
-- `jq` — `brew install jq` / `apt install jq`
-- `curl` — for the **remote backend** only (`--remote` / `--server`); local execution doesn't need it
+- `bash` 4+ (Linux default; macOS needs `brew install bash` — see above)
+- `jq` — `brew install jq` / `apt install jq` / `dnf install jq`
+- `curl` — needed by `install.sh`, `opensop upgrade`, and the **remote backend** (`--remote` / `--server`); local execution does not need it
 
 ## Quick start
 

@@ -727,6 +727,7 @@ register|POST a .sop.yaml to /sop/processes/register|register <process.yaml>|aut
 schema validate|client-side YAML lint — no server round-trip|schema validate <file.yaml>|authoring|local
 instances|list runs — local by default, paginated server list with --remote|instances [--state X] [--process Y]|admin|dual
 config|show or set remote server config (url and token)|config [set url <URL>; set token <TOKEN>]|config|local
+upgrade|upgrade the installed opensop CLI to the latest (or a pinned) release|upgrade [--pin X.Y.Z]|config|local
 help|show help for a command or the full command reference|help [<command>] [--json]|config|local
 bench|3-arm reliability comparison: skill vs json_only vs opensop over N runs|bench [<task-dir>] [--n N] [--model MODEL] [--arm ARMNAME] [--stub]|bench|local
 REGISTRY
@@ -1092,6 +1093,13 @@ EX
   opensop config set token demo-public-token-resets-daily
 EX
       ;;
+    upgrade)
+      cat <<'EX'
+  opensop upgrade                              # upgrade to the latest release
+  opensop upgrade --pin 0.8.1                 # upgrade (or downgrade) to a specific version
+  opensop upgrade --pin 0.8.1 --dry-run       # print what would change without replacing the binary
+EX
+      ;;
     help)
       cat <<'EX'
   opensop help                                 # full command reference
@@ -1156,6 +1164,132 @@ ${C_BOLD}FULL GUIDE${C_RESET}
 
 ${C_DIM}⚠  local steps execute arbitrary shell — only run process files you trust${C_RESET}
 EOF
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: upgrade
+#
+# Re-fetch the single-file binary from the GitHub release and replace the
+# installed copy in-place.  Requires curl (gate checked in main() before
+# dispatch).  A pinned version is supported via --version X.Y.Z.
+#
+# Release URL pattern (raw binary, not a tarball):
+#   https://raw.githubusercontent.com/Chosen9115/opensop/<tag-or-main>/cli/bin/opensop
+#
+# For tagged releases we fetch via the tag; "latest" fetches from `main`.
+# This matches how install.sh places the binary and how `--version` pin works:
+# the tag must exist in the remote repo.
+# --------------------------------------------------------------------------- #
+
+cmd_upgrade() {
+  require_curl
+
+  # Note: --version/-v is a global flag intercepted by main() (prints version
+  # and exits).  Use --pin X.Y.Z to pin to a specific release version.
+  local pin_version="" dry_run=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --pin)
+        [[ $# -ge 2 ]] || die "--pin requires a version argument (e.g. --pin 0.8.1)" "usage_error" "opensop upgrade [--pin X.Y.Z]"
+        pin_version="$2"; shift
+        ;;
+      --dry-run) dry_run=true ;;
+      --help|-h)
+        _cmd_help_command "upgrade"; return 0 ;;
+      -*) die "unknown flag '$1'" "unknown_flag" "opensop upgrade [--pin X.Y.Z] [--dry-run]" ;;
+      *)  die "unexpected argument '$1'" "usage_error" "opensop upgrade [--pin X.Y.Z] [--dry-run]" ;;
+    esac
+    shift
+  done
+
+  # Resolve the installed binary path.  We resolve through symlinks so that
+  # the on-disk file is replaced correctly even when the command is a symlink
+  # (e.g. /usr/local/bin/opensop → /opt/opensop/bin/opensop).
+  local installed_path
+  installed_path="$(command -v opensop 2>/dev/null || true)"
+  if [[ -z "$installed_path" ]]; then
+    die "opensop does not appear to be on \$PATH — install it first with install.sh" \
+        "missing_dependency" "curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/install.sh | bash"
+  fi
+  # Resolve symlink if possible (readlink -f is GNU; use Python fallback on macOS).
+  local real_path="$installed_path"
+  if command -v readlink >/dev/null 2>&1; then
+    real_path="$(readlink -f "$installed_path" 2>/dev/null || echo "$installed_path")"
+  fi
+
+  # Determine the target ref (git tag or main).
+  local target_ref
+  if [[ -n "$pin_version" ]]; then
+    target_ref="v${pin_version#v}"  # normalise: "0.8.1" → "v0.8.1"
+  else
+    target_ref="main"
+  fi
+
+  local fetch_url="https://raw.githubusercontent.com/Chosen9115/opensop/${target_ref}/cli/bin/opensop"
+
+  # Fetch the new binary into a temp file first — never clobber until we know
+  # the download succeeded and the file looks like a real opensop script.
+  local tmp_bin
+  tmp_bin="$(mktemp)"
+  # Trap ensures the temp file is cleaned up on any exit, including set -e abort.
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmp_bin'" EXIT
+
+  info "fetching ${fetch_url} …"
+  local curl_rc=0
+  curl -fsSL "$fetch_url" -o "$tmp_bin" 2>/dev/null || curl_rc=$?
+  if [[ $curl_rc -ne 0 ]]; then
+    rm -f "$tmp_bin"
+    die "download failed (curl exit $curl_rc) — check the version tag and your network" \
+        "network_error" "opensop upgrade --pin X.Y.Z"
+  fi
+
+  # Sanity-check: the downloaded file must look like the opensop script.
+  if ! grep -q "OPENSOP_CLI_VERSION" "$tmp_bin" 2>/dev/null; then
+    rm -f "$tmp_bin"
+    die "downloaded file does not look like an opensop binary (missing OPENSOP_CLI_VERSION)" \
+        "cli_error" "check the version tag: ${target_ref}"
+  fi
+
+  # Extract the new version string from the downloaded binary.
+  local new_version
+  new_version="$(grep -m1 'OPENSOP_CLI_VERSION=' "$tmp_bin" | sed 's/.*OPENSOP_CLI_VERSION="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/')"
+
+  if $dry_run; then
+    printf '%s → %s  (dry run — no changes written)\n' "$OPENSOP_CLI_VERSION" "${new_version:-?}"
+    rm -f "$tmp_bin"
+    return 0
+  fi
+
+  if [[ "$OPENSOP_CLI_VERSION" == "$new_version" ]]; then
+    ok "already at ${new_version} — nothing to do"
+    rm -f "$tmp_bin"
+    return 0
+  fi
+
+  # Check write permission before attempting the replace.
+  if [[ ! -w "$real_path" ]]; then
+    rm -f "$tmp_bin"
+    die "cannot write to $real_path — try: sudo opensop upgrade" \
+        "cli_error" "or re-install to a user-writable path with: install.sh --prefix \$HOME/.local"
+  fi
+
+  chmod +x "$tmp_bin"
+  # Atomic replace via mv (same filesystem assumed; both in /tmp could fail if
+  # /tmp is a different fs from the install dir — fall back to cp+chmod).
+  if ! mv "$tmp_bin" "$real_path" 2>/dev/null; then
+    cp "$tmp_bin" "$real_path"
+    chmod +x "$real_path"
+    rm -f "$tmp_bin"
+  fi
+
+  ok "${OPENSOP_CLI_VERSION} → ${new_version}  (${real_path})"
+  jq -nc \
+    --arg old_version "$OPENSOP_CLI_VERSION" \
+    --arg new_version "$new_version" \
+    --arg path "$real_path" \
+    '{upgraded:true, old_version:$old_version, new_version:$new_version, path:$path}' \
+    | emit_pretty_or_json
 }
 
 cmd_version() {
@@ -5760,10 +5894,10 @@ main() {
     [[ -n "$_cell_for_runs" ]] && OPENSOP_LOCAL_HOME="$_cell_for_runs/.opensop"
   fi
 
-  # curl is only needed for the remote (server) backend.
+  # curl is only needed for the remote (server) backend AND for `upgrade`.
   # Local-default commands (runs, show, init, scope, annotate, lineage, fork,
   # and all dual commands in local mode) need no curl.
-  if [[ "$REMOTE_MODE" == true ]]; then
+  if [[ "$REMOTE_MODE" == true ]] || [[ "$cmd" == "upgrade" ]]; then
     require_curl
   fi
 
@@ -5794,6 +5928,7 @@ main() {
     register)   cmd_register "$@" ;;
     instances)  cmd_instances "$@" ;;
     config)     cmd_config "$@" ;;
+    upgrade)    cmd_upgrade "$@" ;;
     init)       cmd_init "$@" ;;
     scope)      cmd_scope "$@" ;;
     annotate)   cmd_annotate "$@" ;;

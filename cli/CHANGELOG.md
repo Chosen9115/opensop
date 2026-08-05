@@ -120,6 +120,22 @@ This project follows [Semantic Versioning](https://semver.org/) and the
   - `diff` updated: compares `result_hash` instead of `duration_ms` per step (duration is
     inherently variable; the hash is the correct reproducibility signal). Backward-compatible
     — existing receipts without these fields still diff cleanly (`null` == `null`).
+- **Install/distribution (I1).**
+
+  - `cli/install.sh` — curl-pipe installer.  Detects bash version (warns with
+    `brew install bash` steps on macOS 3.2), verifies `jq` is present, and installs
+    the single-file binary to `~/.local/bin` by default (or any `--prefix`-given
+    directory).  Idempotent: re-running replaces the binary in-place.  A specific
+    release can be pinned with `--version X.Y.Z`.  Prints a `$PATH` hint when the
+    install directory is not yet on the user's path.
+    Platform matrix: **Linux** — full support; **macOS** — full support with bash 4+
+    (`brew install bash`; macOS ships bash 3.2 which is not supported); **Windows** — WSL only.
+
+  - `opensop upgrade` — new subcommand.  Re-fetches the latest release of the
+    single-file script from `github.com/Chosen9115/opensop` and replaces the
+    installed binary.  Prints old → new version on success.  Flags: `--pin X.Y.Z`
+    to target a specific tag; `--dry-run` to preview without writing.  Registered in
+    the command registry (category `config`, backend `local`; requires `curl`).
 
 - **Robust help engine (B1).** `cmd_help` is now driven by a single command registry
   (`_registry_raw`) that holds each subcommand's name, summary, usage, category, and

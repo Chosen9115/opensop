@@ -3975,6 +3975,74 @@ rm -rf "$fix3_home"
 echo "PASS: Fix3 — form waiting receipt carries duration_ms and result_hash='pending'"
 
 rm -rf "$c1a_home"
+# I1: opensop upgrade — command parsing and failure paths.
+#
+# The happy path (actual fetch+replace) requires network and a writable
+# install dir; we test only the error paths that are deterministic without
+# network access and without a real installed binary.
+# --------------------------------------------------------------------------- #
+
+# (1) Unknown flag must exit non-zero with unknown_flag error code.
+set +e
+upg_bad="$("$cli" upgrade --invalid-flag --json 2>&1)"; upg_bad_rc=$?
+set -e
+[ "$upg_bad_rc" -ne 0 ] || { echo "FAIL: upgrade --invalid-flag should exit non-zero"; exit 1; }
+echo "$upg_bad" | grep -q "unknown_flag" \
+  || { echo "FAIL: upgrade --invalid-flag should emit unknown_flag, got: $upg_bad"; exit 1; }
+echo "PASS: upgrade — unknown flag exits non-zero with unknown_flag code"
+
+# (2) Unexpected positional argument must exit non-zero with usage_error.
+set +e
+upg_pos="$("$cli" upgrade unexpected-arg --json 2>&1)"; upg_pos_rc=$?
+set -e
+[ "$upg_pos_rc" -ne 0 ] || { echo "FAIL: upgrade with positional arg should exit non-zero"; exit 1; }
+echo "$upg_pos" | grep -q "usage_error" \
+  || { echo "FAIL: upgrade with positional arg should emit usage_error, got: $upg_pos"; exit 1; }
+echo "PASS: upgrade — unexpected positional argument exits non-zero with usage_error"
+
+# (3) --pin without a value must exit non-zero with usage_error.
+# Passing --pin as the very last argument leaves no token for it to consume.
+set +e
+upg_noval="$("$cli" upgrade --pin 2>&1)"; upg_noval_rc=$?
+set -e
+[ "$upg_noval_rc" -ne 0 ] || { echo "FAIL: upgrade --pin (no value) should exit non-zero"; exit 1; }
+echo "PASS: upgrade -- --pin with no value exits non-zero"
+
+# (4) --dry-run when opensop is not on PATH (simulate by unsetting PATH entirely
+#     but keeping the CLI callable via its full path) must error with
+#     missing_dependency because we cannot locate the installed binary.
+#     We run the CLI via its full path so it *can* execute, but `command -v opensop`
+#     finds nothing without the install dir on PATH.
+set +e
+upg_dry="$(PATH="/usr/bin:/bin" "$cli" upgrade --dry-run --json 2>&1)"; upg_dry_rc=$?
+set -e
+[ "$upg_dry_rc" -ne 0 ] || { echo "FAIL: upgrade --dry-run with opensop not on PATH should exit non-zero"; exit 1; }
+echo "$upg_dry" | grep -q "missing_dependency" \
+  || { echo "FAIL: upgrade --dry-run (not on PATH) should emit missing_dependency, got: $upg_dry"; exit 1; }
+echo "PASS: upgrade --dry-run — missing_dependency when opensop not on PATH"
+
+# (5) help output: `opensop help upgrade` must succeed and include the command name.
+set +e
+upg_help="$("$cli" help upgrade 2>&1)"; upg_help_rc=$?
+set -e
+[ "$upg_help_rc" -eq 0 ] || { echo "FAIL: 'help upgrade' should exit 0, got $upg_help_rc"; exit 1; }
+echo "$upg_help" | grep -q "upgrade" \
+  || { echo "FAIL: 'help upgrade' output should contain 'upgrade'"; exit 1; }
+echo "PASS: upgrade — 'opensop help upgrade' exits 0 and contains command name"
+
+# (6) `opensop help upgrade --json` must emit a valid registry record.
+set +e
+upg_hjson="$("$cli" help upgrade --json 2>&1)"; upg_hjson_rc=$?
+set -e
+[ "$upg_hjson_rc" -eq 0 ] || { echo "FAIL: 'help upgrade --json' should exit 0, got $upg_hjson_rc"; exit 1; }
+echo "$upg_hjson" | jq -e '.command == "upgrade"' >/dev/null \
+  || { echo "FAIL: 'help upgrade --json' must emit {command:\"upgrade\",...}, got: $upg_hjson"; exit 1; }
+echo "PASS: upgrade — 'opensop help upgrade --json' emits valid registry record"
+
+# (7) upgrade is included in the full registry (help --json lists it).
+"$cli" help --json | jq -e 'map(.command) | contains(["upgrade"])' >/dev/null \
+  || { echo "FAIL: upgrade must appear in help --json registry"; exit 1; }
+echo "PASS: upgrade — appears in full registry (help --json)"
 
 # --------------------------------------------------------------------------- #
 # AGENTS.md §6 fixture: extract-action-items example (docs/b2 fix #3)
