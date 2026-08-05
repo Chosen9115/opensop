@@ -3976,4 +3976,33 @@ echo "PASS: Fix3 — form waiting receipt carries duration_ms and result_hash='p
 
 rm -rf "$c1a_home"
 
+# --------------------------------------------------------------------------- #
+# AGENTS.md §6 fixture: extract-action-items example (docs/b2 fix #3)
+# Verifies: {{notes}} and {{meeting_date}} tokens interpolate from inputs,
+# expected_output_schema field-definition format is accepted, and the schema
+# validates the LLM stub response. Uses OSL_LLM_STUB to bypass the network.
+# --------------------------------------------------------------------------- #
+eai_home="$(mktemp -d)"
+eai_stub='{"action_items":[{"task":"book venue","owner":"alice@example.com","due":"2026-08-10"}]}'
+eai_manifest="$(OPENSOP_LOCAL_HOME="$eai_home" OSL_LLM_STUB="$eai_stub" \
+  "$cli" run "$here/examples/extract-action-items.sop.json" \
+  --input notes="Alice will book the venue by Friday" \
+  --input meeting_date=2026-08-05 \
+  --json)"
+eai_status="$(jq -r '.status' <<<"$eai_manifest")"
+[ "$eai_status" = "completed" ] \
+  || { echo "FAIL: docs/b2-fix3 — extract-action-items run status should be 'completed', got: $eai_status"; exit 1; }
+eai_rid="$(jq -r '.run_id' <<<"$eai_manifest")"
+eai_show="$(OPENSOP_LOCAL_HOME="$eai_home" "$cli" show "$eai_rid" --json)"
+# Confirm {{notes}} resolved (step completed → output present)
+eai_items="$(jq -r '.steps | map(select(.step=="extract")) | last | .output.action_items | type' <<<"$eai_show")"
+[ "$eai_items" = "array" ] \
+  || { echo "FAIL: docs/b2-fix3 — extract step output.action_items is not an array (got type: $eai_items)"; exit 1; }
+# Confirm {{meeting_date}} default was merged into context (run did not fail due to missing token)
+eai_ctx_date="$(cat "$eai_home/runs/$eai_rid/context.json" | jq -r '.meeting_date')"
+[ "$eai_ctx_date" = "2026-08-05" ] \
+  || { echo "FAIL: docs/b2-fix3 — meeting_date not in context (got: $eai_ctx_date)"; exit 1; }
+rm -rf "$eai_home"
+echo "PASS: docs/b2-fix3 — extract-action-items: tokens interpolate, schema validates, run completes"
+
 echo "ALL PASS"

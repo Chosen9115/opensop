@@ -1,0 +1,33 @@
+{
+  "opensop": "0.6",
+  "name": "extract-action-items",
+  "version": "1.0",
+  "description": "Extract action items, owners, and due dates from meeting notes. Returns a typed JSON array.",
+  "inputs": {
+    "notes": {
+      "type": "string",
+      "required": true,
+      "description": "Raw meeting notes text."
+    },
+    "meeting_date": {
+      "type": "string",
+      "required": false,
+      "default": "(not provided)",
+      "description": "ISO 8601 date of the meeting, e.g. 2026-08-05. Used to infer relative due dates."
+    }
+  },
+  "outputs": {
+    "action_items": { "from": "steps.extract.outputs.action_items" }
+  },
+  "steps": [
+    {
+      "id": "extract",
+      "type": "llm",
+      "model": "claude-haiku-4-5",
+      "prompt": "Extract every action item from these meeting notes.\n\nMeeting date: {{meeting_date}}\n\nNotes:\n{{notes}}\n\nRules:\n- Include only explicitly assigned tasks, not discussion points.\n- If no owner is stated, set owner to null.\n- Express due dates as ISO 8601 or null if not mentioned.\n- Return a JSON object with key 'action_items' containing an array of objects, each with 'task' (string), 'owner' (string or null), 'due' (string or null).",
+      "expected_output_schema": {
+        "action_items": { "type": "array", "required": true }
+      }
+    }
+  ]
+}
