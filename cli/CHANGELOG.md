@@ -11,6 +11,40 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Added
 
+- **A1: `opensop ps` — process status view (SPEC §9).** Surfaces the §9 process
+  status model locally without requiring a server.
+
+  - **State derivation (local, §9.2):**
+    - Discovers processes via the active cell chain (same path as `opensop list`).
+    - For each process, scans `$OPENSOP_LOCAL_HOME/runs/*/manifest.json`.
+    - `status = "running"` if any manifest has `status ∈ {running, waiting}`.
+    - Otherwise `status = "open"`. `"scheduled"` is never emitted locally because
+      `opensop serve` (A3) is not yet implemented — a process with a configured
+      trigger remains `open` (per §9.2: "no active scheduler → open").
+
+  - **Rollup fields (§9.3):**
+    - `last_status` — `ok` if the manifest with the latest `ended_at` has
+      `status == "completed"`; `error` if `"failed"`; `"never"` if no terminal
+      run exists. Manifests in `running`, `waiting`, `cancelled`, or `interrupted`
+      states are skipped (per §9.3).
+    - `last_run_at` — most recent `started_at` across all manifests for the
+      process; `null` when none exist.
+    - `next_run_at` — always `null` locally until A3 ships.
+
+  - **`--remote`:** fetches `GET /sop/processes/status` (G1 endpoint, shape §9.4)
+    and renders the same table.
+
+  - **`--follow`:** clear-and-reprint loop every 2s; Ctrl-C exits cleanly.
+    No SSE or keyboard TUI — simple polling (per plan A1 spec).
+
+  - **Output contract:** `--json` emits a compact JSON array matching the §9.4
+    shape `[{name, status, last_status, last_run_at, next_run_at}]`. Pretty mode
+    (TTY default) renders a five-column table: `NAME / STATE / LAST STATUS /
+    LAST RUN / NEXT RUN`. Both paths honor `emit_pretty_or_json` / `OUTPUT_MODE`.
+
+  - **Registry:** `ps` registered in `_registry_raw` as `category: inspection`,
+    `backend: dual`.
+
 - **C1a: Reliability metrics in local run receipts.** Each executed step's audit entry carries:
   - `duration_ms` — wall-clock milliseconds for that step (via `date +%s%3N`; falls back to
     seconds×1000 on non-GNU date). Present even when a step fails. Steps that pause

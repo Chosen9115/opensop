@@ -705,6 +705,7 @@ list|list processes in the cell chain (or server with --remote)|list [dir] [--ta
 search|ranked text search over process names, descriptions, and tags|search <keyword> [...]|discovery|dual
 suggest|describe a task in prose; get the top-matching process|suggest "<task description>" [--threshold N]|discovery|dual
 schema|show the full definition of a named process (remote only)|schema <name>|discovery|remote
+ps|process status: state, last result, last/next run time|ps [--follow] [--remote]|inspection|dual
 status|show the current state of a run|status <run_id>|inspection|dual
 steps|list per-step state of a run|steps <run_id>|inspection|dual
 diff|compare two runs of the same process|diff <run_id1> <run_id2>|inspection|dual
@@ -946,6 +947,14 @@ EX
       cat <<'EX'
   opensop --remote schema lead-qualification    # show full process definition
   opensop schema validate ./my.sop.yaml         # client-side YAML lint (no server)
+EX
+      ;;
+    ps)
+      cat <<'EX'
+  opensop ps                           # local process status table
+  opensop ps --json                    # machine-readable [{name,status,last_status,...}]
+  opensop ps --follow                  # poll + redraw every 2s (Ctrl-C to exit)
+  opensop --remote ps                  # fetch GET /sop/processes/status from configured server
 EX
       ;;
     status)
@@ -1664,6 +1673,284 @@ cmd_suggest() {
     fi
     jq -nc --arg task "$task" --argjson match "$match_json" '{task: $task, match: $match}'
   fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: ps — process status view (A1, SPEC §9)
+# --------------------------------------------------------------------------- #
+#
+# Local (default): discovers processes via the active cell chain (same as
+#   `opensop list`) and correlates with run manifests under
+#   $OPENSOP_LOCAL_HOME/runs/ to derive §9 status, last_status, last_run_at,
+#   and next_run_at (always null locally until A3/opensop-serve ships).
+#
+# Remote (--remote): fetches GET /sop/processes/status and renders the same
+#   table.
+#
+# --follow: clear-and-reprint loop every 2s; Ctrl-C exits cleanly.
+#
+# Output:
+#   pretty: NAME / STATE / LAST STATUS / LAST RUN / NEXT RUN table
+#   --json: [{name,version,state,last_status,last_run_at,next_run_at,active_instances}]  (§9.4 shape)
+
+cmd_ps() {
+  if [[ "$REMOTE_MODE" != true ]]; then local_ps "$@"; return $?; fi
+
+  # Remote path: GET /sop/processes/status
+  local follow=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --follow) follow=true; shift ;;
+      *) die "unknown flag for ps: $1" "unknown_flag" "opensop ps [--follow] [--remote]" ;;
+    esac
+  done
+
+  _ps_remote_render() {
+    local resp; resp=$(api_get "/sop/processes/status")
+    # Pass through the §9.4 shape verbatim — the server already emits the
+    # correct field names (state, version, active_instances, etc.).
+    local entries; entries=$(echo "$resp" | jq -c '[.processes[] | {
+      name:             .name,
+      version:          .version,
+      state:            .state,
+      last_status:      .last_status,
+      last_run_at:      .last_run_at,
+      next_run_at:      .next_run_at,
+      active_instances: .active_instances
+    }]')
+    _ps_emit "$entries"
+  }
+
+  if $follow; then
+    trap '[[ "$OUTPUT_MODE" == "json" ]] || printf "\n"; exit 0' INT
+    while true; do
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
+        _ps_remote_render
+      else
+        { clear 2>/dev/null || true; }
+        _ps_remote_render
+      fi
+      sleep 2
+    done
+  else
+    _ps_remote_render
+  fi
+}
+
+# local_ps — derive process status entirely from local process files + run manifests.
+#
+# State derivation (SPEC §9.2):
+#   1. Enumerate processes from the active cell chain (same as local_list).
+#   2. For each process, scan $OPENSOP_LOCAL_HOME/runs/*/manifest.json for this process name.
+#   3. status = "running"   if any manifest has status ∈ {running, waiting}
+#              "open"       otherwise (opensop serve is not yet implemented, so
+#                           a configured trigger does not promote to "scheduled")
+#
+# Rollup fields (SPEC §9.3):
+#   last_status: from the manifest with the latest ended_at whose status is
+#                "completed" (→ ok) or "failed" (→ error); "never" if none.
+#                Manifests with status running/waiting/cancelled/interrupted skipped.
+#   last_run_at: most recent started_at across all manifests for this process.
+#   next_run_at: always null locally (A3 not yet shipped).
+local_ps() {
+  local follow=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --follow) follow=true; shift ;;
+      *) die "unknown flag for ps: $1" "unknown_flag" "opensop ps [--follow]" ;;
+    esac
+  done
+
+  _ps_local_render() {
+    # Step 1: enumerate processes (name → file) via the cell chain, same as local_list.
+    # We collect unique (name, file) pairs into a temporary file to avoid subshell issues.
+    local _procs_file; _procs_file=$(mktemp)
+    # shellcheck disable=SC2064
+    trap "rm -f '$_procs_file'" RETURN
+
+    local _cell; _cell="$(_find_scope_root)"
+    if [[ -n "$_cell" ]]; then
+      # Inside a cell: walk active + ancestors (nearest-wins by basename).
+      local _seen=" "
+      local _d _cell_name _f _bn _pname
+      for _d in "$_cell" $(_enumerate_ancestors "$_cell"); do
+        [[ -d "$_d/processes" ]] || continue
+        while IFS= read -r _f; do
+          _bn="$(basename "$_f" .sop.json)"
+          case "$_seen" in
+            *" $_bn "*) continue ;;   # shadowed
+          esac
+          _pname="$(jq -r '.name // ""' "$_f" 2>/dev/null)" || continue
+          [[ -z "$_pname" ]] && continue
+          printf '%s\t%s\n' "$_pname" "$_f" >> "$_procs_file"
+          _seen="$_seen$_bn "
+        done < <(find "$_d/processes" -maxdepth 1 -name '*.sop.json' 2>/dev/null)
+      done
+    else
+      # Not in a cell: scan cwd up to depth 2.
+      local _f _pname
+      while IFS= read -r _f; do
+        _pname="$(jq -r '.name // ""' "$_f" 2>/dev/null)" || continue
+        [[ -z "$_pname" ]] && continue
+        printf '%s\t%s\n' "$_pname" "$_f" >> "$_procs_file"
+      done < <(find . -maxdepth 2 -name '*.sop.json' 2>/dev/null)
+    fi
+
+    # Step 2: for each discovered process, derive state + rollup from run manifests.
+    # Build a jq-ready JSON array matching §9.4:
+    # [{name, version, state, last_status, last_run_at, next_run_at, active_instances}]
+    local entries="[]"
+
+    if [[ ! -s "$_procs_file" ]]; then
+      # No processes found — emit empty array.
+      _ps_emit "[]"
+      return 0
+    fi
+
+    while IFS=$'\t' read -r _pname _pfile; do
+      [[ -z "$_pname" ]] && continue
+
+      # Read version from the process file (null if absent or unreadable).
+      local _pversion; _pversion="$(jq -r '.version // null' "$_pfile" 2>/dev/null)" || _pversion="null"
+      [[ "$_pversion" == "null" ]] && _pversion="null"
+
+      # Collect manifest data for this process name.
+      # Build arrays for: all started_at, ended_at+status for terminal runs,
+      # and any active (running/waiting) manifests.
+      local _mf_data="[]"
+      if [[ -d "$OPENSOP_LOCAL_HOME/runs" ]]; then
+        local _rd
+        for _rd in "$OPENSOP_LOCAL_HOME"/runs/*/; do
+          local _mf="$_rd/manifest.json"
+          [[ -f "$_mf" ]] || continue
+          # Only include manifests for this process.
+          local _mf_proc; _mf_proc="$(jq -r '.process // ""' "$_mf" 2>/dev/null)" || continue
+          [[ "$_mf_proc" == "$_pname" ]] || continue
+          local _rec; _rec="$(jq -c '{status:.status, started_at:(.started_at // null), ended_at:(.ended_at // null)}' "$_mf" 2>/dev/null)" || continue
+          [[ -z "$_rec" ]] && continue
+          _mf_data="$(jq -c --argjson r "$_rec" '. + [$r]' <<<"$_mf_data")"
+        done
+      fi
+
+      # Derive fields in jq — all in one pass over the collected data.
+      local _entry; _entry="$(jq -nc \
+        --arg  name    "$_pname" \
+        --arg  version "$_pversion" \
+        --argjson data "$_mf_data" '
+        # §9.2: running if any manifest has status ∈ {running, waiting}
+        ($data | map(select(.status == "running" or .status == "waiting")) | length > 0) as $any_active |
+        # §9.4: active_instances counts RUNNING only (a paused/waiting run makes
+        # the process state "running" per §9.2 but is not an active instance).
+        ($data | map(select(.status == "running")) | length) as $active_count |
+
+        # state: running > open (no scheduler yet, so no "scheduled")
+        ($any_active | if . then "running" else "open" end) as $state |
+
+        # §9.3 last_run_at: most recent started_at across all manifests
+        ($data | map(.started_at) | map(select(. != null)) | sort | last // null) as $last_run_at |
+
+        # §9.3 last_status: from the manifest with the latest ended_at whose status
+        # is "completed" (→ ok) or "failed" (→ error).
+        # Skip: running, waiting, cancelled, interrupted.
+        ($data
+          | map(select(.status == "completed" or .status == "failed"))
+          | sort_by(.ended_at)
+          | last
+          | if . == null then "never"
+            elif .status == "completed" then "ok"
+            else "error"
+            end
+        ) as $last_status |
+
+        {
+          name:             $name,
+          version:          (if $version == "null" then null else $version end),
+          state:            $state,
+          last_status:      $last_status,
+          last_run_at:      $last_run_at,
+          next_run_at:      null,
+          active_instances: $active_count
+        }
+      ')"
+      entries="$(jq -c --argjson e "$_entry" '. + [$e]' <<<"$entries")"
+    done < "$_procs_file"
+
+    _ps_emit "$entries"
+  }
+
+  if $follow; then
+    trap '[[ "$OUTPUT_MODE" == "json" ]] || printf "\n"; exit 0' INT
+    while true; do
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
+        # NDJSON mode: one compact JSON array per poll on its own line.
+        # No terminal escapes; safe for machine consumers redirecting stdout.
+        _ps_local_render
+      else
+        # Pretty mode: only clear when writing to a real TTY.
+        if is_tty; then
+          { clear 2>/dev/null || true; }
+        fi
+        _ps_local_render
+      fi
+      sleep 2
+    done
+  else
+    _ps_local_render
+  fi
+}
+
+# _ps_emit ENTRIES_JSON
+#   Render the ps table (pretty) or JSON array (--json / piped).
+#   ENTRIES_JSON: compact JSON array matching §9.4:
+#     {name, version, state, last_status, last_run_at, next_run_at, active_instances}
+_ps_emit() {
+  local entries="$1"
+
+  if [[ "$OUTPUT_MODE" == "json" ]]; then
+    printf '%s\n' "$entries" | jq -c .
+    return 0
+  fi
+
+  local mode; mode=$(_resolve_output_mode)
+
+  if [[ "$mode" == "json" ]]; then
+    printf '%s\n' "$entries" | jq -c .
+    return 0
+  fi
+
+  # Pretty table.
+  # Header.
+  printf '%s%-30s %-12s %-13s %-24s %-24s%s\n' \
+    "$C_BOLD" "NAME" "STATE" "LAST STATUS" "LAST RUN" "NEXT RUN" "$C_RESET"
+
+  local count; count=$(printf '%s\n' "$entries" | jq 'length')
+  if (( count == 0 )); then
+    printf '%s  (no processes found)%s\n' "$C_DIM" "$C_RESET"
+    return 0
+  fi
+
+  printf '%s\n' "$entries" | jq -r '.[] | "\(.name)\t\(.state)\t\(.last_status)\t\(.last_run_at // "-")\t\(.next_run_at // "-")"' | \
+    while IFS=$'\t' read -r name state last_status last_run next_run; do
+      # Color for state.
+      local state_color="$C_DIM"
+      case "$state" in
+        running)   state_color="$C_GREEN" ;;
+        scheduled) state_color="$C_BLUE"  ;;
+        open)      state_color="$C_DIM"   ;;
+      esac
+      # Color for last_status.
+      local ls_color="$C_DIM"
+      case "$last_status" in
+        ok)    ls_color="$C_GREEN"  ;;
+        error) ls_color="$C_RED"    ;;
+        never) ls_color="$C_DIM"    ;;
+      esac
+      printf '%-30s %s%-12s%s %s%-13s%s %-24s %-24s\n' \
+        "$name" \
+        "$state_color" "$state" "$C_RESET" \
+        "$ls_color" "$last_status" "$C_RESET" \
+        "$last_run" "$next_run"
+    done
 }
 
 # --------------------------------------------------------------------------- #
@@ -4614,6 +4901,7 @@ main() {
       ;;
     run)        cmd_run "$@" ;;
     dry-run)    cmd_dry_run "$@" ;;
+    ps)         cmd_ps "$@" ;;
     status)     cmd_status "$@" ;;
     steps)      cmd_steps "$@" ;;
     submit)     cmd_submit "$@" ;;

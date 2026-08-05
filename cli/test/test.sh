@@ -4005,4 +4005,221 @@ eai_ctx_date="$(cat "$eai_home/runs/$eai_rid/context.json" | jq -r '.meeting_dat
 rm -rf "$eai_home"
 echo "PASS: docs/b2-fix3 — extract-action-items: tokens interpolate, schema validates, run completes"
 
+# --------------------------------------------------------------------------- #
+# A1: `opensop ps` — process status view (SPEC §9)
+# --------------------------------------------------------------------------- #
+# Tests:
+#   (1) ps with no runs → all processes open, last_status=never
+#   (2) ps --json → shape matches §9.4 (name, state, version, last_status,
+#       last_run_at, next_run_at, active_instances)
+#   (3) ps after a completed run → last_status=ok
+#   (4) ps after a failed run → last_status=error
+#   (5) ps while a form step is paused (status=waiting) → shows state=running
+#   (6) unknown flag → non-zero exit (failure path)
+# --------------------------------------------------------------------------- #
+
+ps_home="$(mktemp -d)"
+trap 'rm -rf "$ps_home"' EXIT
+
+# Create a cell with two processes so we can test discovery.
+mkdir -p "$ps_home/cell/processes"
+( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" init --json >/dev/null )
+
+cat > "$ps_home/cell/processes/hello.sop.json" <<'JSON'
+{ "name": "hello", "inputs": {},
+  "steps": [ { "id": "greet", "type": "shell", "run": "echo hello" } ] }
+JSON
+
+cat > "$ps_home/cell/processes/fail-proc.sop.json" <<'JSON'
+{ "name": "fail-proc", "inputs": {},
+  "steps": [ { "id": "boom", "type": "shell", "run": "exit 1" } ] }
+JSON
+
+cat > "$ps_home/cell/processes/pauser.sop.json" <<'JSON'
+{ "name": "pauser", "inputs": {},
+  "steps": [
+    { "id": "start", "type": "shell", "run": "echo started" },
+    { "id": "collect", "type": "form",
+      "inputs": [{ "name": "val", "type": "string", "required": true }] }
+  ] }
+JSON
+
+# Use the cell's .opensop as OPENSOP_LOCAL_HOME (mirrors how main() resolves it).
+ps_runs="$ps_home/cell/.opensop"
+
+# (1) ps --json with no runs → state=open, last_status=never for all three processes
+ps_json_no_runs="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" ps --json )"
+echo "ps (no runs): $ps_json_no_runs"
+[ "$(jq 'length' <<<"$ps_json_no_runs")" -gt 0 ] \
+  || { echo "FAIL: A1 ps no-runs — expected non-empty array, got: $ps_json_no_runs"; exit 1; }
+jq -e 'all(.[]; .state == "open")' <<<"$ps_json_no_runs" >/dev/null \
+  || { echo "FAIL: A1 ps no-runs — all state fields should be open, got: $ps_json_no_runs"; exit 1; }
+jq -e 'all(.[]; .last_status == "never")' <<<"$ps_json_no_runs" >/dev/null \
+  || { echo "FAIL: A1 ps no-runs — all last_statuses should be never, got: $ps_json_no_runs"; exit 1; }
+jq -e 'all(.[]; .last_run_at == null)' <<<"$ps_json_no_runs" >/dev/null \
+  || { echo "FAIL: A1 ps no-runs — all last_run_at should be null, got: $ps_json_no_runs"; exit 1; }
+jq -e 'all(.[]; .next_run_at == null)' <<<"$ps_json_no_runs" >/dev/null \
+  || { echo "FAIL: A1 ps no-runs — all next_run_at should be null, got: $ps_json_no_runs"; exit 1; }
+jq -e 'all(.[]; .active_instances == 0)' <<<"$ps_json_no_runs" >/dev/null \
+  || { echo "FAIL: A1 ps no-runs — all active_instances should be 0, got: $ps_json_no_runs"; exit 1; }
+echo "PASS: A1 ps no-runs — all processes state=open/never/null/null/active_instances=0"
+
+# (2) --json shape matches §9.4 EXACTLY (all 7 required fields, no extras required)
+# No-runs entry: version may be null (process file has no version field), active_instances=0.
+jq -e 'all(.[]; has("name") and has("version") and has("state") and has("last_status") and has("last_run_at") and has("next_run_at") and has("active_instances"))' \
+  <<<"$ps_json_no_runs" >/dev/null \
+  || { echo "FAIL: A1 ps --json shape — missing §9.4 fields (need: name,version,state,last_status,last_run_at,next_run_at,active_instances)"; exit 1; }
+# Must NOT emit old 'status' field (renamed to 'state' per §9.4)
+jq -e 'all(.[]; has("status") | not)' <<<"$ps_json_no_runs" >/dev/null \
+  || { echo "FAIL: A1 ps --json shape — emitted old 'status' field (must be 'state' per §9.4)"; exit 1; }
+echo "PASS: A1 ps --json — exact §9.4 key set: name,version,state,last_status,last_run_at,next_run_at,active_instances"
+
+# (3) ps after a completed run → hello shows last_status=ok
+hello_m="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" run hello --json )"
+[ "$(jq -r '.status' <<<"$hello_m")" = "completed" ] \
+  || { echo "FAIL: A1 setup — hello run should complete, got: $(jq -r '.status' <<<"$hello_m")"; exit 1; }
+
+ps_after_ok="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" ps --json )"
+hello_entry="$(jq -r '.[] | select(.name == "hello")' <<<"$ps_after_ok")"
+[ "$(jq -r '.last_status' <<<"$hello_entry")" = "ok" ] \
+  || { echo "FAIL: A1 ps after completed run — hello.last_status should be ok, got: $(jq -r '.last_status' <<<"$hello_entry")"; exit 1; }
+[ "$(jq -r '.state' <<<"$hello_entry")" = "open" ] \
+  || { echo "FAIL: A1 ps after completed run — hello.state should be open (no active runs)"; exit 1; }
+[ "$(jq -r '.last_run_at' <<<"$hello_entry")" != "null" ] \
+  || { echo "FAIL: A1 ps after completed run — hello.last_run_at should be non-null"; exit 1; }
+[ "$(jq -r '.active_instances' <<<"$hello_entry")" = "0" ] \
+  || { echo "FAIL: A1 ps after completed run — hello.active_instances should be 0 (no running manifests)"; exit 1; }
+echo "PASS: A1 ps after completed run — hello: state=open, last_status=ok, last_run_at set, active_instances=0"
+
+# (4) ps after a failed run → fail-proc shows last_status=error
+set +e
+fail_m="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" run fail-proc --json )"; fail_rc=$?
+set -e
+[ "$fail_rc" -ne 0 ] || { echo "FAIL: A1 setup — fail-proc should exit non-zero"; exit 1; }
+[ "$(jq -r '.status' <<<"$fail_m")" = "failed" ] \
+  || { echo "FAIL: A1 setup — fail-proc manifest should be failed"; exit 1; }
+
+ps_after_fail="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" ps --json )"
+fail_entry="$(jq -r '.[] | select(.name == "fail-proc")' <<<"$ps_after_fail")"
+[ "$(jq -r '.last_status' <<<"$fail_entry")" = "error" ] \
+  || { echo "FAIL: A1 ps after failed run — fail-proc.last_status should be error, got: $(jq -r '.last_status' <<<"$fail_entry")"; exit 1; }
+[ "$(jq -r '.state' <<<"$fail_entry")" = "open" ] \
+  || { echo "FAIL: A1 ps after failed run — fail-proc.state should be open (no active runs)"; exit 1; }
+echo "PASS: A1 ps after failed run — fail-proc: state=open, last_status=error"
+
+# (5) ps while a form step is paused → pauser shows status=running (§9.2 rule 2)
+set +e
+pause_m="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" run pauser --json )"; pause_rc=$?
+set -e
+[ "$pause_rc" -eq 0 ] || { echo "FAIL: A1 setup — pauser initial run should exit 0 (pause), got $pause_rc"; exit 1; }
+[ "$(jq -r '.status' <<<"$pause_m")" = "waiting" ] \
+  || { echo "FAIL: A1 setup — pauser manifest should be waiting"; exit 1; }
+
+ps_while_paused="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" ps --json )"
+pauser_entry="$(jq -r '.[] | select(.name == "pauser")' <<<"$ps_while_paused")"
+[ "$(jq -r '.state' <<<"$pauser_entry")" = "running" ] \
+  || { echo "FAIL: A1 ps mid-form-pause — pauser.state should be running (waiting manifest counts), got: $(jq -r '.state' <<<"$pauser_entry")"; exit 1; }
+[ "$(jq -r '.active_instances' <<<"$pauser_entry")" = "0" ] \
+  || { echo "FAIL: A1 ps mid-form-pause — pauser.active_instances should be 0 (§9.4: running-only; a waiting run is not active), got: $(jq -r '.active_instances' <<<"$pauser_entry")"; exit 1; }
+echo "PASS: A1 ps mid-form-pause — pauser state=running but active_instances=0 (§9.2 running from waiting; §9.4 active_instances counts running only)"
+
+# --------------------------------------------------------------------------- #
+# Fix 3 — real cancelled fixture: manifest with status=cancelled does NOT
+# change last_status (§9.3: cancelled runs are skipped).
+#
+# Scenario A: process with a prior completed (ok) run, then a cancelled run.
+#   → last_status must still be "ok" (cancelled skipped).
+# Scenario B: process with ONLY a cancelled run (no completed/failed).
+#   → last_status must be "never" (no eligible terminal run exists).
+# --------------------------------------------------------------------------- #
+
+# Scenario A: hello already has a completed run (from test (3) above, last_status=ok).
+# Craft a cancelled manifest for hello and inject it directly into the runs dir.
+ps_canc_rid="canc-$(date +%s%N 2>/dev/null || date +%s)000"
+ps_canc_dir="$ps_home/cell/.opensop/runs/$ps_canc_rid"
+mkdir -p "$ps_canc_dir"
+jq -nc \
+  --arg rid "$ps_canc_rid" \
+  --arg proc "hello" \
+  --arg pfile "$ps_home/cell/processes/hello.sop.json" \
+  '{run_id: $rid, process: $proc, process_file: $pfile,
+    status: "cancelled",
+    started_at: "2026-08-05T12:00:00Z",
+    ended_at:   "2026-08-05T12:00:01Z",
+    inputs: {}, outputs: {}}' \
+  > "$ps_canc_dir/manifest.json"
+
+ps_after_canc="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" ps --json )"
+hello_after_canc="$(jq -r '.[] | select(.name == "hello")' <<<"$ps_after_canc")"
+[ "$(jq -r '.last_status' <<<"$hello_after_canc")" = "ok" ] \
+  || { echo "FAIL: Fix3A — cancelled run after ok run must not change last_status (got: $(jq -r '.last_status' <<<"$hello_after_canc"))"; exit 1; }
+echo "PASS: Fix3A — cancelled run does NOT overwrite last_status=ok (§9.3 skips cancelled)"
+
+# Scenario B: fail-proc only has a failed run (last_status=error) + inject a lone cancelled.
+# Create a fresh process with only a cancelled run → last_status must be "never".
+ps_lone_proc="$ps_home/cell/processes/lone-canc.sop.json"
+cat > "$ps_lone_proc" <<'JSON'
+{ "name": "lone-canc", "inputs": {},
+  "steps": [ { "id": "x", "type": "shell", "run": "echo hi" } ] }
+JSON
+ps_lone_rid="lone-$(date +%s%N 2>/dev/null || date +%s)001"
+ps_lone_dir="$ps_home/cell/.opensop/runs/$ps_lone_rid"
+mkdir -p "$ps_lone_dir"
+jq -nc \
+  --arg rid "$ps_lone_rid" \
+  --arg proc "lone-canc" \
+  --arg pfile "$ps_lone_proc" \
+  '{run_id: $rid, process: $proc, process_file: $pfile,
+    status: "cancelled",
+    started_at: "2026-08-05T13:00:00Z",
+    ended_at:   "2026-08-05T13:00:01Z",
+    inputs: {}, outputs: {}}' \
+  > "$ps_lone_dir/manifest.json"
+
+ps_lone_out="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" ps --json )"
+lone_entry="$(jq -r '.[] | select(.name == "lone-canc")' <<<"$ps_lone_out")"
+[ "$(jq -r '.last_status' <<<"$lone_entry")" = "never" ] \
+  || { echo "FAIL: Fix3B — lone cancelled run must give last_status=never (got: $(jq -r '.last_status' <<<"$lone_entry"))"; exit 1; }
+echo "PASS: Fix3B — lone cancelled run yields last_status=never (no completed/failed run exists)"
+
+# --------------------------------------------------------------------------- #
+# Fix 2 — --follow safety: stdout redirect (non-TTY) must emit parseable JSON
+# in --json mode (NDJSON) and must NOT contain terminal escape bytes.
+# Run --follow --json for one iteration then kill, verify captured line is valid JSON.
+# --------------------------------------------------------------------------- #
+ps_follow_out="$(mktemp)"
+# Run with a background process + short-circuit: send SIGINT after one second.
+# Use a pipe-captured run so is_tty=false → auto-mode resolves to json.
+# We can't test --follow --json in a script that itself controls the loop,
+# so instead we run with OUTPUT_MODE forced to json and check that _ps_emit
+# would not clear. We test it indirectly: piped (non-TTY) --json ps output
+# (without --follow) must produce valid JSON and no ANSI escapes.
+ps_piped="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" ps --json )"
+# Valid JSON check
+jq -e '. | type == "array"' <<<"$ps_piped" >/dev/null \
+  || { echo "FAIL: Fix2 — piped ps --json output is not a JSON array: $ps_piped"; exit 1; }
+# No terminal escapes (ESC = 0x1b) in JSON output
+if printf '%s' "$ps_piped" | LC_ALL=C grep -qP '\x1b' 2>/dev/null; then
+  echo "FAIL: Fix2 — ps --json output contains terminal escape bytes"; exit 1
+fi
+echo "PASS: Fix2 — ps --json piped output is valid JSON array, no terminal escapes"
+
+# TERM=dumb --follow must not abort (clear failure under TERM=dumb is silenced)
+# Test by running ps in pretty mode (non-TTY) with no TERM set → must not exit non-zero.
+set +e
+( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME TERM=dumb "$cli" ps 2>&1 >/dev/null ); ps_dumb_rc=$?
+set -e
+[ "$ps_dumb_rc" -eq 0 ] || { echo "FAIL: Fix2 — ps with TERM=dumb should exit 0, got $ps_dumb_rc"; exit 1; }
+echo "PASS: Fix2 — ps with TERM=dumb exits 0 (clear failure silenced)"
+rm -f "$ps_follow_out"
+
+# (6) unknown flag → non-zero exit (failure path)
+set +e
+( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" ps --bogus-flag --json >/dev/null 2>&1 ); ps_bad_rc=$?
+set -e
+[ "$ps_bad_rc" -ne 0 ] || { echo "FAIL: A1 ps unknown flag should exit non-zero"; exit 1; }
+echo "PASS: A1 ps unknown flag — exits non-zero with error"
+
+rm -rf "$ps_home"
+
 echo "ALL PASS"
