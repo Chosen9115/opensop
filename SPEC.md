@@ -1,15 +1,20 @@
-# OpenSOP — Specification v0.6
+# OpenSOP — Specification v0.7
 
-**Date:** 2026-06-10
+**Date:** 2026-08-05
 **Authors:** Chosen9115 + Claude (digital twin)
 **Status:** Current — authoritative cross-repo contract
 **Domain:** opensop.ai
 **License:** Apache 2.0
 
-> This document supersedes SPEC.md v0.1 and SPEC-v0.2.md.
-> All content from those files has been folded in and reconciled against the
+> This document supersedes SPEC.md v0.6.
+> All content from prior versions has been folded in and reconciled against the
 > running code. Where the prior documents said one thing and the code does
 > another, the code governs — discrepancies are noted inline.
+>
+> **v0.7 adds:** process status model (§9), reliability metrics contract (§10),
+> and a security model (§11). The `/sop/*` HTTP API contract is unchanged.
+> Stream protocol, self-heal semantics, and scheduler-trigger promotion are
+> reserved for v0.7.x — they land with their respective implementations (A2, D2, A3).
 
 **This is the OpenSOP specification.** It defines the process definition format,
 step-type semantics, local execution backend, and HTTP API surface that any
@@ -121,9 +126,10 @@ requires the wrapped form for registration.
 | `"0.1"` | Server parser, CLI `schema validate` |
 | `"0.2"` | Server parser, CLI `schema validate` |
 | `"0.6"` | Server parser, CLI `schema validate` |
+| `"0.7"` | Server parser, CLI `schema validate` |
 
-New process files should declare `opensop: "0.6"`. Files declared at `"0.1"` or
-`"0.2"` continue to parse and run unchanged — this spec is additive.
+New process files should declare `opensop: "0.7"`. Files declared at earlier
+versions continue to parse and run unchanged — this spec is additive.
 
 ---
 
@@ -1517,7 +1523,323 @@ same way `.well-known/openid-configuration` works for OIDC.
 
 ---
 
-## 9. Roadmapped Features
+## 9. Process Status Model
+
+### 9.1 Purpose
+
+`opensop ps` (local and remote) and any observability view need a stable,
+canonical vocabulary for the state of a *process definition* — distinct from
+the state of any individual run *instance* (§4.3). This section defines that
+vocabulary. It is the contract that A1 (`opensop ps`) and G1 (server status
+API) implement against.
+
+### 9.2 Process-level states
+
+A process has exactly one of these states at any moment:
+
+| State | Meaning |
+|---|---|
+| `open` | Declared and available on-demand; no scheduled trigger configured. Starts when called explicitly (`opensop run`, `POST /sop/:name/start`, or a webhook trigger). |
+| `scheduled` | Has an `interval` or cron trigger configured (§2.3). The scheduler knows when to fire it next. |
+| `running` | One or more instances are currently active (state `running` per §4.3). A process can be both `scheduled` and `running` simultaneously; when displaying, `running` takes precedence as the visible state. |
+
+**State derivation rules (local, `opensop ps`):**
+
+1. Read all run manifests under `$OPENSOP_LOCAL_HOME/runs/` for this process.
+2. If any manifest has `status ∈ {running, waiting}` → state is `running`.
+3. Else if the process definition declares a trigger with `type: interval` → state is `scheduled`.
+4. Else → state is `open`.
+
+**State derivation rules (server, `GET /sop/processes/status`):**
+
+Reserved for v0.7.x — lands with G1 (the server observability terminal). The
+endpoint shape is specified in §9.4 below; the implementation is not yet shipped.
+
+### 9.3 Rollup fields
+
+Every process entry in `opensop ps` output and in the server status response
+carries these rollup fields, derived from run history:
+
+| Field | Type | Description |
+|---|---|---|
+| `last_status` | `ok \| error \| never` | Result of the most recent completed run. `ok` = completed without error; `error` = completed in `failed` state; `never` = no completed run exists. |
+| `last_run_at` | ISO 8601 UTC or `null` | Timestamp of the most recently started run, regardless of outcome. `null` when no run exists. |
+| `next_run_at` | ISO 8601 UTC or `null` | For `scheduled` processes: when the next trigger fires. `null` for `open` processes or when the scheduler has not been started. |
+
+**Local derivation:** scan all `manifest.json` files for this process under
+`$OPENSOP_LOCAL_HOME/runs/`. The most recent `started_at` is `last_run_at`.
+`last_status` is derived from the `status` field of the manifest with the
+latest `ended_at` that is not `running`/`waiting`/`interrupted`.
+`next_run_at` is always `null` in the local engine until A3 (the local
+scheduler daemon) ships.
+
+**Server derivation:** from `sop_instances` — see §9.4.
+
+### 9.4 `GET /sop/processes/status` — process status rollup
+
+**Reserved for v0.7.x — not yet implemented. The shape below is the contract;
+implementation lands with G1.**
+
+Returns one entry per registered process with its current state and rollup
+fields. Intended for `opensop ps --remote` and the server observability view.
+
+**Response — 200 OK (shape)**
+
+```json
+{
+  "processes": [
+    {
+      "name": "lead-qualification",
+      "version": "1.0",
+      "state": "open",
+      "last_status": "ok",
+      "last_run_at": "2026-08-05T10:00:00Z",
+      "next_run_at": null,
+      "active_instances": 0
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Process name |
+| `version` | string | Latest registered version |
+| `state` | `open \| scheduled \| running` | Per §9.2 |
+| `last_status` | `ok \| error \| never` | Per §9.3 |
+| `last_run_at` | ISO 8601 UTC or `null` | Per §9.3 |
+| `next_run_at` | ISO 8601 UTC or `null` | Per §9.3 |
+| `active_instances` | number | Count of instances in `running` state |
+
+Authentication: `X-SOP-Token` required (same as all `/sop/*` endpoints).
+
+### 9.5 `opensop ps` — local process status
+
+`opensop ps` is the CLI command that surfaces the process status model locally.
+It does not require a server. `opensop ps --remote` delegates to
+`GET /sop/processes/status` on the configured server.
+
+Output columns (tabular, `--json` for machine-readable):
+
+```
+NAME                  STATE      LAST STATUS   LAST RUN              NEXT RUN
+lead-qualification    open       ok            2026-08-05T10:00:00Z  -
+nightly-report        scheduled  never         -                     2026-08-06T00:00:00Z
+invoice-intake        running    ok            2026-08-05T11:30:00Z  -
+```
+
+Implementation details (A1) are not part of this spec. The column semantics
+map 1-to-1 with the fields in §9.3.
+
+---
+
+## 10. Reliability Metrics Contract
+
+### 10.1 Purpose
+
+Each run produces a receipt. This section defines the additional per-run fields
+that every conforming implementation must capture to support reproducibility
+comparison and cost visibility. These fields extend the existing local run
+receipt (§5.6, `audit.jsonl`) and are already present in the reference server's
+`sop_llm_calls` table (the Rails `Sop::LlmCall` model captures `model`,
+`input_tokens`, `output_tokens`, `duration_ms`).
+
+### 10.2 Per-run captured fields
+
+The following fields must be written into each completed step receipt in
+`audit.jsonl` (local) and into the server's step event records (server):
+
+| Field | Type | Source | Description |
+|---|---|---|---|
+| `duration_ms` | integer | wall clock | Elapsed time in milliseconds from step start to step end, inclusive of retries. |
+| `model` | string or `null` | step definition | Model identifier used for `llm` steps (e.g. `claude-haiku-4-5`). `null` for non-LLM steps. |
+| `tokens_in` | integer or `null` | LLM provider response | Input tokens consumed by this step. `null` for non-LLM steps. |
+| `tokens_out` | integer or `null` | LLM provider response | Output tokens produced by this step. `null` for non-LLM steps. |
+| `canonical_result` | string or `null` | computed | `jq -S` (sorted-key compact JSON) of the step's `output` object. Enables field-level reproducibility comparison without byte-hashing raw text. `null` when output is not valid JSON or the step failed without producing output. |
+
+**Local receipt schema extension (adds to §5.6):**
+
+```json
+{
+  "run_id": "...",
+  "step": "score-lead",
+  "type": "llm",
+  "executor": "external",
+  "status": "completed",
+  "exit_code": 0,
+  "started_at": "2026-08-05T10:00:00Z",
+  "ended_at":   "2026-08-05T10:00:03Z",
+  "output": { "score": 8, "rationale": "Strong fit." },
+  "duration_ms": 2847,
+  "model": "claude-haiku-4-5",
+  "tokens_in": 312,
+  "tokens_out": 47,
+  "canonical_result": "{\"rationale\":\"Strong fit.\",\"score\":8}"
+}
+```
+
+**Optionality:** `tokens_in`, `tokens_out`, and `model` are present only for
+`llm` steps. `duration_ms` is present for every step. `canonical_result` is
+present for every step that produces JSON output; it is `null` otherwise.
+
+**No PII in canonical_result:** if a step's output may contain personal data,
+the canonical result must still be written — redaction of output fields is a
+separate concern addressed in §11.4 (fault-record redaction). The
+`canonical_result` is computed from the actual step output, not from a
+sanitized version.
+
+### 10.3 Manifest-level run summary
+
+The run-level `manifest.json` (§5.5) gains a `metrics` block written at
+completion:
+
+```json
+{
+  "run_id": "...",
+  "process": "lead-qualification",
+  "status": "completed",
+  "started_at": "...",
+  "ended_at": "...",
+  "metrics": {
+    "duration_ms": 4210,
+    "total_tokens_in": 312,
+    "total_tokens_out": 47,
+    "llm_step_count": 1
+  }
+}
+```
+
+`total_tokens_in` and `total_tokens_out` are the sum of all `llm` steps in the
+run. `llm_step_count` is the count of steps with a non-null `model`.
+
+### 10.4 Server — no new columns required
+
+The Rails reference server already captures `model`, `input_tokens`,
+`output_tokens`, and timing in `sop_llm_calls`. Conforming servers must expose
+these fields on the instance event stream once §10 is implemented. The exact
+server API for querying per-run metrics is reserved for v0.7.x — it lands with
+the observability terminal (G1/A2).
+
+### 10.5 Reproducibility comparison
+
+The `canonical_result` field enables the benchmark harness (`opensop bench`,
+C1b) to compare run outputs field-by-field without byte-hashing raw text:
+
+```bash
+# Compare two runs of the same process
+jq -S .output run_a/audit.jsonl | diff - <(jq -S .output run_b/audit.jsonl)
+```
+
+A conforming implementation must compute `canonical_result` as
+`jq -S '.' <<< "$output_json"`. Any implementation that cannot invoke `jq`
+should use a JSON-serializer that produces sorted, compact output as the
+canonical form.
+
+---
+
+## 11. Security Model
+
+### 11.1 No telemetry
+
+**OpenSOP collects no telemetry.** The CLI (`cli/bin/opensop`) never phones
+home. The spec defines no analytics endpoints. No run data, process definitions,
+inputs, outputs, or usage patterns are sent anywhere by the engine itself.
+Users control where their data goes — it stays on their machine (local mode) or
+on their self-hosted server (remote mode).
+
+### 11.2 Shell-step trust boundary
+
+The `shell` and `automated` step types execute arbitrary code on the host:
+
+- `shell` runs `bash -c <run>` with the process context on stdin.
+- `automated` runs an external script (any language, any interpreter).
+
+**This is the same trust posture as a Makefile.** Only run process files you
+trust. A malicious `.sop.json` can exfiltrate environment variables, read
+filesystem paths the user can access, or make network calls. The local engine
+imposes no sandbox.
+
+**Mitigations a conforming implementation should apply:**
+
+| Control | Description |
+|---|---|
+| Path restriction | Resolve `automated` script paths relative to the process file's directory (and its parent). Reject absolute paths pointing outside the cell root. |
+| Environment hygiene | The engine must not inject the `OPENSOP_API_TOKEN` or any server credential into the subprocess environment. Step context is passed via `OSL_CONTEXT` and stdin only. |
+| No implicit network | `shell`/`automated` steps do not receive network credentials by default; any outbound call is the script author's responsibility. |
+
+**The server profile does not expose `shell` steps.** The `shell` step type is
+local-only. A conforming server must reject process definitions that declare
+`type: shell`.
+
+### 11.3 Secrets in a `serve`/daemon context
+
+When `opensop serve` (A3) runs as a daemon or scheduled process:
+
+- Secrets must be supplied via environment variables, not embedded in process
+  files. The `${env.SECRET_NAME}` interpolation in webhook URLs and headers
+  (§3.10) is the intended pattern.
+- Daemon process files (`.sop.json`) must not store secret values. A
+  conforming implementation should warn at parse time if a field value matches
+  common secret patterns (e.g. a token-like string in a literal field value,
+  rather than in an `${env.*}` reference).
+- The `OPENSOP_API_TOKEN` environment variable controls access to the server's
+  `/sop/*` API. It must be set in any network-accessible deployment. See §4.2
+  (Authentication) for the fail-closed behavior when this variable is unset.
+
+### 11.4 Fault-record redaction
+
+Fault records (produced when a step fails, used by `opensop heal`) may contain
+step inputs and partial outputs. These can include PII (e.g. names, emails) if
+the process operates on personal data.
+
+**Rules for fault records:**
+
+1. Fault records are local files and must not be pushed to version control.
+   Conforming implementations should include `**/*.fault.json` and
+   `.opensop/faults/` in `.gitignore` templates.
+2. A conforming implementation must provide a redaction mechanism that strips
+   values matching declared `format: email`, `format: phone`, and any field
+   marked `pii: true` in the process definition before writing a fault record
+   that will be shared externally (e.g. via `opensop heal --share`).
+3. When the fault record redaction mechanism is not yet implemented, the
+   implementation must document this gap and warn the user before writing
+   a fault record containing input data.
+
+**DRAFT NOTE (for Opus review):** The `pii: true` field annotation and
+`format: phone` are not yet in the process definition schema (§2.2). This
+section assumes they will land with D2 (fault/heal). Flag if the shape should
+be specified here or deferred entirely to S0b.
+
+### 11.5 Stream and API authentication
+
+When a server exposes a streaming endpoint (e.g. SSE for live instance events):
+
+- The stream endpoint must require the same `X-SOP-Token` authentication as
+  all other `/sop/*` endpoints.
+- The server must not expose instance inputs or step outputs on an
+  unauthenticated stream channel.
+
+**Reserved for v0.7.x:** the specific SSE endpoint shape (`GET
+/sop/instances/stream`) lands with G1/A2. The authentication requirement stated
+here applies to any conforming implementation that exposes a stream.
+
+### 11.6 What is out of scope for this spec
+
+The following are security properties of specific implementations, not of the
+spec itself:
+
+- Transport security (TLS). Use a reverse proxy or your platform's ingress.
+- Secret management (vault, secrets manager, `.env` files). The spec uses
+  `${env.X}` as the reference mechanism; how those env vars get populated is
+  outside the spec.
+- Input sanitization beyond schema type-checking. Process definitions declare
+  field types (§2.4); implementors should apply appropriate escaping when
+  rendering inputs into prompts or shell commands.
+- Rate limiting and DDoS protection on the `/sop/*` API.
+
+---
+
+## 12. Roadmapped Features
 
 Features listed here are defined in this spec but not yet implemented in either
 profile. The server parser rejects them unless noted.
@@ -1527,23 +1849,27 @@ profile. The server parser rejects them unless noted.
 | `subprocess` fan-out (`fan_out:` modifier) | Phase 4 |
 | `post_review:` process hook | Phase 5 |
 | Inter-instance shared state (`shared_state_writes:`, `instance.shared_state.<key>`) | Phase 5 |
-| `trigger.type: schedule` (cron) | Phase 3; parser rejects today |
-| `trigger.type: interval` scheduler consumption | Phase 3; parser stores `interval_seconds` but no scheduler runs yet |
-| `trigger.at: [...]` (multi-time daily) | Phase 3; parser rejects today |
+| `trigger.type: schedule` (cron) | Reserved for v0.7.x — lands with A3; parser rejects today |
+| `trigger.type: interval` scheduler consumption | Reserved for v0.7.x — lands with A3; parser stores `interval_seconds` but no scheduler runs yet |
+| `trigger.at: [...]` (multi-time daily) | Reserved for v0.7.x — lands with A3; parser rejects today |
 | Webhook `response_mode: poll` | Not yet implemented; executor raises StepFailure |
 | Subprocess actual child instance creation | Currently stubbed |
 | Notification actual delivery | Currently stubbed |
 | `judgment` LLM router | Currently stubbed; all judgments escalate to human |
 | `async: true` on steps | Deferred to v0.3 |
 | Template `extends:` | Deferred to v0.3 |
+| `GET /sop/processes/status` server rollup | Reserved for v0.7.x — lands with G1 (§9.4) |
+| Instance stream / SSE (`GET /sop/instances/stream`) | Reserved for v0.7.x — lands with G1/A2 (§11.5) |
+| Fault semantics + `opensop heal` | Reserved for v0.7.x — lands with D2 (§11.4) |
+| Run-level metrics API (server) | Reserved for v0.7.x — lands with G1/A2 (§10.4) |
 
 ---
 
-## 10. Examples
+## 13. Examples
 
 All examples use generic placeholders. No real credentials, no real PII.
 
-### 10.1 Minimal local process
+### 13.1 Minimal local process
 
 ```json
 {
@@ -1557,7 +1883,7 @@ All examples use generic placeholders. No real credentials, no real PII.
 
 Run: `opensop run ./greet.sop.json --input name=Alice`
 
-### 10.2 Form pause and resume
+### 13.2 Form pause and resume
 
 ```json
 {
@@ -1590,10 +1916,10 @@ opensop submit <run_id> collect \
 # → { "status": "completed" }
 ```
 
-### 10.3 Server process with LLM + webhook
+### 13.3 Server process with LLM + webhook
 
 ```yaml
-opensop: "0.6"
+opensop: "0.7"
 
 process:
   name: lead-intake
@@ -1644,12 +1970,13 @@ process:
 | 0.1 | Initial spec: process model, 8 step types, instance lifecycle, API surface, server data model |
 | 0.2 | `llm` step, `tools:`, collection outputs, `exit_when:`, `loop:` step, interval trigger (parser-only), `post_review:` hook (roadmapped), shared state (roadmapped), `validation:` on `automated` |
 | 0.6 | Local execution backend (genuine local execution, no server), `.sop.json` flat format, run-dir artifacts (manifest/audit/context), pause/resume state machine, cell substrate (init/scope/annotate/lineage/fork), `shell` and `noop` local-only step types, `executor` audit field, `--conflicts` for list |
+| 0.7 | Process status model (§9): canonical process states (`open`/`scheduled`/`running`) and rollup fields (`last_status`, `last_run_at`, `next_run_at`). Reliability metrics contract (§10): per-step `duration_ms`, `model`, `tokens_in`, `tokens_out`, `canonical_result` in run receipts; manifest-level `metrics` block. Security model (§11): no-telemetry statement, shell-step trust boundary, daemon secrets posture, fault-record redaction rules, stream auth requirement. Stream protocol, self-heal semantics, scheduler-trigger promotion, and server metrics API reserved for v0.7.x. `/sop/*` HTTP contract unchanged. |
 
 ## Appendix B — Flat vs. wrapped envelope quick reference
 
 ```
 FLAT (local shorthand):                     WRAPPED (server / YAML):
-{                                           opensop: "0.6"
+{                                           opensop: "0.7"
   "name": "greet",                          process:
   "inputs": {},                               name: greet
   "steps": [...]                              version: "1.0"
