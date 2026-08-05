@@ -1,12 +1,29 @@
-# OpenSOP — Agent Guide
+# OpenSOP — How It Works for Agents
 
-**One place to learn everything an agent needs:** install the CLI, author a `.sop.json` process, run it locally, inspect and resume paused steps, and connect to a server when you need shared orchestration.
+Agents are good at *doing* steps and bad at *remembering which steps*. Left alone, an agent re-invents the procedure every time — slowly, inconsistently, unauditably. OpenSOP gives you a process as infrastructure: declare it once, run it the same way every time, keep the receipts.
 
-Companion references: [`SPEC.md`](../SPEC.md) (full format grammar + HTTP API reference in §4.2), [`cli/README.md`](../cli/README.md) (CLI command reference).
+This guide covers the full loop: **Discover → Run → Build → openSOP-ize → Iterate & Evolve**.
+
+Companion references: [`SPEC.md`](../SPEC.md) (format grammar + HTTP API §4.2), [`cli/README.md`](../cli/README.md) (full command reference).
 
 ---
 
-## 1. Install the CLI
+## Contents
+
+1. [Install](#1-install)
+2. [Discover](#2-discover)
+3. [Run](#3-run)
+4. [Receipts and structured output](#4-receipts-and-structured-output)
+5. [Build a process](#5-build-a-process)
+6. [openSOP-ize — the key agent skill](#6-opensop-ize--the-key-agent-skill)
+7. [Iterate and evolve](#7-iterate-and-evolve)
+8. [Self-check rubric](#8-self-check-rubric)
+9. [Common mistakes](#9-common-mistakes)
+10. [CLAUDE.md snippets](#10-claudemd-snippets)
+
+---
+
+## 1. Install
 
 The CLI is a single bash file. No build step, no daemon, no package manager.
 
@@ -29,52 +46,255 @@ curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/ope
   -o /usr/local/bin/opensop && chmod +x /usr/local/bin/opensop
 ```
 
-If `sudo` is needed for `/usr/local/bin`, use `~/.local/bin/opensop` instead and confirm it is on `$PATH`.
+If `sudo` is needed for `/usr/local/bin`, use `~/.local/bin/opensop` and confirm it is on `$PATH`.
 
-**From source (for hermetic / air-gapped environments):**
+From source (hermetic / air-gapped):
 
 ```bash
 git clone https://github.com/Chosen9115/opensop.git /tmp/opensop
 cp /tmp/opensop/cli/bin/opensop /usr/local/bin/opensop && chmod +x /usr/local/bin/opensop
 ```
 
-**Verify:**
+Verify:
 
 ```bash
-opensop --version    # prints: opensop 0.8.0
-opensop help         # prints the full command reference
+opensop --version    # opensop 0.8.0
+opensop help         # full command reference
 ```
 
 ### Trust boundary
 
-Local steps in a `.sop.json` execute **arbitrary shell on the host** — same posture as a Makefile. Never silently fetch and run process files from URLs the user has not reviewed.
+Local steps in a `.sop.json` execute arbitrary shell on the host — same posture as a Makefile. Never fetch and run process files from URLs the user has not reviewed.
 
 ---
 
-## 2. Process format (v0.6)
+## 2. Discover
 
-Process files are JSON (`.sop.json`). The top-level shape:
+Before writing anything, check whether a process already exists.
+
+### Keyword search
+
+```bash
+opensop search lead                      # ranked text search (local)
+opensop --remote search lead             # same, against server library
+```
+
+Output is ranked by name/description/tag match. Parse with `--json`:
+
+```bash
+opensop search lead --json | jq '.[].name'
+```
+
+### Intent-based match
+
+```bash
+opensop suggest "qualify an inbound lead"          # local
+opensop --remote suggest "score a prospect"        # server
+opensop suggest "extract action items" --threshold 60   # minimum score (0-100)
+```
+
+`suggest` returns the top-matching process name + score. If score is below threshold, nothing is returned — no false matches.
+
+### Enumerate all processes
+
+```bash
+opensop list                             # processes visible from cwd (cell chain)
+opensop list --tag extraction            # filter by tag
+opensop --remote list                    # server library
+```
+
+### Machine-readable command index (new in v0.8.0)
+
+```bash
+opensop help --json                      # full command registry as JSON
+opensop help --json | jq '.[] | select(.category=="discovery")'
+```
+
+Every command entry has: `command`, `summary`, `usage`, `category`, `backend` (`local` | `remote` | `dual`).
+
+### When to stop searching and write a new process
+
+Search first. Write new only when:
+- `suggest` returns score < 60 on two distinct phrasings of the task.
+- The matched process covers ≤ 50% of the steps you need.
+- The task recurs and has a clear input/output boundary.
+
+---
+
+## 3. Run
+
+v0.8.0 is local-first. `opensop run` runs on-machine with no server required.
+
+### Start a run
+
+```bash
+opensop run ./extract-action-items.sop.json --input notes="$(cat meeting.txt)"
+opensop run extract-action-items --input notes="$(cat meeting.txt)"   # bare name resolves in cell chain
+opensop run extract-action-items --inputs '{"notes":"raw text here"}' # JSON object form
+```
+
+With `--json`, the run emits a JSON object on stdout when it starts (or completes synchronously):
+
+```bash
+opensop run extract-action-items --input notes="..." --json
+# → {"run_id":"r-abc123","status":"running","process":"extract-action-items"}
+```
+
+### Validate without running
+
+```bash
+opensop dry-run ./my-process.sop.json --input key=value
+```
+
+Validates inputs and previews steps. No run is created.
+
+### Check status
+
+```bash
+opensop status <run_id>                  # current state
+opensop status <run_id> --json           # machine-readable
+opensop steps  <run_id>                  # per-step state
+opensop steps  <run_id> --json
+```
+
+`status` values: `running` | `waiting` | `completed` | `failed` | `interrupted`.
+
+Poll until done:
+
+```bash
+until opensop status <run_id> --json | jq -e '.status != "running" and .status != "waiting"' >/dev/null; do
+  sleep 2
+done
+```
+
+### Resume a paused step
+
+Some step types pause the run:
+
+| Step type | Pause state | Resume command |
+|---|---|---|
+| `form` | `waiting_for_input` | `opensop submit <run_id> <step-id> --output key=value` |
+| `approval` | `waiting_for_approval` | `opensop submit <run_id> <step-id> --output decision=approve` |
+| `webhook` callback | `waiting_for_callback` | `opensop submit <run_id> <step-id> --output key=value` |
+| `wait` with `until:` | `waiting_for_callback` | `opensop submit <run_id> <step-id>` |
+| `subprocess` | propagates child pause | Resume the child run; parent auto-continues |
+
+When paused, `manifest.waiting` records the step id, pause reason, and expected outputs. Inspect it:
+
+```bash
+opensop show <run_id> --json | jq '.manifest.waiting'
+# → {"step_id":"collect-info","pause_reason":"waiting_for_input","expected_outputs":{"notes":{"type":"string"}}}
+```
+
+Then submit:
+
+```bash
+opensop submit <run_id> collect-info --output notes="$(cat file.txt)"
+```
+
+Completed steps never re-run. The run resumes at the next unexecuted step.
+
+### Cancel
+
+```bash
+opensop cancel <run_id> --reason "superseded by newer run"
+```
+
+### List and inspect runs
+
+```bash
+opensop runs                             # all local runs
+opensop show <run_id>                    # manifest + per-step receipts
+opensop show <run_id> --json            # machine-readable full receipt
+opensop history --process extract-action-items --limit 10
+opensop compass                          # top processes by run-count, recency, failure rate
+```
+
+### Remote server mode
+
+```bash
+opensop config set url https://your-server.example.com
+opensop config set token <your-api-token>
+
+opensop --remote run extract-action-items --input notes="..."
+opensop --remote status <run_id>
+opensop --remote submit <run_id> <step-id> --output key=value
+opensop --remote schema extract-action-items    # full process definition from server
+```
+
+`--server <url>` overrides the configured URL for a single call.
+
+---
+
+## 4. Receipts and structured output
+
+Every local run writes three files under `~/.opensop-local/runs/<run_id>/` (or `.opensop/runs/<run_id>/` when inside a cell):
+
+| File | Contents |
+|---|---|
+| `manifest.json` | Status, cursor position, `waiting` block when paused, inputs, timestamps |
+| `audit.jsonl` | Append-only log — one JSON object per step event |
+| `context.json` | Accumulated outputs after each completed step |
+
+### Parsing outputs
+
+```bash
+# outputs after completion
+opensop show <run_id> --json | jq '.manifest.outputs'
+
+# specific step output
+opensop show <run_id> --json | jq '.steps["extract-items"].outputs'
+
+# full step audit
+cat ~/.opensop-local/runs/<run_id>/audit.jsonl | jq 'select(.step_id=="extract-items")'
+```
+
+### Structured errors
+
+When `--json` is set and a command fails, errors emit to stderr as:
+
+```json
+{"error": "process_not_found", "message": "No process named 'foo' in cell chain.", "hint": "Run 'opensop list' to see available processes."}
+```
+
+Parse them:
+
+```bash
+opensop run missing-process --json 2>/tmp/err.json || jq .error /tmp/err.json
+```
+
+---
+
+## 5. Build a process
+
+When a task recurs, has 3+ distinct steps, and has a clear input/output boundary, encode it.
+
+### Process file shape
+
+Process files are JSON (`.sop.json`). Minimal skeleton:
 
 ```json
 {
   "opensop": "0.6",
-  "name": "my-process",
+  "name": "extract-action-items",
   "version": "1.0",
-  "description": "One-sentence description.",
+  "description": "Extract action items and owners from meeting notes.",
   "inputs": {
-    "company_name": { "type": "string", "required": true },
-    "country": { "type": "enum", "values": ["US", "MX", "CA"], "required": true }
+    "notes": { "type": "string", "required": true }
   },
   "outputs": {
-    "account_id": { "from": "steps.create-account.outputs.account_id" }
+    "action_items": { "from": "steps.extract.outputs.action_items" }
   },
   "steps": [
     {
-      "id": "collect-info",
-      "type": "form",
-      "outputs": {
-        "legal_name": { "type": "string", "required": true },
-        "annual_revenue": { "type": "number" }
+      "id": "extract",
+      "type": "llm",
+      "model": "claude-haiku-4-5",
+      "prompt": "Extract action items from these meeting notes: {{process.inputs.notes}}\n\nReturn JSON matching the schema.",
+      "expected_output_schema": {
+        "action_items": [
+          { "task": "string", "owner": "string", "due": "string" }
+        ]
       }
     }
   ]
@@ -82,10 +302,10 @@ Process files are JSON (`.sop.json`). The top-level shape:
 ```
 
 Key rules:
-- `opensop: "0.6"` — new files declare `"0.6"`; the parser also accepts `"0.1"` and `"0.2"` for legacy files.
+- `"opensop": "0.6"` required.
 - `name` and step `id` must match `^[a-z0-9][a-z0-9_-]*$`.
-- `version` must be a quoted string (unquoted `1.0` parses as a float in YAML; in JSON it is safe but keep it a string for clarity).
-- Step `id` values must be unique within the process.
+- `"version"` is a quoted string.
+- Step `id` values must be unique.
 
 ### Field types
 
@@ -100,16 +320,33 @@ Key rules:
 
 ### The `from:` resolver
 
-Step inputs and process outputs reference earlier values:
-
 | Reference | Resolves to |
 |---|---|
-| `process.inputs.<name>` | A value passed to the process at start |
+| `process.inputs.<name>` | A value passed at run start |
 | `steps.<step-id>.outputs.<name>` | Output of a completed prior step |
 | `instance.id` / `instance.started_at` | Runtime metadata |
 | `env.<VAR_NAME>` | `ENV["VAR_NAME"]` — fails if unset |
 
-Forward references (referencing a step that hasn't run yet) fail at runtime. Keep `from:` references pointing only upstream.
+Forward references (pointing to a step that hasn't run yet) fail at runtime.
+
+### The twelve step types
+
+Pick one per boundary. Stop if you need a type not in this list — you're likely over-engineering or need a spec extension.
+
+| Type | What it does | Local support |
+|---|---|---|
+| `shell` | Raw shell command; stdout captured as output | Full |
+| `automated` | Subprocess (any language) on stdin/stdout JSON | Full |
+| `noop` | Pass-through; useful as placeholder | Full |
+| `form` | Pause for structured human or agent input | Full (pause/resume) |
+| `approval` | Binary human gate (approve/reject) | Full (pause/resume) |
+| `llm` | LLM call; structured response validates against schema | Full (needs `ANTHROPIC_API_KEY`) |
+| `wait` | Pause for duration or condition | Full (immediate for `seconds`; pause/resume for `until`) |
+| `webhook` | Outbound HTTP call; sync or callback response mode | Full sync + callback; `poll` not implemented |
+| `subprocess` | Start a child OpenSOP process; pause until it completes | Full (max depth 16) |
+| `loop` | Iterate a subprocess over a collection | Full |
+| `judgment` | LLM or human decision with confidence threshold | Not implemented locally — use server runtime |
+| `notification` | Fire-and-forget email/Slack/SMS | Not implemented locally — use server runtime |
 
 ### Conditions
 
@@ -124,285 +361,193 @@ Forward references (referencing a step that hasn't run yet) fail at runtime. Kee
 { "condition": "process.inputs.country == 'US' && steps.verify.outputs.score > 0.8" }
 ```
 
-No `eval`. No function calls. No regex. If you need more, propose it upstream rather than working around.
+No `eval`. No function calls. No regex.
 
----
-
-## 3. The twelve step types
-
-Pick one per boundary. If you find yourself reaching for a type not listed here, stop — you are likely over-engineering.
-
-### `form` — collect structured data from a human or agent
-
-Pauses the run at `waiting_for_input`. A human (UI) or agent (CLI submit) provides the declared outputs.
-
-```json
-{
-  "id": "collect-info",
-  "type": "form",
-  "outputs": {
-    "legal_name": { "type": "string", "required": true },
-    "annual_revenue": { "type": "number" }
-  }
-}
-```
-
-### `automated` — run a script
-
-Spawns a script, passes inputs as JSON on stdin, reads outputs as JSON from stdout. Any language with stdlib JSON support works.
-
-```json
-{
-  "id": "score-lead",
-  "type": "automated",
-  "run": "./steps/score-lead.rb",
-  "inputs": { "budget": { "from": "steps.collect-context.outputs.budget" } },
-  "outputs": {
-    "score": { "type": "number" },
-    "qualified": { "type": "boolean" }
-  }
-}
-```
-
-The script must: read JSON from stdin, write JSON to stdout, exit 0 on success / non-zero on failure (stderr captured as the error message).
-
-`run:` paths in server-mode processes are resolved relative to `processes/` (the library root), not relative to the process file. In CLI local mode, they are resolved relative to the process file.
-
-### `shell` — shell command (local backend)
-
-Like `automated` but the executor is a raw shell string. Outputs captured from stdout.
-
-```json
-{
-  "id": "greet",
-  "type": "shell",
-  "run": "echo hello from opensop"
-}
-```
-
-### `noop` — pass-through
-
-Does nothing; immediately advances. Useful as a placeholder or documentation step.
-
-### `judgment` — decision with confidence threshold
-
-Pauses at `escalated`. An LLM (server backend with `ANTHROPIC_API_KEY`) or a human reviews and submits a decision + confidence. If confidence < threshold, the step escalates.
-
-```json
-{
-  "id": "review-application",
-  "type": "judgment",
-  "outputs": {
-    "decision": { "type": "enum", "values": ["approve", "reject", "request-more-info"] },
-    "rejection_reason": { "type": "string", "required_if": "decision == 'reject'" }
-  },
-  "judgment": {
-    "allow_agent": true,
-    "confidence_threshold": 0.9,
-    "escalation": "manual"
-  }
-}
-```
-
-**Local backend:** not yet implemented — use the server runtime for judgment steps.
-
-### `approval` — binary human gate
-
-Simpler than judgment: pauses until an approver submits approve/reject.
-
-```json
-{
-  "id": "approve-refund",
-  "type": "approval",
-  "approval": { "approver_role": "ops-lead", "reason_required_on_reject": true },
-  "outputs": {
-    "approved": { "type": "boolean" },
-    "reason": { "type": "string", "required_if": "approved == false" }
-  }
-}
-```
-
-### `webhook` — outbound HTTP with callback
-
-Fires an outbound HTTP call, then pauses at `waiting_for_callback`. The third party POSTs back to the auto-generated callback URL and the run continues.
-
-```json
-{
-  "id": "submit-to-compliance",
-  "type": "webhook",
-  "webhook": {
-    "method": "POST",
-    "url": "${env.COMPLIANCE_URL}/entities",
-    "response_mode": "callback"
-  },
-  "outputs": {
-    "entity_id": { "type": "string" },
-    "compliance_status": { "type": "enum", "values": ["approved", "rejected"] }
-  }
-}
-```
-
-`response_mode` options: `callback` (wait for the provider to POST back), `sync` (use the response body directly as outputs), `poll` (not yet implemented in local backend).
-
-Variable interpolation in `url` and headers: `${env.FOO}`, `${process.inputs.foo}`, `${callback_url}`.
-
-### `subprocess` — start a child process
-
-Starts another OpenSOP process and pauses until it completes. The local backend supports recursive subprocess up to depth 16.
-
-```json
-{
-  "id": "run-compliance",
-  "type": "subprocess",
-  "subprocess": {
-    "process": "compliance-submission",
-    "version": "1.0"
-  }
-}
-```
-
-### `notification` — fire-and-forget message
-
-Sends an email, Slack message, or SMS. Does not wait for delivery confirmation.
-
-**Local backend:** not yet implemented — use the server runtime.
-
-### `wait` — pause for duration or condition
-
-```json
-{ "id": "cool-off", "type": "wait", "wait": { "seconds": 86400 } }
-```
-
-Or pause until a condition is met:
-
-```json
-{ "id": "wait-for-callback", "type": "wait", "wait": { "until": "steps.previous.outputs.received == true" } }
-```
-
-`wait.seconds` executes immediately in the local backend (no real timer). `wait.until` pauses at `waiting_for_callback` and requires a manual submit.
-
-### `llm` — LLM call
-
-Calls a language model and uses the structured response as step outputs.
-
-```json
-{
-  "id": "synthesize",
-  "type": "llm",
-  "model": "claude-opus-4-7",
-  "prompt": "Synthesize these events: ...",
-  "expected_output_schema": { "brief_md": "string" }
-}
-```
-
-Requires `ANTHROPIC_API_KEY` in the environment (local and server).
-
-### `loop` — iterate over a collection
-
-Runs a subprocess for each item in a collection.
-
----
-
-## 4. Run, inspect, and resume locally
-
-v0.8.0 is local-first: `opensop run` runs on-machine by default with no server.
-
-### Core commands
+### Validate your process file
 
 ```bash
-# Run a process
-opensop run ./my-process.sop.json --input company_name="Acme Corp" --input country=US
-
-# Run a named process (looks up by name in the cell chain)
-opensop run my-process --input company_name="Acme Corp"
-
-# List all processes visible from the current directory
-opensop list
-
-# List all local runs
-opensop runs
-
-# Inspect a specific run (manifest + per-step receipts)
-opensop show <run_id>
-
-# Fork a process (copy it, record lineage)
-opensop fork my-process my-fork-name
+opensop dry-run ./my-process.sop.json --input key=value
 ```
 
-### Paused steps — when a run waits for input
+This does a full schema and input validation pass without creating a run.
 
-Some step types pause the run:
+---
 
-| Step type | Pause state | Resume command |
+## 6. openSOP-ize — the key agent skill
+
+This is the highest-leverage thing an agent can do: take a prose "skill" or prompt a user runs repeatedly, and encode it as a `.sop.json` process — pinning scope, adding a schema, making deterministic parts real steps so the output is reliable and identical every time.
+
+### When to openSOP-ize
+
+openSOP-ize when a task has all three:
+1. Runs more than once (it will be called again).
+2. Has a clear input/output boundary (you know what goes in and what must come out).
+3. Has at least one deterministic sub-step that can be separated from the LLM call.
+
+### The transformation: before and after
+
+**Scenario:** An AI consultant's team runs a meeting-notes debrief. They paste notes into a chat and ask the model to "extract the action items." Different runs produce differently-shaped JSON (or plain prose). Owners are sometimes missing. Schema changes with the model's mood.
+
+---
+
+**Before — naive prose prompt ("skill")**
+
+```
+You are a meeting notes analyst. Extract all action items from the notes I give you.
+Return them as JSON.
+
+Notes:
+<paste meeting notes here>
+```
+
+Problems:
+- No schema — output shape varies between runs.
+- No scope — the model decides what counts as an "action item."
+- No validation — a malformed response goes straight to the caller.
+- Not repeatable — different model, different prompt, different day → different output.
+- No audit trail — you can't see what ran or what it returned.
+
+---
+
+**After — openSOP-ized process**
+
+`extract-action-items.sop.json`:
+
+```json
+{
+  "opensop": "0.6",
+  "name": "extract-action-items",
+  "version": "1.0",
+  "description": "Extract action items, owners, and due dates from meeting notes. Returns a typed JSON array.",
+  "inputs": {
+    "notes": {
+      "type": "string",
+      "required": true,
+      "description": "Raw meeting notes text. Min 50 chars."
+    },
+    "meeting_date": {
+      "type": "string",
+      "required": false,
+      "description": "ISO 8601 date of the meeting, e.g. 2026-08-05. Used to infer relative due dates."
+    }
+  },
+  "outputs": {
+    "action_items": { "from": "steps.extract.outputs.action_items" }
+  },
+  "steps": [
+    {
+      "id": "extract",
+      "type": "llm",
+      "model": "claude-haiku-4-5",
+      "prompt": "Extract every action item from these meeting notes.\n\nMeeting date: {{process.inputs.meeting_date|'(not provided)'}}\n\nNotes:\n{{process.inputs.notes}}\n\nRules:\n- Include only explicitly assigned tasks, not discussion points.\n- If no owner is stated, set owner to null.\n- Express due dates as ISO 8601 or null if not mentioned.\n- Return a JSON object with key 'action_items' containing an array.",
+      "expected_output_schema": {
+        "action_items": [
+          {
+            "task": "string",
+            "owner": "string|null",
+            "due": "string|null"
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+Run it:
+
+```bash
+opensop run extract-action-items.sop.json \
+  --input notes="$(cat meeting-2026-08-05.txt)" \
+  --input meeting_date=2026-08-05 \
+  --json
+```
+
+The CLI's `llm` step:
+- Strips markdown fences before JSON parsing.
+- Validates the response against `expected_output_schema`.
+- Retries automatically on schema mismatch (up to the configured retry count).
+- Writes the validated output to `context.json`.
+
+---
+
+**What changed and why it matters**
+
+| Dimension | Before (prose prompt) | After (openSOP process) |
 |---|---|---|
-| `form` | `waiting_for_input` | `opensop submit <run_id> <step-id> --output key=value` |
-| `approval` | `waiting_for_approval` | `opensop submit <run_id> <step-id> --output decision=approve` |
-| `wait` (with `until:`) | `waiting_for_callback` | `opensop submit <run_id> <step-id>` |
-| `webhook` (callback mode) | `waiting_for_callback` | `opensop submit <run_id> <step-id> --output key=value` |
-| `subprocess` | propagates child pause | Resume the child run; parent auto-continues |
-
-When paused, `manifest.status` is `waiting` and `manifest.waiting` records the step id, pause reason, and expected outputs. The run resumes at the next unexecuted step — completed steps never re-run.
-
-### Local run receipts
-
-Every run writes three files under `$OPENSOP_LOCAL_HOME/runs/<run_id>/` (default: `~/.opensop-local/runs/`, or `.opensop/runs/` when inside a cell):
-
-| File | Contents |
-|---|---|
-| `manifest.json` | Status, cursor position, `waiting` block when paused, inputs, timestamps |
-| `audit.jsonl` | Append-only log — one JSON object per step event |
-| `context.json` | Accumulated outputs after each completed step |
-
-`manifest.status` is one of: `running`, `waiting`, `completed`, `failed`, `interrupted`.
-
-### Local backend — step type support (v0.8.0)
-
-| Step type | Local support |
-|---|---|
-| `automated` / `shell` / `noop` | Full |
-| `form` / `approval` | Full (pause/resume) |
-| `wait` (`seconds`) | Full (immediate) |
-| `wait` (`until`) | Full (pause/resume) |
-| `llm` | Full (requires `ANTHROPIC_API_KEY`) |
-| `webhook` sync | Full |
-| `webhook` callback | Full (pause/resume) |
-| `webhook` poll | Not implemented |
-| `subprocess` | Full (recursive, max depth 16) |
-| `judgment` / `notification` | Not implemented — use server runtime |
+| Output shape | Variable — model decides | Fixed schema, validated before caller receives it |
+| Scope | Unbounded — model includes what it likes | Explicit rules in the prompt; scope is part of the file |
+| Retries | None — caller handles failures | CLI retries on schema mismatch automatically |
+| Auditability | None | `audit.jsonl` records every call, output, and timestamp |
+| Reproducibility | Re-derive the prompt every time | `opensop run extract-action-items` — same file, same behavior |
+| Evolution | Edit the chat | `git diff`, `opensop fork`, `opensop lineage` |
+| Discovery | Grep chat history | `opensop search action items` or `opensop suggest "pull out tasks"` |
 
 ---
 
-## 5. Using a server (remote mode)
+### openSOP-ize checklist
 
-When you need persistent audit trails, a monitoring UI, or team coordination, point the CLI at an OpenSOP server (reference implementation: [opensop-rails](https://github.com/Chosen9115/opensop-rails)).
+Work through these in order. Stop at the first item that doesn't hold — fix it before proceeding.
+
+1. **Name it.** One slug: `extract-action-items`. Must match `^[a-z0-9][a-z0-9_-]*$`.
+2. **Declare inputs.** What must be provided for this to run? Mark required ones. Add a description for each.
+3. **Declare the output schema.** What must come back? Type every field. The LLM step validates against this.
+4. **Split deterministic from generative.** If there is a step that transforms, validates, or routes data without needing an LLM — make it `shell` or `automated`. The LLM step does only what needs intelligence.
+5. **Write the prompt as part of the file.** The prompt is infrastructure now. It must be explicit about scope, output format, and edge cases (no owner → `null`, not omitted).
+6. **Set `model` explicitly.** Never rely on a default. Pin the model in the step.
+7. **Validate.** `opensop dry-run ./extract-action-items.sop.json --input notes="test"`
+
+---
+
+## 7. Iterate and evolve
+
+OpenSOP processes evolve like code — fork, adapt, record lineage.
+
+### Fork a process
 
 ```bash
-# Configure
-opensop config set url https://your-server.example.com
-opensop config set token <your-api-token>
-
-# Or override per-call
-opensop --server https://your-server.example.com --token <token> list
-
-# Or use --remote (uses the configured URL)
-opensop --remote list
-opensop --remote run my-process --input key=value
-opensop --remote schema my-process          # full process definition from server
-opensop --remote search keyword             # intent-based discovery
+opensop fork extract-action-items          # copy from nearest ancestor cell
+opensop fork extract-action-items --from /path/to/cell   # from a specific cell
 ```
 
-All commands that accept `--remote` also accept `--server <url>`. `runs` and `show` are always local.
+Forking records lineage automatically. The new copy starts in `unverified` status.
 
-The server API uses `X-SOP-Token` header auth. The token is `OPENSOP_API_TOKEN` on the server side.
+### Annotate lineage
+
+```bash
+opensop annotate extract-action-items promote '{"to":"m2","by":"alice@example.com"}'
+opensop annotate extract-action-items bless   '{"by":"human","note":"verified on 20 meetings"}'
+```
+
+Event types: `promote`, `bless`, `deprecate`, `fork`, and any custom event type.
+
+### Inspect lineage
+
+```bash
+opensop lineage extract-action-items         # status, metadata, history
+opensop lineage extract-action-items --json  # machine-readable
+```
+
+### Compare runs
+
+```bash
+opensop diff <run_id_1> <run_id_2>           # diff outputs of two runs of the same process
+```
+
+Useful when iterating on prompt changes: run twice with different versions, diff the outputs.
+
+### Evolution policy
+
+The full mineralization and evolution policy (tiers m0–m6, forward/reverse, fork-from-unverified rules) is documented in [[EVOLUTION.md]] — not yet shipped, tracked as a fast-follow in the v2 roadmap.
 
 ---
 
-## 6. Self-check rubric — before claiming a process is ready
+## 8. Self-check rubric
 
-Run through these checks. The engine rejects processes that fail them.
+Run through these before committing or running a process. The engine rejects processes that fail format checks; the rest are authoring best practices.
 
-### Format
-- [ ] `"opensop": "0.6"` at the top. New files must declare `"0.6"`.
+### Format (engine enforced)
+- [ ] `"opensop": "0.6"` at the top.
 - [ ] `"version"` is a quoted string, not a bare number.
 - [ ] Every `name` and `id` matches `^[a-z0-9][a-z0-9_-]*$`.
 - [ ] Step `id` values are unique within the process.
@@ -410,36 +555,39 @@ Run through these checks. The engine rejects processes that fail them.
 ### Structure
 - [ ] `name`, `version`, and `steps` are all present.
 - [ ] Every step has `id` and `type`.
-- [ ] `type` is one of the twelve: `form`, `automated`, `shell`, `noop`, `judgment`, `approval`, `webhook`, `subprocess`, `notification`, `wait`, `llm`, `loop`.
+- [ ] `type` is one of the twelve listed in §5.
 
 ### Data flow
 - [ ] Every `from: process.inputs.X` has a matching entry in `inputs`.
-- [ ] Every `from: steps.Y.outputs.Z` refers to a step that appears **earlier** in the step list (no forward references).
-- [ ] Every `form`, `judgment`, `approval`, and `webhook` step declares `outputs`.
+- [ ] Every `from: steps.Y.outputs.Z` refers to a step that appears earlier in the step list.
+- [ ] Every `form`, `approval`, `judgment`, and `webhook` step declares `outputs`.
 - [ ] Enum types have `values` populated.
 - [ ] `automated` steps have a script file at the resolved path.
 
-### Conditions
-- [ ] Every `condition:` / `required_if:` uses only the supported operators. No `eval`, no function calls.
-- [ ] Fields referenced in conditions exist in the output schema of the referenced step.
+### LLM steps
+- [ ] `model` is set explicitly.
+- [ ] `expected_output_schema` is declared.
+- [ ] Prompt includes explicit output format instructions and edge-case handling.
 
-### Ordering
-- [ ] The first blocking step is reachable (no `condition:` that is always false).
-- [ ] Process-level `outputs` reference steps that will have completed by the time the process ends.
+### Conditions
+- [ ] Every `condition:` / `required_if:` uses only the supported operators.
+- [ ] Fields referenced in conditions exist in the output schema of the referenced step.
 
 ---
 
-## 7. Common mistakes
+## 9. Common mistakes
 
-**`run:` path doesn't resolve.** In server-mode, `run:` is relative to the `processes/` library root, not to the process file. A YAML at `processes/examples/my-process.sop.yaml` must write `run: "./examples/steps/my-script.rb"`, not `"./steps/my-script.rb"`.
+**`run:` path doesn't resolve.** In server mode, `run:` is relative to the `processes/` library root, not to the process file. A YAML at `processes/examples/my-process.sop.yaml` must write `run: "./examples/steps/my-script.rb"`, not `"./steps/my-script.rb"`.
 
 **Condition always true/false.** The evaluator treats missing identifiers as `null`, which compares false to almost everything. Check the exact output key name on the upstream step.
 
-**`from:` resolution error at runtime.** The referenced step completed but its output key name differs from what `from:` expects. String keys must match exactly (`account_id` ≠ `accountId`).
+**`from:` resolution error at runtime.** The referenced step completed but its output key name differs. Keys must match exactly (`account_id` ≠ `accountId`).
 
-**Unquoted version.** `version: 1.0` in YAML parses as a float and renders as `1` in some contexts. Always quote: `version: "1.0"`.
+**LLM step fails schema validation repeatedly.** The `expected_output_schema` or the prompt's output instructions are inconsistent. Make the prompt say exactly what the schema requires, including null handling for optional fields.
 
-**Webhook step never advances.** Either the third party wasn't given the callback URL, it posted to the wrong path, or its payload keys don't match the step's declared `outputs`. Check `opensop show <run_id>` for the waiting block and verify the callback URL and expected output schema.
+**Unquoted version.** `version: 1.0` in YAML parses as a float. Always quote: `version: "1.0"`.
+
+**Webhook step never advances.** The callback URL was not given to the third party, or its payload keys don't match the step's declared `outputs`. Check `opensop show <run_id> --json | jq '.manifest.waiting'`.
 
 **`declare: -A: invalid option`.** bash 3.x is in use. Install bash 4+ (`brew install bash` on macOS).
 
@@ -447,67 +595,33 @@ Run through these checks. The engine rejects processes that fail them.
 
 ---
 
-## 8. Minimal working example
+## 10. CLAUDE.md snippets
 
-```json
-{
-  "opensop": "0.6",
-  "name": "hello-world",
-  "version": "1.0",
-  "description": "Say hello.",
-  "inputs": {
-    "greeting_target": { "type": "string", "required": true }
-  },
-  "outputs": {
-    "greeting": { "from": "steps.say-hello.outputs.greeting" }
-  },
-  "steps": [
-    {
-      "id": "say-hello",
-      "type": "form",
-      "outputs": {
-        "greeting": { "type": "string", "required": true }
-      }
-    }
-  ]
-}
-```
-
-Save as `hello-world.sop.json`, then:
-
-```bash
-opensop run hello-world.sop.json --input greeting_target=world
-# → run pauses at "say-hello" waiting for form input
-opensop runs
-# → shows the run_id and status=waiting
-opensop submit <run_id> say-hello --output greeting="hello, world"
-# → run completes
-opensop show <run_id>
-# → manifest.status=completed, manifest outputs contain greeting
-```
-
----
-
-## 9. Adding OpenSOP habits to an agent's CLAUDE.md
-
-Paste the block that matches how you want the agent to use OpenSOP:
+Paste the block that matches how you want an agent to use OpenSOP.
 
 **Local mode (no server):**
 
 ```markdown
-## OpenSOP (local — no server required)
+## OpenSOP (local)
 
-Before starting any multi-step task (3+ distinct steps, likely to repeat, clear inputs/outputs),
-check if a process already exists:
+Before starting any multi-step task (3+ distinct steps, clear inputs/outputs, likely to repeat):
 
-  opensop list                         # processes visible from the current directory
-  opensop run <name-or-file> --input k=v
+  opensop search <keyword>
+  opensop suggest "<task description>"
+  opensop list
 
-If a run pauses (form / approval / wait / webhook callback), resume with:
+If a matching process exists, run it:
+  opensop run <name|file.sop.json> --input k=v
+
+If a run pauses (form / approval / wait / webhook callback), check what it needs:
+  opensop show <run_id> --json | jq '.manifest.waiting'
   opensop submit <run_id> <step-id> --output k=v
 
-Check `opensop runs` for all local runs. `opensop show <run_id>` shows per-step receipts.
-`llm` steps require ANTHROPIC_API_KEY in the environment.
+Check all local runs: opensop runs
+Full receipt: opensop show <run_id> --json
+llm steps require ANTHROPIC_API_KEY in the environment.
+
+If no process matches, propose writing a .sop.json before doing the task ad-hoc.
 ```
 
 **Remote server:**
@@ -515,26 +629,24 @@ Check `opensop runs` for all local runs. `opensop show <run_id>` shows per-step 
 ```markdown
 ## OpenSOP (remote server)
 
-Check `opensop --remote list` before doing any multi-step task. If a process fits, run it:
-
-  opensop --remote run <name> --input k=v
+Check before any multi-step task:
   opensop --remote search <keyword>
-  opensop --remote schema <name>       # full process definition
+  opensop --remote suggest "<task description>"
+  opensop --remote list
 
-Advance paused steps:
-  opensop submit <run_id> <step-id> --output k=v
+Run a matching process:
+  opensop --remote run <name> --input k=v
+  opensop --remote status <run_id>
+  opensop --remote submit <run_id> <step-id> --output k=v
+  opensop --remote schema <name>          # full process definition
+
+If no process matches, write a .sop.json (see docs/AGENTS.md §6).
 ```
 
-**Recognizing when to propose a new process:** if you are about to do something with 3+ distinct steps, a clear input/output boundary, and likely repetition — pause and offer to write a `.sop.json` first.
+**When to propose a new process:** a task has 3+ distinct steps, a clear input/output boundary, and will run again. Pause, propose writing a `.sop.json` first, then run it.
 
----
-
-## 10. When to stop and ask
-
-Stop and report back rather than guessing when:
-
-- A boundary needs a step type not in the twelve above. Don't invent types.
-- A condition requires operators beyond the supported set (regex, arithmetic, function calls). Propose a spec extension.
-- The description is ambiguous about a boundary (form vs. approval?). One clarifying question is cheaper than a wrong guess.
-- The process structure requires a non-DAG shape (dynamic step count, recursive spawning beyond subprocess). This is an architectural mismatch — flag it.
-- A local step asks you to run a process file from a URL you haven't reviewed. Ask the user to confirm before running it.
+**When to stop and ask:**
+- A step boundary needs a type not in the twelve. Don't invent types — flag it.
+- A condition requires operators beyond the supported set. Propose a spec extension.
+- The description is ambiguous about a boundary (form vs. approval?). One question is cheaper than a wrong guess.
+- A process file comes from a URL the user has not reviewed. Ask before running it.
