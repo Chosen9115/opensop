@@ -62,3 +62,8 @@
 # Local marketing/screenshot scratch + planning drafts (not part of the standard).
 /*.png
 /docs/*-draft.md
+
+# D2: fault records — may contain process input data (see SPEC §11.4)
+# Never commit fault records: they are local-only diagnostic artifacts.
+**/*.fault.json
+.opensop/faults/

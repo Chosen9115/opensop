@@ -16,3 +16,8 @@
 # Local test output
 tmp/
 *.log
+
+# D2: fault records — may contain process input data (see SPEC §11.4)
+# Never commit fault records: they are local-only diagnostic artifacts.
+**/*.fault.json
+.opensop/faults/

@@ -44,6 +44,34 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
   - **Registry:** `ps` registered in `_registry_raw` as `category: inspection`,
     `backend: dual`.
+- **D2: Fault records + `opensop heal` — faults and one closed heal loop (SPEC §11.4).**
+
+  When a local step fails (without `continue_on_error`), the engine now writes a fault record
+  to `$OPENSOP_LOCAL_HOME/runs/<run_id>/fault.json` and records the path in `manifest.json`
+  under `fault_file`. The fault record contains: `run_id`, `faulted_at`, `process_file`,
+  `step.id` + `step.type`, `exit_code`, `inputs` (the accumulated context at failure), `output`
+  (the step's error output), and a machine-readable `debug_prompt` — an agent-actionable
+  description of what failed, what inputs were received, and how to apply a fix.
+
+  **Per SPEC §11.4:** fault records may contain process input data (PII risk). The engine warns
+  the user on every fault write. Fault records are excluded from version control via `.gitignore`
+  entries (`**/*.fault.json`, `.opensop/faults/`) in both `cli/` and the repo root. Do not push
+  fault records.
+
+  **`opensop heal <run_id>`** — diagnosis mode: print the fault record and `debug_prompt` for a
+  failed run in human-readable form. `--json` emits the raw structured fault record (for agent
+  consumption). Errors if the run is not failed, or if no fault file exists.
+
+  **`opensop heal <run_id> --apply [--input k=v ...]`** — the one closed loop: re-run the
+  previously-failed step using the current process definition and any caller-supplied input
+  corrections, then continue the run from there. Before re-running:
+  - Appends a `heal` event to `audit.jsonl` (fields: `event:"heal"`, `step`, `healed_at`, `note`).
+  - If cwd is inside an OpenSOP cell, appends a `heal` annotation to the process's lineage entry.
+  If the re-run succeeds, the run continues to completion (or the next pause). If the re-run fails
+  again, a fresh fault record is written and the command exits non-zero. The label "self-healing"
+  applies only to this `--apply` loop; `heal` without `--apply` is diagnosis only.
+
+  Registry entry: category `execution`, backend `local`. Wired in `main()`.
 
 - **C1a: Reliability metrics in local run receipts.** Each executed step's audit entry carries:
   - `duration_ms` — wall-clock milliseconds for that step (via `date +%s%3N`; falls back to

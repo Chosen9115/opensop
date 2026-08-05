@@ -717,6 +717,7 @@ submit|resume a paused (waiting) run by supplying step outputs|submit <run_id> <
 cancel|cancel a running or waiting run|cancel <run_id> [--reason TEXT]|execution|dual
 runs|list local runs|runs|execution|local
 show|show a local run's manifest and per-step receipts|show <run_id>|execution|local
+heal|diagnose or re-run a failed step (closed heal loop)|heal <run_id> [--apply] [--input k=v ...]|execution|local
 init|create .opensop/ in cwd making it an OpenSOP cell|init [--name N] [--parent PATH]|cells|local
 scope|print the active cell and ancestor chain|scope|cells|local
 annotate|append a policy event to a skill's lineage history|annotate <skill> <event-type> <json>|cells|local
@@ -1024,6 +1025,14 @@ EX
       cat <<'EX'
   opensop show <run_id>                        # manifest + per-step receipts
   opensop show <run_id> --json                 # machine-readable
+EX
+      ;;
+    heal)
+      cat <<'EX'
+  opensop heal <run_id>                        # print fault + debug_prompt for a failed run
+  opensop heal <run_id> --json                 # machine-readable fault record
+  opensop heal <run_id> --apply                # re-run the failed step, continue the run
+  opensop heal <run_id> --apply --input k=v    # re-run with corrected inputs
 EX
       ;;
     init)
@@ -3646,7 +3655,59 @@ $llm_rendered_prompt"
       printf '%s' "$ctx" > "$run_dir/context.json.tmp" && mv "$run_dir/context.json.tmp" "$run_dir/context.json"
     else
       [[ "$OUTPUT_MODE" != json ]] && err "[$sid] failed (exit $rc): $(jq -rc '.stdout // .' <<<"$out_json" | head -c 160)"
-      if [ "$scont" != "true" ]; then echo "failed"; return 0; fi
+      if [ "$scont" != "true" ]; then
+        # D2: write fault record before returning "failed".
+        # Per SPEC §11.4: fault records are sensitive — warn the user, keep local.
+        local fault_file="$run_dir/fault.json"
+        local fault_ts; fault_ts="$(_local_now)"
+        # Snapshot the step definition for the debug_prompt (schema, prompt, etc.)
+        local step_def; step_def="$(jq -c ".steps[$i]" "$proc_file" 2>/dev/null || echo '{}')"
+        # Build a machine-readable debug_prompt describing what failed + what to fix.
+        local debug_prompt
+        debug_prompt="$(jq -rn \
+          --arg rid "$run_id" \
+          --arg sid "$sid" \
+          --arg stype "$stype" \
+          --argjson rc_val "$rc" \
+          --argjson inputs "$ctx" \
+          --argjson step_def "$step_def" \
+          --argjson out "$out_json" \
+          '"Step \"" + $sid + "\" (type: " + $stype + ") failed in run " + $rid + " with exit code " + ($rc_val | tostring) + ".\n" +
+           "Step definition: " + ($step_def | tojson) + ".\n" +
+           "The step received these inputs (accumulated context at time of failure): " + ($inputs | tojson) + ".\n" +
+           "The step produced this output/error: " + ($out | tojson) + ".\n" +
+           "To diagnose: inspect the step definition and the inputs above. " +
+           "Common fixes: correct the step script or shell command, supply missing/corrected inputs via \"--input k=v\", or fix an upstream step output that this step depends on. " +
+           "To re-run after a fix: opensop heal " + $rid + " --apply [--input k=v ...]"')"
+        jq -nc \
+          --arg rid "$run_id" \
+          --arg sid "$sid" \
+          --arg stype "$stype" \
+          --argjson exit_code "$rc" \
+          --argjson inputs "$ctx" \
+          --argjson output "$out_json" \
+          --arg debug_prompt "$debug_prompt" \
+          --arg ts "$fault_ts" \
+          --arg proc_file "$proc_file" \
+          '{run_id:$rid,
+            faulted_at:$ts,
+            process_file:$proc_file,
+            step:{id:$sid, type:$stype},
+            exit_code:$exit_code,
+            inputs:$inputs,
+            output:$output,
+            debug_prompt:$debug_prompt}' > "$fault_file"
+        # Update manifest with fault reference.
+        jq -c --arg f "$fault_file" '. + {fault_file:$f}' \
+          "$run_dir/manifest.json" > "$run_dir/manifest.json.tmp" \
+          && mv "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
+        # SPEC §11.4 rule 3: warn that the fault record contains input data.
+        if [[ "$OUTPUT_MODE" != "json" ]]; then
+          err "fault record written: $fault_file"
+          err "WARNING: fault records may contain process input data — keep local, do not commit (see SPEC §11.4)"
+        fi
+        echo "failed"; return 0
+      fi
       ctx="$(jq -c --arg id "$sid" --argjson o "$out_json" '.[$id]=$o' <<<"$ctx")"
       printf '%s' "$ctx" > "$run_dir/context.json.tmp" && mv "$run_dir/context.json.tmp" "$run_dir/context.json"
     fi
@@ -4796,6 +4857,226 @@ local_show() {
   fi
 }
 
+# --------------------------------------------------------------------------- #
+# Subcommand: heal
+# --------------------------------------------------------------------------- #
+# opensop heal <run_id> [--json]
+#   Diagnosis: print the fault record + debug_prompt for a failed run.
+#   --json emits the structured fault record.
+#   Errors with instance_not_found if run is unknown or cli_error if not failed/no fault.
+#
+# opensop heal <run_id> --apply [--input k=v ...] [--inputs '<json>']
+#   Closed loop: re-run the failed step (and continue the run from there)
+#   using the current process definition + any corrected inputs supplied by caller.
+#   Appends a "heal" event to audit.jsonl (and a lineage annotation if in a cell).
+#   If re-run succeeds: run continues/completes normally.
+#   If re-run fails again: a fresh fault record is written at the same path.
+#   Prints a warning about input data exposure per SPEC §11.4.
+# --------------------------------------------------------------------------- #
+local_heal() {
+  [[ $# -lt 1 ]] && die "usage: opensop heal <run_id> [--apply] [--input k=v ...]" "usage_error" "run opensop help heal"
+  local run_id="${1:-}"; shift
+  [ -n "$run_id" ] || die "usage: opensop heal <run_id> [--apply] [--input k=v ...]" "usage_error"
+
+  local want_apply=false
+  local -a extra_args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --apply) want_apply=true ;;
+      --input|--inputs|-*)  extra_args+=("$1") ;;
+      *)        extra_args+=("$1") ;;
+    esac
+    shift
+  done
+
+  local run_dir="$OPENSOP_LOCAL_HOME/runs/$run_id"
+  [ -d "$run_dir" ] || die "no such local run: $run_id (see: opensop runs)" "instance_not_found" "opensop runs"
+  local mf="$run_dir/manifest.json"
+  [ -f "$mf" ] || die "run directory found but manifest.json is missing: $run_dir" "cli_error"
+
+  local mf_status; mf_status="$(jq -r '.status' "$mf")"
+  if [[ "$mf_status" != "failed" ]]; then
+    die "run $run_id is '$mf_status', not 'failed' — heal requires a failed run" "cli_error" \
+        "check 'opensop status $run_id' — only failed runs have fault records"
+  fi
+
+  local fault_file; fault_file="$(jq -r '.fault_file // ""' "$mf")"
+  if [[ -z "$fault_file" || ! -f "$fault_file" ]]; then
+    die "no fault record found for run $run_id" "cli_error" \
+        "fault records are written only for steps that fail without continue_on_error; the fault file may have been deleted"
+  fi
+
+  local fault_json; fault_json="$(cat "$fault_file")"
+
+  # ── diagnosis mode (no --apply) ───────────────────────────────────────────
+  if [[ "$want_apply" == false ]]; then
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+      echo "$fault_json"
+    else
+      local failed_step; failed_step="$(jq -r '.step.id // "unknown"' <<<"$fault_json")"
+      local failed_type; failed_type="$(jq -r '.step.type // "unknown"' <<<"$fault_json")"
+      local exit_code;   exit_code="$(jq -r '.exit_code // "?"' <<<"$fault_json")"
+      local faulted_at;  faulted_at="$(jq -r '.faulted_at // ""' <<<"$fault_json")"
+      local debug_p;     debug_p="$(jq -r '.debug_prompt // ""' <<<"$fault_json")"
+      info "── fault: $run_id ──"
+      printf '  step:      %s (%s)\n' "$failed_step" "$failed_type"
+      printf '  exit code: %s\n'      "$exit_code"
+      printf '  faulted at:%s\n'      "$faulted_at"
+      printf '  fault file:%s\n'      "$fault_file"
+      info "── debug_prompt ──"
+      printf '%s\n' "$debug_p"
+      info "── inputs snapshot (may contain sensitive data — see SPEC §11.4) ──"
+      jq -c '.inputs' <<<"$fault_json"
+      info "── next steps ──"
+      printf '  opensop heal %s --apply [--input k=v ...]   # re-run the failed step\n' "$run_id"
+    fi
+    return 0
+  fi
+
+  # ── apply mode (--apply) ──────────────────────────────────────────────────
+  # Re-run the previously-failed step and continue the run from there.
+  local proc_file; proc_file="$(jq -r '.process_file // ""' "$mf")"
+  [ -f "$proc_file" ] || die "process file not found: $proc_file (was the run created on another machine?)" "file_not_found"
+
+  local failed_step_id; failed_step_id="$(jq -r '.step.id' <<<"$fault_json")"
+
+  # Find the index of the failed step in the process file.
+  local n_steps; n_steps="$(jq '(.steps // []) | length' "$proc_file")"
+  local heal_index=-1 _hi=0
+  while [ "$_hi" -lt "$n_steps" ]; do
+    local _hsid; _hsid="$(jq -r ".steps[$_hi].id // \"step-$_hi\"" "$proc_file")"
+    if [[ "$_hsid" == "$failed_step_id" ]]; then heal_index="$_hi"; break; fi
+    _hi=$((_hi+1))
+  done
+  if [ "$heal_index" -lt 0 ]; then
+    die "failed step '$failed_step_id' not found in process file $proc_file — cannot apply heal" "cli_error" \
+        "the process definition may have changed; ensure the step still exists"
+  fi
+
+  # Warn about input data per SPEC §11.4.
+  if [[ "$OUTPUT_MODE" != "json" ]]; then
+    err "WARNING: heal --apply re-runs a step that may have received sensitive input data (see SPEC §11.4)"
+  fi
+
+  # Load context from last checkpoint (context.json) or manifest inputs.
+  local ctx
+  if [ -f "$run_dir/context.json" ]; then
+    ctx="$(cat "$run_dir/context.json")"
+  else
+    ctx="$(jq -c '.inputs // {}' "$mf")"
+  fi
+
+  # Merge any caller-supplied --input overrides.
+  if (( ${#extra_args[@]} > 0 )); then
+    local _heal_built; _heal_built="$(build_payload_object input "${extra_args[@]}")"
+    local _heal_inp; _heal_inp="$(echo "$_heal_built" | jq -c '.payload')"
+    ctx="$(jq -c --argjson i "$_heal_inp" '. * $i' <<<"$ctx")"
+  fi
+
+  # Append a "heal" audit event before re-running.
+  local heal_ts; heal_ts="$(_local_now)"
+  local audit="$run_dir/audit.jsonl"
+  jq -nc \
+    --arg rid "$run_id" \
+    --arg sid "$failed_step_id" \
+    --arg ts "$heal_ts" \
+    '{run_id:$rid, event:"heal", step:$sid, healed_at:$ts,
+      note:"heal --apply: re-running failed step"}' >> "$audit"
+
+  # Append lineage annotation if inside a cell.
+  local _cell_root; _cell_root="$(_find_scope_root 2>/dev/null || true)"
+  if [[ -n "$_cell_root" ]]; then
+    local _proc_name; _proc_name="$(jq -r '.process // "unknown"' "$mf")"
+    local _ln_data; _ln_data="$(jq -nc \
+      --arg rid "$run_id" \
+      --arg sid "$failed_step_id" \
+      --arg ts "$heal_ts" \
+      '{run_id:$rid, step:$sid, healed_at:$ts}')"
+    # Best-effort: don't abort heal if lineage write fails.
+    ( cd "$_cell_root" && "$0" annotate "$_proc_name" heal "$_ln_data" --json >/dev/null 2>&1 ) || true
+  fi
+
+  # Update manifest to "running" for the re-run (finalize_trap will clean up if we crash).
+  jq -c '.status="running" | del(.ended_at) | del(.fault_file)' \
+    "$run_dir/manifest.json" > "$run_dir/manifest.json.tmp" \
+    && mv "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
+  trap '_local_finalize_trap "$run_dir"' EXIT
+
+  # Re-run the step loop starting at heal_index.
+  local loop_status
+  loop_status="$(_local_step_loop "$run_dir" "$proc_file" "$heal_index" "$ctx")"
+  trap - EXIT
+
+  # Determine outcome.
+  local heal_run_status
+  case "$loop_status" in
+    completed)    heal_run_status="completed" ;;
+    failed)       heal_run_status="failed" ;;
+    waiting:*)    heal_run_status="waiting" ;;
+    *)            heal_run_status="failed" ;;
+  esac
+
+  # Finalize manifest (mirrors local_run finalize path).
+  if [[ "$heal_run_status" == "waiting" ]]; then
+    local wait_index; wait_index="${loop_status#waiting:}"
+    local wait_step; wait_step="$(jq -r ".steps[$wait_index].id // \"step-$wait_index\"" "$proc_file")"
+    local wait_since; wait_since="$(_local_now)"
+    local wait_expects; wait_expects="$(jq -c --argjson idx "$wait_index" '
+      .steps[$idx] as $s |
+      ($s.inputs // $s.outputs // null) as $decl |
+      if $decl != null and ($decl | length) > 0 then
+        { outputs: [$decl[].name // empty], schema: $decl }
+      elif $s.type == "approval" then
+        { outputs: ["decision"],
+          schema:  [{"name":"decision","type":"enum","values":["approve","reject"],"required":true}] }
+      else { outputs: [], schema: [] }
+      end
+    ' "$proc_file")"
+    local wait_stype; wait_stype="$(jq -r ".steps[$wait_index].type // \"automated\"" "$proc_file")"
+    local wait_reason
+    case "$wait_stype" in
+      form)     wait_reason="waiting_for_input" ;;
+      approval) wait_reason="waiting_for_approval" ;;
+      *)        wait_reason="waiting_for_callback" ;;
+    esac
+    jq -c --arg s "waiting" \
+          --argjson idx "$(( wait_index + 1 ))" \
+          --argjson widx "$wait_index" \
+          --arg step "$wait_step" \
+          --arg reason "$wait_reason" \
+          --arg since "$wait_since" \
+          --argjson expects "$wait_expects" \
+       '.status=$s
+        | .cursor={next_index:$idx}
+        | .waiting={step:$step, index:$widx, reason:$reason, expects:$expects, since:$since}' \
+       "$run_dir/manifest.json" > "$run_dir/manifest.json.tmp" \
+    && mv "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
+  else
+    local ended; ended="$(_local_now)"
+    jq -c --arg s "$heal_run_status" --arg e "$ended" \
+       '.status=$s | .ended_at=$e' \
+       "$run_dir/manifest.json" > "$run_dir/manifest.json.tmp" \
+    && mv "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
+  fi
+
+  if [[ "$OUTPUT_MODE" == "json" ]]; then
+    jq -c . "$run_dir/manifest.json"
+  else
+    if [[ "$heal_run_status" == "completed" ]]; then
+      ok "healed run $C_BOLD$run_id$C_RESET — completed"
+    elif [[ "$heal_run_status" == "waiting" ]]; then
+      ok "healed run $C_BOLD$run_id$C_RESET — waiting at $wait_step"
+      info "  next: opensop submit $run_id $wait_step --output k=v"
+    else
+      err "heal --apply: re-run of step '$failed_step_id' failed again — new fault record written"
+    fi
+    info "  run: $run_id"
+    info "  dir: $run_dir"
+  fi
+
+  [ "$heal_run_status" = "completed" ] || [ "$heal_run_status" = "waiting" ]
+}
+
 main() {
   require_jq
 
@@ -4917,6 +5198,7 @@ main() {
     annotate)   cmd_annotate "$@" ;;
     lineage)    cmd_lineage "$@" ;;
     fork)       cmd_fork "$@" ;;
+    heal)       local_heal "$@" ;;
     # 'help' is handled by the local-only short-circuit above (before remote init).
     *)          die "unknown command '$cmd' — run 'opensop help' for usage" "unknown_command" "run opensop help" ;;
   esac

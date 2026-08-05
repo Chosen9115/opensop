@@ -4221,5 +4221,196 @@ set -e
 echo "PASS: A1 ps unknown flag — exits non-zero with error"
 
 rm -rf "$ps_home"
+# D2: fault record — failing step writes fault.json with debug_prompt.
+# --------------------------------------------------------------------------- #
+d2_home="$(mktemp -d)"
+d2_proc="$d2_home/d2-fail.sop.json"
+cat > "$d2_proc" <<'JSON'
+{ "name": "d2-fail", "inputs": {"input_a": "hello"},
+  "steps": [
+    { "id": "good",  "type": "shell", "run": "echo good-output" },
+    { "id": "boom",  "type": "shell", "run": "echo failing-step >&2; exit 7" },
+    { "id": "after", "type": "shell", "run": "echo should-not-run" }
+  ] }
+JSON
+
+set +e
+d2_m="$(OPENSOP_LOCAL_HOME="$d2_home" "$cli" run "$d2_proc" --local --json 2>/dev/null)"; d2_rc=$?
+set -e
+[ "$d2_rc" -ne 0 ] || { echo "FAIL: D2 — failing run should exit non-zero, got $d2_rc"; exit 1; }
+d2_run_id="$(jq -r '.run_id' <<<"$d2_m")"
+d2_run_dir="$d2_home/runs/$d2_run_id"
+
+# (1) fault_file is referenced in manifest
+d2_fault_file="$(jq -r '.fault_file // ""' "$d2_run_dir/manifest.json")"
+[ -n "$d2_fault_file" ] || { echo "FAIL: D2 — manifest.fault_file not set after failure"; exit 1; }
+echo "PASS: D2 — manifest.fault_file is set after step failure"
+
+# (2) fault.json exists
+[ -f "$d2_fault_file" ] || { echo "FAIL: D2 — fault.json not found at $d2_fault_file"; exit 1; }
+echo "PASS: D2 — fault.json written at expected path"
+
+# (3) fault.json shape: required fields
+d2_fault="$(cat "$d2_fault_file")"
+jq -e '.run_id and .step.id and .step.type and .exit_code != null and .inputs != null and .output != null and .debug_prompt and .faulted_at and .process_file' <<<"$d2_fault" >/dev/null \
+  || { echo "FAIL: D2 — fault.json missing required fields, got: $(jq -c . <<<"$d2_fault")"; exit 1; }
+echo "PASS: D2 — fault.json has all required fields"
+
+# (4) fault.json step is the correct failed step
+[ "$(jq -r '.step.id' <<<"$d2_fault")" = "boom" ] \
+  || { echo "FAIL: D2 — fault.step.id should be 'boom', got: $(jq -r '.step.id' <<<"$d2_fault")"; exit 1; }
+echo "PASS: D2 — fault.step.id is the correct failed step"
+
+# (5) exit_code matches what the step returned
+[ "$(jq -r '.exit_code' <<<"$d2_fault")" = "7" ] \
+  || { echo "FAIL: D2 — fault.exit_code should be 7, got: $(jq -r '.exit_code' <<<"$d2_fault")"; exit 1; }
+echo "PASS: D2 — fault.exit_code is correct"
+
+# (6) debug_prompt contains the run_id, step id, and a hint about opensop heal
+d2_dp="$(jq -r '.debug_prompt' <<<"$d2_fault")"
+echo "$d2_dp" | grep -q "$d2_run_id" || { echo "FAIL: D2 — debug_prompt missing run_id"; exit 1; }
+echo "$d2_dp" | grep -q "boom"       || { echo "FAIL: D2 — debug_prompt missing step id"; exit 1; }
+echo "$d2_dp" | grep -q "opensop heal" || { echo "FAIL: D2 — debug_prompt missing 'opensop heal' hint"; exit 1; }
+echo "PASS: D2 — debug_prompt contains run_id, step id, and heal hint"
+
+# (7) inputs snapshot is in fault.json (the accumulated context)
+jq -e '.inputs | type == "object"' <<<"$d2_fault" >/dev/null \
+  || { echo "FAIL: D2 — fault.inputs should be an object"; exit 1; }
+echo "PASS: D2 — fault.inputs snapshot is present"
+
+# (8) fault record only written for the non-continue_on_error path;
+#     continue_on_error=true steps do NOT write a fault record.
+d2_coe_proc="$d2_home/d2-coe.sop.json"
+cat > "$d2_coe_proc" <<'JSON'
+{ "name": "d2-coe", "inputs": {},
+  "steps": [
+    { "id": "boom", "type": "shell", "continue_on_error": true, "run": "exit 5" },
+    { "id": "ok",   "type": "shell", "run": "echo ok" }
+  ] }
+JSON
+d2_coe_m="$(OPENSOP_LOCAL_HOME="$d2_home" "$cli" run "$d2_coe_proc" --local --json)"
+d2_coe_rid="$(jq -r '.run_id' <<<"$d2_coe_m")"
+d2_coe_fault="$(jq -r '.fault_file // ""' "$d2_home/runs/$d2_coe_rid/manifest.json")"
+[ -z "$d2_coe_fault" ] \
+  || { echo "FAIL: D2 — fault_file should NOT be set when continue_on_error=true, got: $d2_coe_fault"; exit 1; }
+echo "PASS: D2 — fault record NOT written when continue_on_error=true"
+
+# --------------------------------------------------------------------------- #
+# D2: heal (diagnosis) — opensop heal <run_id> prints fault + debug_prompt.
+# --------------------------------------------------------------------------- #
+
+# (9) heal on failed run prints debug_prompt (prose mode — --pretty or piped)
+d2_heal_out="$(OPENSOP_LOCAL_HOME="$d2_home" "$cli" heal "$d2_run_id" 2>&1)"
+echo "$d2_heal_out" | grep -q "boom" \
+  || { echo "FAIL: D2 — heal prose output missing step id 'boom'"; exit 1; }
+echo "$d2_heal_out" | grep -q "opensop heal" \
+  || { echo "FAIL: D2 — heal prose output missing 'opensop heal' hint"; exit 1; }
+echo "PASS: D2 — heal (prose) prints step id and heal hint"
+
+# (10) heal --json emits structured fault record
+d2_heal_json="$(OPENSOP_LOCAL_HOME="$d2_home" "$cli" heal "$d2_run_id" --json)"
+jq -e '.run_id and .step.id and .debug_prompt' <<<"$d2_heal_json" >/dev/null \
+  || { echo "FAIL: D2 — heal --json missing required fault fields"; exit 1; }
+[ "$(jq -r '.step.id' <<<"$d2_heal_json")" = "boom" ] \
+  || { echo "FAIL: D2 — heal --json step.id wrong"; exit 1; }
+echo "PASS: D2 — heal --json emits structured fault record"
+
+# (11) heal on a non-failed (successful) run exits non-zero
+d2_ok_proc="$d2_home/d2-ok.sop.json"
+cat > "$d2_ok_proc" <<'JSON'
+{ "name": "d2-ok", "inputs": {},
+  "steps": [ { "id": "s", "type": "shell", "run": "echo ok" } ] }
+JSON
+d2_ok_m="$(OPENSOP_LOCAL_HOME="$d2_home" "$cli" run "$d2_ok_proc" --local --json)"
+d2_ok_rid="$(jq -r '.run_id' <<<"$d2_ok_m")"
+set +e
+OPENSOP_LOCAL_HOME="$d2_home" "$cli" heal "$d2_ok_rid" --json >/dev/null 2>&1
+d2_ok_heal_rc=$?
+set -e
+[ "$d2_ok_heal_rc" -ne 0 ] || { echo "FAIL: D2 — heal on a successful run should exit non-zero"; exit 1; }
+echo "PASS: D2 — heal on a successful run errors correctly"
+
+# (12) heal on unknown run_id exits non-zero
+set +e
+OPENSOP_LOCAL_HOME="$d2_home" "$cli" heal "no-such-run-id" --json >/dev/null 2>&1
+d2_unk_rc=$?
+set -e
+[ "$d2_unk_rc" -ne 0 ] || { echo "FAIL: D2 — heal on unknown run_id should exit non-zero"; exit 1; }
+echo "PASS: D2 — heal on unknown run_id exits non-zero"
+
+# --------------------------------------------------------------------------- #
+# D2: heal --apply (closed loop) — re-run the failed step and continue.
+# --------------------------------------------------------------------------- #
+
+# (13) heal --apply on a run where we fix the step: succeeds + completes.
+# Strategy: create a process that conditionally fails based on a file sentinel,
+# then fix the condition and apply the heal.
+d2_apply_dir="$d2_home/apply"
+mkdir -p "$d2_apply_dir"
+d2_sentinel="$d2_apply_dir/sentinel"
+# Step that fails if sentinel file exists; passes if absent.
+cat > "$d2_apply_dir/apply.sop.json" <<JSON
+{ "name": "d2-apply", "inputs": {},
+  "steps": [
+    { "id": "ok",   "type": "shell", "run": "echo pre-heal" },
+    { "id": "boom", "type": "shell", "run": "[ ! -f \"$d2_sentinel\" ] || exit 9" },
+    { "id": "done", "type": "shell", "run": "echo healed-and-done" }
+  ] }
+JSON
+# First run: sentinel present → step fails.
+touch "$d2_sentinel"
+set +e
+d2_apply_m="$(OPENSOP_LOCAL_HOME="$d2_home" "$cli" run "$d2_apply_dir/apply.sop.json" --local --json 2>/dev/null)"; d2_apply_rc=$?
+set -e
+[ "$d2_apply_rc" -ne 0 ] || { echo "FAIL: D2 apply — initial run should fail, got 0"; exit 1; }
+d2_apply_rid="$(jq -r '.run_id' <<<"$d2_apply_m")"
+[ "$(jq -r '.status' <<<"$d2_apply_m")" = "failed" ] \
+  || { echo "FAIL: D2 apply — initial run status should be failed"; exit 1; }
+echo "PASS: D2 apply — initial run fails as expected"
+
+# Fix the condition (remove sentinel), then heal --apply.
+rm -f "$d2_sentinel"
+set +e
+d2_apply_heal="$(OPENSOP_LOCAL_HOME="$d2_home" "$cli" heal "$d2_apply_rid" --apply --json 2>/dev/null)"; d2_apply_heal_rc=$?
+set -e
+[ "$d2_apply_heal_rc" -eq 0 ] || { echo "FAIL: D2 apply — heal --apply should exit 0 after fix, got $d2_apply_heal_rc"; exit 1; }
+[ "$(jq -r '.status' <<<"$d2_apply_heal")" = "completed" ] \
+  || { echo "FAIL: D2 apply — heal --apply run should complete, got: $(jq -r '.status' <<<"$d2_apply_heal")"; exit 1; }
+echo "PASS: D2 apply — heal --apply exits 0 and run completes"
+
+# (14) 'done' step must have run after the heal
+d2_apply_show="$(OPENSOP_LOCAL_HOME="$d2_home" "$cli" show "$d2_apply_rid" --json)"
+jq -e '.steps[] | select(.step=="done" and .status=="completed")' <<<"$d2_apply_show" >/dev/null \
+  || { echo "FAIL: D2 apply — 'done' step did not run after heal --apply"; exit 1; }
+echo "PASS: D2 apply — 'done' step ran and completed after heal --apply"
+
+# (15) audit.jsonl must contain a heal event before the re-run receipts.
+d2_apply_audit="$d2_home/runs/$d2_apply_rid/audit.jsonl"
+jq -e 'select(.event=="heal" and .step=="boom")' "$d2_apply_audit" >/dev/null \
+  || { echo "FAIL: D2 apply — no heal event in audit.jsonl"; exit 1; }
+echo "PASS: D2 apply — heal event recorded in audit.jsonl"
+
+# (16) heal --apply when re-run fails again → new fault record at fault_file.
+# Reset sentinel so the step fails again.
+touch "$d2_sentinel"
+# Run fresh fail.
+set +e
+d2_refail_m="$(OPENSOP_LOCAL_HOME="$d2_home" "$cli" run "$d2_apply_dir/apply.sop.json" --local --json 2>/dev/null)"
+d2_refail_rid="$(jq -r '.run_id' <<<"$d2_refail_m")"
+# Attempt heal --apply — sentinel still present, so re-run fails again.
+d2_refail_heal_out="$(OPENSOP_LOCAL_HOME="$d2_home" "$cli" heal "$d2_refail_rid" --apply --json 2>/dev/null)"
+d2_refail_heal_rc=$?
+set -e
+[ "$d2_refail_heal_rc" -ne 0 ] || { echo "FAIL: D2 apply — heal --apply with still-failing step should exit non-zero"; exit 1; }
+[ "$(jq -r '.status' <<<"$d2_refail_heal_out")" = "failed" ] \
+  || { echo "FAIL: D2 apply — run status after re-fail should be 'failed'"; exit 1; }
+# A new fault_file should be set in the manifest.
+d2_refail_fault="$(jq -r '.fault_file // ""' "$d2_home/runs/$d2_refail_rid/manifest.json")"
+[ -n "$d2_refail_fault" ] && [ -f "$d2_refail_fault" ] \
+  || { echo "FAIL: D2 apply — new fault record not written after re-fail (fault_file=$d2_refail_fault)"; exit 1; }
+echo "PASS: D2 apply — heal --apply with still-failing step exits non-zero + fresh fault record written"
+
+rm -f "$d2_sentinel"
+rm -rf "$d2_home"
 
 echo "ALL PASS"
