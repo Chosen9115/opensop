@@ -1722,7 +1722,7 @@ cmd_ps() {
   }
 
   if $follow; then
-    trap 'printf "\n"; exit 0' INT
+    trap '[[ "$OUTPUT_MODE" == "json" ]] || printf "\n"; exit 0' INT
     while true; do
       if [[ "$OUTPUT_MODE" == "json" ]]; then
         _ps_remote_render
@@ -1839,7 +1839,9 @@ local_ps() {
         --argjson data "$_mf_data" '
         # §9.2: running if any manifest has status ∈ {running, waiting}
         ($data | map(select(.status == "running" or .status == "waiting")) | length > 0) as $any_active |
-        ($data | map(select(.status == "running" or .status == "waiting")) | length) as $active_count |
+        # §9.4: active_instances counts RUNNING only (a paused/waiting run makes
+        # the process state "running" per §9.2 but is not an active instance).
+        ($data | map(select(.status == "running")) | length) as $active_count |
 
         # state: running > open (no scheduler yet, so no "scheduled")
         ($any_active | if . then "running" else "open" end) as $state |
@@ -1877,7 +1879,7 @@ local_ps() {
   }
 
   if $follow; then
-    trap 'printf "\n"; exit 0' INT
+    trap '[[ "$OUTPUT_MODE" == "json" ]] || printf "\n"; exit 0' INT
     while true; do
       if [[ "$OUTPUT_MODE" == "json" ]]; then
         # NDJSON mode: one compact JSON array per poll on its own line.

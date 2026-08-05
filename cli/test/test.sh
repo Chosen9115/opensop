@@ -4119,9 +4119,9 @@ ps_while_paused="$( cd "$ps_home/cell" && env -u OPENSOP_LOCAL_HOME "$cli" ps --
 pauser_entry="$(jq -r '.[] | select(.name == "pauser")' <<<"$ps_while_paused")"
 [ "$(jq -r '.state' <<<"$pauser_entry")" = "running" ] \
   || { echo "FAIL: A1 ps mid-form-pause — pauser.state should be running (waiting manifest counts), got: $(jq -r '.state' <<<"$pauser_entry")"; exit 1; }
-[ "$(jq -r '.active_instances' <<<"$pauser_entry")" = "1" ] \
-  || { echo "FAIL: A1 ps mid-form-pause — pauser.active_instances should be 1, got: $(jq -r '.active_instances' <<<"$pauser_entry")"; exit 1; }
-echo "PASS: A1 ps mid-form-pause — pauser shows state=running, active_instances=1 (waiting manifest → §9.2 rule 2)"
+[ "$(jq -r '.active_instances' <<<"$pauser_entry")" = "0" ] \
+  || { echo "FAIL: A1 ps mid-form-pause — pauser.active_instances should be 0 (§9.4: running-only; a waiting run is not active), got: $(jq -r '.active_instances' <<<"$pauser_entry")"; exit 1; }
+echo "PASS: A1 ps mid-form-pause — pauser state=running but active_instances=0 (§9.2 running from waiting; §9.4 active_instances counts running only)"
 
 # --------------------------------------------------------------------------- #
 # Fix 3 — real cancelled fixture: manifest with status=cancelled does NOT
