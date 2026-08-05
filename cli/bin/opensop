@@ -2211,6 +2211,21 @@ cmd_schema_validate() {
 # =========================================================================== #
 
 _local_now()    { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# Portable SHA-256 digest of stdin → 64-char hex string on stdout.
+# Tries sha256sum (Linux coreutils), shasum -a 256 (macOS), then openssl dgst.
+# Echoes nothing if none are available — callers must handle empty output.
+# NEVER called without `|| true` guard (see Fix 1 in C1a adversarial review).
+_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -c1-64
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -c1-64
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | sed 's/.*= //' | cut -c1-64
+  else
+    return 0  # no hasher — emit nothing; caller falls back to "unavailable"
+  fi
+}
 # Milliseconds since epoch (GNU date +%s%3N). Used for duration_ms in receipts.
 # Falls back to seconds*1000 on systems where %N is unavailable (non-GNU date).
 _local_now_ms() {
@@ -2462,19 +2477,28 @@ _local_step_loop() {
       form)
         # Pause — append a "waiting" receipt and return the waiting signal.
         # context.json is already up-to-date (written after last completed step).
+        # C1a Fix 3: compute duration_ms at the pause point so the receipt carries
+        # the field consistently with all other step types.  result_hash="pending"
+        # is the canonical sentinel for a step that has not yet produced output
+        # (local_diff treats "pending" as non-comparable per Fix 2).
+        local _form_pause_ms; _form_pause_ms=$(( $(_local_now_ms) - s_started_ms ))
         jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
-               --arg a "$s_started" \
+               --arg a "$s_started" --argjson dur "$_form_pause_ms" \
           '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
-            reason:"waiting_for_input", started_at:$a}' >> "$audit"
+            reason:"waiting_for_input", started_at:$a,
+            duration_ms:$dur, result_hash:"pending"}' >> "$audit"
         echo "waiting:$i"
         return 0 ;;
       approval)
         # Approval pause — byte-parity with StepExecutors::Approval (reason: waiting_for_approval).
         # context.json is already up-to-date (written after last completed step).
+        # C1a Fix 3: same duration_ms + result_hash:"pending" treatment as form above.
+        local _appr_pause_ms; _appr_pause_ms=$(( $(_local_now_ms) - s_started_ms ))
         jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
-               --arg a "$s_started" \
+               --arg a "$s_started" --argjson dur "$_appr_pause_ms" \
           '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
-            reason:"waiting_for_approval", started_at:$a}' >> "$audit"
+            reason:"waiting_for_approval", started_at:$a,
+            duration_ms:$dur, result_hash:"pending"}' >> "$audit"
         echo "waiting:$i"
         return 0 ;;
       wait)
@@ -2492,12 +2516,15 @@ _local_step_loop() {
           rc=0
         elif jq -e 'has("until")' <<<"$wait_block" >/dev/null 2>&1; then
           # Async pause — record an advisory "until" and pause.
-          local wait_until_val
+          # C1a Fix 3: duration_ms + result_hash:"pending" for consistency.
+          local wait_until_val _wait_pause_ms
           wait_until_val="$(jq -r '.until' <<<"$wait_block")"
+          _wait_pause_ms=$(( $(_local_now_ms) - s_started_ms ))
           jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
-                 --arg a "$s_started" --arg u "$wait_until_val" \
+                 --arg a "$s_started" --arg u "$wait_until_val" --argjson dur "$_wait_pause_ms" \
             '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
-              reason:"waiting_for_callback", until:$u, started_at:$a}' >> "$audit"
+              reason:"waiting_for_callback", until:$u, started_at:$a,
+              duration_ms:$dur, result_hash:"pending"}' >> "$audit"
           echo "waiting:$i"
           return 0
         else
@@ -3297,10 +3324,15 @@ $llm_rendered_prompt"
     local serr=""
     [ -s "$run_dir/$sid.stderr.log" ] && serr="$(cat "$run_dir/$sid.stderr.log")"
     rm -f "$run_dir/$sid.stderr.log"
-    # C1a: canonical result hash — jq -S (sorted keys) piped to sha256sum.
+    # C1a: canonical result hash — jq -Sc (sorted keys, compact) piped to _sha256.
     # Stable for identical outputs; recorded even on failure (hash of the error object).
-    local result_hash
-    result_hash="$(jq -Sc . <<<"$out_json" 2>/dev/null | sha256sum 2>/dev/null | cut -c1-64)"
+    # MUST NOT abort under set -e: pipeline wrapped in $(...) with || true, then
+    # truncated to 64 chars (openssl dgst may return 64+, sha256sum exactly 64).
+    # Falls back to "unavailable" when no hasher is present — receipt still written.
+    local result_hash _canon
+    _canon="$(jq -Sc . <<<"$out_json" 2>/dev/null)" || _canon=""
+    result_hash="$(printf '%s' "$_canon" | _sha256 2>/dev/null || true)"
+    result_hash="${result_hash:0:64}"
     [[ -z "$result_hash" ]] && result_hash="unavailable"
     # C1a: assemble the metric supplement; include llm fields only for llm steps.
     local llm_metrics="{}"
@@ -4332,9 +4364,17 @@ local_diff() {
         maybe_diff("steps.\($sid).outputs";    $ra.output;      $rb.output) +
         maybe_diff("steps.\($sid).decided_by"; $ra.decided_by;  $rb.decided_by) +
         maybe_diff("steps.\($sid).confidence"; $ra.confidence;  $rb.confidence) +  # mirrors remote StepSerializer.confidence
-        # C1a: result_hash is the canonical reproducibility signal (duration_ms is not —
-        # it varies across identical runs and is omitted from the diff).
-        maybe_diff("steps.\($sid).result_hash";$ra.result_hash; $rb.result_hash) +
+        # C1a: result_hash diff — only compare when BOTH receipts carry a usable
+        # hash (not null, not "unavailable", not "pending").  Mixed-version audits
+        # (one pre-C1a receipt with null vs one with a real hash) would otherwise
+        # always report identical:false even when the outputs are equal.  When
+        # either side lacks a usable hash, fall through to the outputs comparison
+        # already emitted above (which covers the mixed-version case faithfully).
+        (if (($ra.result_hash != null and $ra.result_hash != "unavailable" and $ra.result_hash != "pending") and
+             ($rb.result_hash != null and $rb.result_hash != "unavailable" and $rb.result_hash != "pending"))
+         then maybe_diff("steps.\($sid).result_hash"; $ra.result_hash; $rb.result_hash)
+         else []
+         end) +
         maybe_diff("steps.\($sid).exit_code";  $ra.exit_code;   $rb.exit_code)     # local-only extra (shell exit status)
       ) | add // []) |
 
