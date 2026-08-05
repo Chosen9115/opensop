@@ -1539,16 +1539,18 @@ A process has exactly one of these states at any moment:
 
 | State | Meaning |
 |---|---|
-| `open` | Declared and available on-demand; no scheduled trigger configured. Starts when called explicitly (`opensop run`, `POST /sop/:name/start`, or a webhook trigger). |
-| `scheduled` | Has an `interval` or cron trigger configured (§2.3). The scheduler knows when to fire it next. |
+| `open` | Declared and available on-demand; no active scheduler is watching it. Starts when called explicitly (`opensop run`, `POST /sop/:name/start`, or a webhook trigger). A process with a trigger configured but no active scheduler is also `open` (see derivation rules below). |
+| `scheduled` | A trigger is configured **and** an active scheduler will fire it. For the server: the Rails dispatcher is running and an enabled schedule row exists. For local: the `opensop serve` daemon (A3, reserved for v0.7.x) is active and watching the process. |
 | `running` | One or more instances are currently active (state `running` per §4.3). A process can be both `scheduled` and `running` simultaneously; when displaying, `running` takes precedence as the visible state. |
+
+A process with an `interval` or cron trigger declared in its definition but **no active scheduler** must be reported as `open`, not `scheduled`. Implementations may surface the configured trigger as an informational field (e.g. `"configured_trigger": "interval"` / `null`) alongside the `open` state so that tooling can distinguish "open with no trigger" from "open with a trigger pending a scheduler."
 
 **State derivation rules (local, `opensop ps`):**
 
 1. Read all run manifests under `$OPENSOP_LOCAL_HOME/runs/` for this process.
 2. If any manifest has `status ∈ {running, waiting}` → state is `running`.
-3. Else if the process definition declares a trigger with `type: interval` → state is `scheduled`.
-4. Else → state is `open`.
+3. Else if `opensop serve` (A3) is active and the process declares a trigger → state is `scheduled`.
+4. Else → state is `open` (even if a trigger is declared in the process file).
 
 **State derivation rules (server, `GET /sop/processes/status`):**
 
@@ -1564,16 +1566,20 @@ carries these rollup fields, derived from run history:
 |---|---|---|
 | `last_status` | `ok \| error \| never` | Result of the most recent completed run. `ok` = completed without error; `error` = completed in `failed` state; `never` = no completed run exists. |
 | `last_run_at` | ISO 8601 UTC or `null` | Timestamp of the most recently started run, regardless of outcome. `null` when no run exists. |
-| `next_run_at` | ISO 8601 UTC or `null` | For `scheduled` processes: when the next trigger fires. `null` for `open` processes or when the scheduler has not been started. |
+| `next_run_at` | ISO 8601 UTC or `null` | When the next trigger fires. Non-null only when state is `scheduled` and the active scheduler can provide the value. `null` for `open` and `running` processes, and for any process whose trigger is configured but whose scheduler is not active. |
 
 **Local derivation:** scan all `manifest.json` files for this process under
 `$OPENSOP_LOCAL_HOME/runs/`. The most recent `started_at` is `last_run_at`.
 `last_status` is derived from the `status` field of the manifest with the
 latest `ended_at` that is not `running`/`waiting`/`interrupted`.
 `next_run_at` is always `null` in the local engine until A3 (the local
-scheduler daemon) ships.
+scheduler daemon) ships; until then, a process with a trigger declared is
+still reported as `open` with `next_run_at: null`.
 
-**Server derivation:** from `sop_instances` — see §9.4.
+**Server derivation:** from `sop_instances`. An enabled schedule row in the
+server's dispatcher is what promotes a process to `scheduled`; a trigger
+declared in the process file alone is not sufficient. `next_run_at` is
+populated by the dispatcher when the process is `scheduled`. See §9.4.
 
 ### 9.4 `GET /sop/processes/status` — process status rollup
 
@@ -1615,21 +1621,25 @@ Authentication: `X-SOP-Token` required (same as all `/sop/*` endpoints).
 
 ### 9.5 `opensop ps` — local process status
 
-`opensop ps` is the CLI command that surfaces the process status model locally.
-It does not require a server. `opensop ps --remote` delegates to
-`GET /sop/processes/status` on the configured server.
+**Reserved for v0.7.x — not yet implemented (A1).** The description below is
+the intended contract; the command does not exist in the current CLI.
 
-Output columns (tabular, `--json` for machine-readable):
+`opensop ps` will surface the process status model locally without requiring a
+server. `opensop ps --remote` will delegate to `GET /sop/processes/status` on
+the configured server.
+
+Intended output columns (tabular, `--json` for machine-readable):
 
 ```
 NAME                  STATE      LAST STATUS   LAST RUN              NEXT RUN
 lead-qualification    open       ok            2026-08-05T10:00:00Z  -
-nightly-report        scheduled  never         -                     2026-08-06T00:00:00Z
+nightly-report        open       never         -                     -
 invoice-intake        running    ok            2026-08-05T11:30:00Z  -
 ```
 
-Implementation details (A1) are not part of this spec. The column semantics
-map 1-to-1 with the fields in §9.3.
+The column semantics map 1-to-1 with the fields in §9.3. `nightly-report` is
+shown as `open` even if it declares an interval trigger, because no local
+scheduler (A3) is active.
 
 ---
 
@@ -1682,8 +1692,19 @@ The following fields must be written into each completed step receipt in
 
 **Optionality:** `tokens_in`, `tokens_out`, `token_source`, and `model` are
 present only for `llm` steps. `duration_ms` and `result_hash` are present for
-every step (`result_hash` is `"pending"` for a paused step, `"unavailable"`
-when no hasher exists).
+every step event.
+
+**Append-only audit semantics (§5.6):** `audit.jsonl` is never mutated. A step
+that pauses (form/approval) writes a **waiting** event carrying `duration_ms`
+(start → pause) and `result_hash: "pending"`. When the step later resumes,
+`local_submit` appends a separate **completed** event with its own `duration_ms`
+(resume → completion) and the real `result_hash` digest. The `"pending"` value
+on the waiting event is permanent — no event is edited or back-patched. Any
+reader that wants the final digest reads the completed event.
+
+Capturing `duration_ms` and `result_hash` on the resumed-completion event is
+landing with a C1a follow-up; the waiting event's `duration_ms` and
+`result_hash: "pending"` are written today.
 
 **result_hash and PII:** `result_hash` is a digest, not the data, so it exposes
 no personal data. The `output` object it hashes is written verbatim (not a
@@ -1724,18 +1745,24 @@ the observability terminal (G1/A2).
 
 ### 10.5 Reproducibility comparison
 
-The `canonical_result` field enables the benchmark harness (`opensop bench`,
-C1b) to compare run outputs field-by-field without byte-hashing raw text:
+The `result_hash` field (§10.2) enables the benchmark harness (`opensop bench`,
+C1b) to detect whether two runs of the same process produced the same output
+without loading and diffing full JSON blobs. It is a portable SHA-256 of the
+`jq -S` (sorted-key) canonicalization of the step's `output`.
+
+A conforming implementation must compute `result_hash` as the SHA-256 hex
+digest of `jq -S '.' <<< "$output_json"` (falling back to `shasum -a 256` or
+`openssl dgst -sha256` if `sha256sum` is absent). An implementation that
+cannot invoke any hasher writes `"unavailable"`.
+
+**Field-level comparison** uses the `output` object directly — it is already
+stored verbatim in the receipt. `result_hash` is a fast same/different signal
+only; drill into `output` for field-by-field diffing:
 
 ```bash
-# Compare two runs of the same process
+# Compare two runs of the same process field-by-field
 jq -S .output run_a/audit.jsonl | diff - <(jq -S .output run_b/audit.jsonl)
 ```
-
-A conforming implementation must compute `canonical_result` as
-`jq -S '.' <<< "$output_json"`. Any implementation that cannot invoke `jq`
-should use a JSON-serializer that produces sorted, compact output as the
-canonical form.
 
 ---
 
@@ -1862,6 +1889,8 @@ profile. The server parser rejects them unless noted.
 | Instance stream / SSE (`GET /sop/instances/stream`) | Reserved for v0.7.x — lands with G1/A2 (§11.5) |
 | Fault semantics + `opensop heal` | Reserved for v0.7.x — lands with D2 (§11.4) |
 | Run-level metrics API (server) | Reserved for v0.7.x — lands with G1/A2 (§10.4) |
+| `opensop ps` — local process status command | Reserved for v0.7.x — not yet implemented (A1); spec shape in §9.5 |
+| `opensop serve` — local scheduler daemon | Reserved for v0.7.x — not yet implemented (A3); required before local processes report `scheduled` state |
 
 ---
 
@@ -1970,7 +1999,7 @@ process:
 | 0.1 | Initial spec: process model, 8 step types, instance lifecycle, API surface, server data model |
 | 0.2 | `llm` step, `tools:`, collection outputs, `exit_when:`, `loop:` step, interval trigger (parser-only), `post_review:` hook (roadmapped), shared state (roadmapped), `validation:` on `automated` |
 | 0.6 | Local execution backend (genuine local execution, no server), `.sop.json` flat format, run-dir artifacts (manifest/audit/context), pause/resume state machine, cell substrate (init/scope/annotate/lineage/fork), `shell` and `noop` local-only step types, `executor` audit field, `--conflicts` for list |
-| 0.7 | Process status model (§9): canonical process states (`open`/`scheduled`/`running`) and rollup fields (`last_status`, `last_run_at`, `next_run_at`). Reliability metrics contract (§10): per-step `duration_ms`, `model`, `tokens_in`, `tokens_out`, `canonical_result` in run receipts; manifest-level `metrics` block. Security model (§11): no-telemetry statement, shell-step trust boundary, daemon secrets posture, fault-record redaction rules, stream auth requirement. Stream protocol, self-heal semantics, scheduler-trigger promotion, and server metrics API reserved for v0.7.x. `/sop/*` HTTP contract unchanged. |
+| 0.7 | Process status model (§9): canonical process states (`open`/`scheduled`/`running`) and rollup fields (`last_status`, `last_run_at`, `next_run_at`). Reliability metrics contract (§10): per-step `duration_ms`, `model`, `tokens_in`, `tokens_out`, `result_hash`, `token_source` in run receipts; manifest-level `metrics` block. Security model (§11): no-telemetry statement, shell-step trust boundary, daemon secrets posture, fault-record redaction rules, stream auth requirement. Stream protocol, self-heal semantics, scheduler-trigger promotion, and server metrics API reserved for v0.7.x. `/sop/*` HTTP contract unchanged. |
 
 ## Appendix B — Flat vs. wrapped envelope quick reference
 
