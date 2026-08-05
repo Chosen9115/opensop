@@ -6,7 +6,7 @@
 
 A skill running in a cell is never done. It starts as prose, grows a structure, and — one step at a time — converts LLM judgment calls into deterministic code. Each conversion lowers cost and raises reliability. This document defines the rules for moving a skill forward, when to pull it back, what fork semantics apply, and how the CLI substrate records it all.
 
-Read this alongside the substrate spec (`SPEC.md §3` — lineage and annotate semantics).
+The lineage/annotate/fork substrate this policy builds on is CLI-only today (`opensop annotate` / `lineage` / `fork`, storing per-cell state in `.opensop/lineage.json`); it is not yet in `SPEC.md`. The field contract is scheduled to land in the spec at S0b.
 
 ---
 
