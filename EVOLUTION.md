@@ -105,7 +105,7 @@ opensop fork <skill>                   # nearest ancestor cell
 opensop fork <skill> --from /path/cell # specific cell
 ```
 
-The child's live `status` and `metadata` start empty. The parent's state is stored in `forked_from.snapshot` — what the policy does with it is the policy's call.
+The child's live `status` and `metadata` start empty. `opensop fork` stores the parent's *top-level* `status`/`metadata` in `forked_from.snapshot` — but since `annotate` never populates those (history is canonical), that snapshot is usually empty. **Derive the parent's inherited tier from the source cell's history**, not the snapshot: run the `jq` helper (see CLI Substrate) against the source cell's `.opensop/lineage.json`, then record it in the `fork-inherit` event below. The snapshot becomes authoritative only once the experimental `opensop evolve` writer maintains the top-level fields.
 
 **The Mineralization policy rule:** the child inherits the parent's `m` tier with `status: unverified`. The shape carries its sharpness; only its fit to this cell is untested.
 
@@ -154,16 +154,17 @@ All policy state lives in `.opensop/lineage.json` in the active cell, keyed by `
 ```json
 {
   "logical_name": "extract-action-items",
-  "status": "mineralized",
-  "metadata": { "m": "4.13" },
+  "status": "",
+  "metadata": {},
   "forked_from": null,
   "history": [
-    { "at": "2026-08-05T09:00:00Z", "type": "promote", "data": { "from": "m3.2", "to": "m4.1" } }
+    { "at": "2026-08-05T09:00:00Z", "type": "promote", "data": { "from": "m3.2", "to": "m4.1", "status": "mineralized" } },
+    { "at": "2026-08-05T15:00:00Z", "type": "promote", "data": { "from": "m4.1", "to": "m4.13" } }
   ]
 }
 ```
 
-The top-level `metadata` and `status` fields are open and unvalidated, but note (per "How current state is derived" above) that `annotate` does **not** write them — it only appends to `history[]`. Treat history as canonical and derive current tier/status from the latest event; the top-level fields are reserved for the future `opensop evolve` writer.
+Note that the top-level `status` and `metadata` are **empty here** — `annotate` never wrote them (it only appends to `history[]`). The *derived* current state is **tier `m4.13`** (latest event carrying a `to`) and **status `mineralized`** (latest event carrying a `status`); the `jq` helper below computes exactly that. The top-level fields become a populated cache only once the experimental `opensop evolve` writer ships.
 
 **`opensop evolve status` (experimental command — not yet shipped).** When implemented, it will maintain the derived top-level fields and print a tier table. Until it ships, derive the table from history yourself:
 
