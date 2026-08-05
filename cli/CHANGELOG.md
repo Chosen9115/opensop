@@ -11,11 +11,15 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Added
 
-- **C1a: Reliability metrics in local run receipts.** Every step audit entry now carries:
+- **C1a: Reliability metrics in local run receipts.** Each executed step's audit entry carries:
   - `duration_ms` — wall-clock milliseconds for that step (via `date +%s%3N`; falls back to
-    seconds×1000 on non-GNU date). Present even when a step fails.
-  - `result_hash` — SHA-256 of the canonicalized step output (`jq -Sc .`). Stable across
-    two runs that produce identical outputs; used by `diff` as the reproducibility signal.
+    seconds×1000 on non-GNU date). Present even when a step fails. Steps that pause
+    (`form`/`approval`/`wait.until`) record `duration_ms` to the pause and `result_hash:"pending"`.
+  - `result_hash` — SHA-256 of the canonicalized step output (`jq -Sc .`) via a portable hasher
+    (`sha256sum` → `shasum -a 256` → `openssl`; `"unavailable"` if none, never fatal under `set -e`).
+    Stable across two runs with identical outputs; used by `diff` as the reproducibility signal.
+  - *Known follow-up:* metrics on **resumed** steps (after `submit`) land in a later change; the
+    non-interactive `automated`/`llm`/`shell` path (what `bench` relies on) is fully covered.
   - `model`, `tokens_in`, `tokens_out`, `token_source` — LLM-only fields. `token_source`
     is `"api"` when Anthropic's `usage` block is present, or `"chars"` (output char count)
     when the stub path is active or usage is absent.
