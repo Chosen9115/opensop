@@ -295,11 +295,9 @@ Process files are JSON (`.sop.json`). Minimal skeleton:
       "id": "extract",
       "type": "llm",
       "model": "claude-haiku-4-5",
-      "prompt": "Extract action items from these meeting notes: {{process.inputs.notes}}\n\nReturn JSON matching the schema.",
+      "prompt": "Extract action items from these meeting notes: {{notes}}\n\nRespond with ONLY a JSON object of the form {\"action_items\": [{\"task\": \"...\", \"owner\": \"...\", \"due\": \"...\"}]}.",
       "expected_output_schema": {
-        "action_items": [
-          { "task": "string", "owner": "string", "due": "string" }
-        ]
+        "action_items": { "type": "array", "required": true }
       }
     }
   ]
