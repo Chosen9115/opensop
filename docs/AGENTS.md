@@ -90,7 +90,7 @@ opensop search lead --json | jq '.[].name'
 ```bash
 opensop suggest "qualify an inbound lead"          # local
 opensop --remote suggest "score a prospect"        # server
-opensop suggest "extract action items" --threshold 60   # minimum score (0-100)
+opensop suggest "extract action items" --threshold 0.6  # minimum confidence (0.0–1.0)
 ```
 
 `suggest` returns the top-matching process name + score. If score is below threshold, nothing is returned — no false matches.
@@ -115,7 +115,7 @@ Every command entry has: `command`, `summary`, `usage`, `category`, `backend` (`
 ### When to stop searching and write a new process
 
 Search first. Write new only when:
-- `suggest` returns score < 60 on two distinct phrasings of the task.
+- `suggest` returns confidence < 0.6 on two distinct phrasings of the task.
 - The matched process covers ≤ 50% of the steps you need.
 - The task recurs and has a clear input/output boundary.
 
@@ -183,7 +183,7 @@ When paused, `manifest.waiting` records the step id, pause reason, and expected 
 
 ```bash
 opensop show <run_id> --json | jq '.manifest.waiting'
-# → {"step_id":"collect-info","pause_reason":"waiting_for_input","expected_outputs":{"notes":{"type":"string"}}}
+# → {"step":"collect-info","index":0,"reason":"waiting_for_input","expects":{"outputs":["notes"],"schema":[{"name":"notes","type":"string","required":true}]},"since":"..."}
 ```
 
 Then submit:
@@ -238,15 +238,20 @@ Every local run writes three files under `~/.opensop-local/runs/<run_id>/` (or `
 
 ### Parsing outputs
 
+`show --json` returns `{manifest, steps}` where `steps` is an array of audit events (one per step execution). Each event has `.step` (the step id) and `.output` (the merged JSON output). Final outputs accumulate in `context.json`.
+
 ```bash
-# outputs after completion
-opensop show <run_id> --json | jq '.manifest.outputs'
+# final outputs after completion (context.json, keyed by step id)
+cat ~/.opensop-local/runs/<run_id>/context.json | jq '.'
 
-# specific step output
-opensop show <run_id> --json | jq '.steps["extract-items"].outputs'
+# specific step output from context
+cat ~/.opensop-local/runs/<run_id>/context.json | jq '.["extract-items"]'
 
-# full step audit
-cat ~/.opensop-local/runs/<run_id>/audit.jsonl | jq 'select(.step_id=="extract-items")'
+# specific step output from show --json steps array
+opensop show <run_id> --json | jq '.steps | map(select(.step=="extract-items")) | last | .output'
+
+# full step audit (each line is one audit event)
+cat ~/.opensop-local/runs/<run_id>/audit.jsonl | jq 'select(.step=="extract-items")'
 ```
 
 ### Structured errors
@@ -423,11 +428,12 @@ Problems:
     "notes": {
       "type": "string",
       "required": true,
-      "description": "Raw meeting notes text. Min 50 chars."
+      "description": "Raw meeting notes text."
     },
     "meeting_date": {
       "type": "string",
       "required": false,
+      "default": "(not provided)",
       "description": "ISO 8601 date of the meeting, e.g. 2026-08-05. Used to infer relative due dates."
     }
   },
@@ -439,20 +445,19 @@ Problems:
       "id": "extract",
       "type": "llm",
       "model": "claude-haiku-4-5",
-      "prompt": "Extract every action item from these meeting notes.\n\nMeeting date: {{process.inputs.meeting_date|'(not provided)'}}\n\nNotes:\n{{process.inputs.notes}}\n\nRules:\n- Include only explicitly assigned tasks, not discussion points.\n- If no owner is stated, set owner to null.\n- Express due dates as ISO 8601 or null if not mentioned.\n- Return a JSON object with key 'action_items' containing an array.",
+      "prompt": "Extract every action item from these meeting notes.\n\nMeeting date: {{meeting_date}}\n\nNotes:\n{{notes}}\n\nRules:\n- Include only explicitly assigned tasks, not discussion points.\n- If no owner is stated, set owner to null.\n- Express due dates as ISO 8601 or null if not mentioned.\n- Return a JSON object with key 'action_items' containing an array of objects, each with 'task' (string), 'owner' (string or null), 'due' (string or null).",
       "expected_output_schema": {
-        "action_items": [
-          {
-            "task": "string",
-            "owner": "string|null",
-            "due": "string|null"
-          }
-        ]
+        "action_items": { "type": "array", "required": true }
       }
     }
   ]
 }
 ```
+
+Two renderer rules to remember:
+- Prompt tokens use `{{key}}` where `key` is a plain identifier — it resolves directly from the accumulated run context. Inputs are merged into context at run start, so `{{notes}}` resolves the `notes` input. The `{{process.inputs.notes}}` syntax is not supported by the local renderer.
+- Optional inputs that may be absent should declare a `"default"` in the input definition; the default is merged into context before the first step, so `{{meeting_date}}` always has a value.
+- `expected_output_schema` is a flat object mapping field names to field-definition objects with `type` (`"string"`, `"number"`, `"boolean"`, `"enum"`, `"array"`) and optionally `required: true`. Array shorthand (e.g. `[{"task":"string"}]`) and union strings (e.g. `"string|null"`) are not valid — the engine ignores unknown type values silently.
 
 Run it:
 
@@ -538,7 +543,7 @@ Useful when iterating on prompt changes: run twice with different versions, diff
 
 ### Evolution policy
 
-The full mineralization and evolution policy (tiers m0–m6, forward/reverse, fork-from-unverified rules) is documented in [[EVOLUTION.md]] — not yet shipped, tracked as a fast-follow in the v2 roadmap.
+The mineralization tiers (m0–m6), transition rules, and lineage annotation conventions are documented in [EVOLUTION.md](../EVOLUTION.md). The `opensop evolve` command and the m-tier policy fields (`lineage.metadata.m`) described there are experimental — they are not yet frozen in the SPEC and may change before S0b.
 
 ---
 
