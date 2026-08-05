@@ -726,17 +726,6 @@ help|show help for a command or the full command reference|help [<command>] [--j
 REGISTRY
 }
 
-# _registry_field name field_index
-#   Emit the value of field $2 (1-based) for the command named $1.
-#   Returns non-zero if the command is not found.
-_registry_field() {
-  local name="$1" field="$2"
-  local line
-  line="$(_registry_raw | grep -m1 "^${name}|")" || return 1
-  # cut -d'|' -f N
-  echo "$line" | cut -d'|' -f"$field"
-}
-
 # _registry_json — emit the full registry as a JSON array.
 _registry_json() {
   local first=true
