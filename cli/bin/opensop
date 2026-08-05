@@ -1098,6 +1098,9 @@ EX
   opensop upgrade                              # upgrade to the latest release
   opensop upgrade --pin 0.8.1                 # upgrade (or downgrade) to a specific version
   opensop upgrade --pin 0.8.1 --dry-run       # print what would change without replacing the binary
+
+  Note: upgrade fetches from github.com/Chosen9115/opensop and requires curl.
+        Use 'install.sh' (cli/install.sh) for the initial install.
 EX
       ;;
     help)
