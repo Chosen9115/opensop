@@ -207,6 +207,20 @@ fi
 # Extract the version from the downloaded binary for the confirmation message.
 NEW_VERSION="$(grep -m1 'OPENSOP_CLI_VERSION=' "$TMP_BIN" | sed 's/.*OPENSOP_CLI_VERSION="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/')"
 
+# ---- Pin version verification ----
+# When --version was specified, compare the requested pin against the version
+# embedded in the downloaded binary.  A mismatch means we fetched the wrong
+# artifact (tag typo, git redirect, stale CDN cache, etc.) — abort WITHOUT
+# touching the destination so the existing install is left untouched.
+# Mirror the same check that cmd_upgrade already performs.
+if [[ -n "$PIN_VERSION" ]]; then
+  normalized_pin="v${PIN_VERSION#v}"
+  embedded_tag="v${NEW_VERSION#v}"
+  if [[ "$normalized_pin" != "$embedded_tag" ]]; then
+    _die "--version ${PIN_VERSION} requested but downloaded binary embeds version ${NEW_VERSION} — aborting to leave any existing install untouched"
+  fi
+fi
+
 # --------------------------------------------------------------------------- #
 # Checksum verification
 # --------------------------------------------------------------------------- #
@@ -249,12 +263,18 @@ fi
 # --------------------------------------------------------------------------- #
 
 # Preserve the existing binary's permissions (or default to 0755).
+# Portability: GNU stat uses -c '%a'; BSD stat (macOS) uses -f '%Lp' for the
+# low permission bits only.  '%OLp' (capital O) on BSD prepends file-type bits
+# (e.g. "100755" instead of "755"), which is invalid for chmod(1).  Use '%Lp'.
+# Validate the extracted string matches ^[0-7]{3,4}$ before trusting it.
 TARGET_MODE="0755"
 if [[ -f "$INSTALL_PATH" ]]; then
   existing_mode="$(stat -c '%a' "$INSTALL_PATH" 2>/dev/null \
-                || stat -f '%OLp' "$INSTALL_PATH" 2>/dev/null \
-                || echo "0755")"
-  [[ -n "$existing_mode" ]] && TARGET_MODE="$existing_mode"
+                || stat -f '%Lp' "$INSTALL_PATH" 2>/dev/null \
+                || echo "")"
+  if [[ "$existing_mode" =~ ^[0-7]{3,4}$ ]]; then
+    TARGET_MODE="$existing_mode"
+  fi
 fi
 chmod "$TARGET_MODE" "$TMP_BIN"
 

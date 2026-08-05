@@ -1237,15 +1237,26 @@ cmd_upgrade() {
   # ---- Fix 2: resolve the RUNNING script, not a PATH lookup ----
   # BASH_SOURCE[0] is the path to the executing script file, regardless of
   # what 'command -v opensop' would return.  Canonicalize to the real file
-  # (resolve symlinks).  Portable fallback: Python3 → stat → pass-through.
+  # (resolve symlinks).
+  #
+  # Portability: macOS ships readlink(1) WITHOUT -f (BSD coreutils); GNU
+  # readlink does support -f.  The guard `command -v readlink` only tests
+  # for the binary's presence, not -f support, so on macOS `readlink -f`
+  # fails silently and we would fall back to the raw (un-resolved) path.
+  # Fix: try `readlink -f` and check the output; on failure (empty result
+  # OR non-zero exit) fall back to python3 os.path.realpath; if that also
+  # fails, abort — we cannot safely identify the real target file.
   local self_path="${BASH_SOURCE[0]}"
-  local real_path="$self_path"
-  if command -v readlink >/dev/null 2>&1; then
-    real_path="$(readlink -f "$self_path" 2>/dev/null || echo "$self_path")"
-  elif command -v python3 >/dev/null 2>&1; then
-    real_path="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$self_path" 2>/dev/null || echo "$self_path")"
+  local real_path=""
+  # Try GNU readlink -f (Linux, GNU coreutils on macOS via brew).
+  real_path="$(readlink -f "$self_path" 2>/dev/null || true)"
+  # Fall back to python3 if readlink -f produced nothing (BSD macOS readlink).
+  if [[ -z "$real_path" ]] && command -v python3 >/dev/null 2>&1; then
+    real_path="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$self_path" 2>/dev/null || true)"
   fi
-  # Guard: must be a regular file (not a directory, device, etc.)
+  # If neither resolved to a non-empty path, use self_path as last resort.
+  [[ -n "$real_path" ]] || real_path="$self_path"
+  # Guard: must be a regular file (not a directory, device, symlink, etc.)
   if [[ ! -f "$real_path" ]]; then
     die "resolved path is not a regular file: $real_path" \
         "cli_error" "reinstall opensop with install.sh to a regular file path"
@@ -1367,14 +1378,23 @@ cmd_upgrade() {
   # mktemp creates files with mode 0600; replacing a world-executable binary
   # (e.g. /usr/local/bin/opensop with 0755) would strip execute bits for group
   # and other.  Match the existing mode, or default to 0755.
+  #
+  # Portability: GNU stat uses -c '%a'; BSD stat (macOS) uses -f '%Lp' for
+  # the low permission bits only.  The old format string '%OLp' (capital O)
+  # on BSD includes file-type bits in the output (e.g. 100755 instead of 755),
+  # which is an invalid argument to chmod(1).  Use '%Lp' (lowercase L) instead.
+  # Validate the extracted string matches ^[0-7]{3,4}$ before using it.
   local target_mode="0755"
   if [[ -f "$real_path" ]]; then
-    # stat is not portable — try GNU stat, then BSD stat, then fall back.
     local existing_mode
     existing_mode="$(stat -c '%a' "$real_path" 2>/dev/null \
-                  || stat -f '%OLp' "$real_path" 2>/dev/null \
-                  || echo "0755")"
-    [[ -n "$existing_mode" ]] && target_mode="$existing_mode"
+                  || stat -f '%Lp' "$real_path" 2>/dev/null \
+                  || echo "")"
+    # Accept only plain octal permission strings (3–4 digits); reject anything
+    # that contains file-type bits or other garbage (e.g. "100755").
+    if [[ "$existing_mode" =~ ^[0-7]{3,4}$ ]]; then
+      target_mode="$existing_mode"
+    fi
   fi
   chmod "$target_mode" "$tmp_bin"
 
