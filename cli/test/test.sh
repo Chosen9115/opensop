@@ -3749,4 +3749,231 @@ for combo in "--help --json" "--json --help" "-h --json" "--json -h"; do
 done
 echo "PASS: B1 --help honors --json in any order"
 
+# --------------------------------------------------------------------------- #
+# C1a: reliability metrics in local run receipts.
+#
+# Asserts:
+#   (1) duration_ms present and >= 0 in audit entry (shell step, happy path)
+#   (2) duration_ms present in audit entry for a FAILED step
+#   (3) result_hash present and non-empty in audit entry
+#   (4) result_hash is stable across two identical shell runs (reproducibility)
+#   (5) manifest carries duration_ms for a completed run
+#   (6) llm step (stub): model, tokens_out, token_source present in receipt
+# --------------------------------------------------------------------------- #
+c1a_home="$(mktemp -d)"
+trap 'rm -rf "$c1a_home"' EXIT
+
+c1a_proc="$c1a_home/c1a.sop.json"
+cat > "$c1a_proc" <<'JSON'
+{ "name": "c1a-test", "inputs": {},
+  "steps": [
+    { "id": "greet", "type": "shell", "run": "echo hello-c1a" }
+  ] }
+JSON
+
+# Run 1 — happy path.
+c1a_m="$(OPENSOP_LOCAL_HOME="$c1a_home" "$cli" run "$c1a_proc" --local --json)"
+c1a_rid="$(jq -r '.run_id' <<<"$c1a_m")"
+[ "$(jq -r '.status' <<<"$c1a_m")" = "completed" ] || { echo "FAIL: c1a run should complete"; exit 1; }
+c1a_audit="$c1a_home/runs/$c1a_rid/audit.jsonl"
+[ -f "$c1a_audit" ] || { echo "FAIL: c1a audit.jsonl missing"; exit 1; }
+
+# (1) duration_ms present and >= 0 in successful audit entry.
+c1a_dur="$(jq -r '.duration_ms' "$c1a_audit")"
+[ -n "$c1a_dur" ] && [ "$c1a_dur" != "null" ] \
+  || { echo "FAIL: duration_ms missing from audit entry (got: $c1a_dur)"; exit 1; }
+[ "$c1a_dur" -ge 0 ] 2>/dev/null \
+  || { echo "FAIL: duration_ms should be a non-negative integer, got: $c1a_dur"; exit 1; }
+echo "PASS: C1a — duration_ms present and >= 0 in successful step audit entry"
+
+# (3) result_hash present and non-empty.
+c1a_rh="$(jq -r '.result_hash' "$c1a_audit")"
+[ -n "$c1a_rh" ] && [ "$c1a_rh" != "null" ] && [ "${#c1a_rh}" -ge 8 ] \
+  || { echo "FAIL: result_hash missing or too short (got: $c1a_rh)"; exit 1; }
+echo "PASS: C1a — result_hash present and non-empty in audit entry"
+
+# (4) result_hash is stable across two identical shell runs.
+c1a_proc2="$c1a_home/c1a2.sop.json"
+# Use the same process definition to get the same deterministic output.
+cat > "$c1a_proc2" <<'JSON'
+{ "name": "c1a-test2", "inputs": {},
+  "steps": [
+    { "id": "greet", "type": "shell", "run": "echo hello-c1a" }
+  ] }
+JSON
+c1a_m2="$(OPENSOP_LOCAL_HOME="$c1a_home" "$cli" run "$c1a_proc2" --local --json)"
+c1a_rid2="$(jq -r '.run_id' <<<"$c1a_m2")"
+c1a_rh2="$(jq -r '.result_hash' "$c1a_home/runs/$c1a_rid2/audit.jsonl")"
+[ "$c1a_rh" = "$c1a_rh2" ] \
+  || { echo "FAIL: result_hash not stable across identical shell runs (run1=$c1a_rh run2=$c1a_rh2)"; exit 1; }
+echo "PASS: C1a — result_hash stable across two identical shell steps (reproducibility)"
+
+# (5) manifest carries duration_ms for a completed run.
+c1a_mf_dur="$(jq -r '.duration_ms' "$c1a_home/runs/$c1a_rid/manifest.json")"
+[ -n "$c1a_mf_dur" ] && [ "$c1a_mf_dur" != "null" ] && [ "$c1a_mf_dur" -ge 0 ] 2>/dev/null \
+  || { echo "FAIL: manifest.duration_ms missing or invalid (got: $c1a_mf_dur)"; exit 1; }
+echo "PASS: C1a — manifest carries duration_ms for a completed run"
+
+# (2) duration_ms present in audit entry for a FAILED step.
+c1a_fail_proc="$c1a_home/c1a-fail.sop.json"
+cat > "$c1a_fail_proc" <<'JSON'
+{ "name": "c1a-fail", "inputs": {},
+  "steps": [
+    { "id": "boom", "type": "shell", "run": "exit 7" }
+  ] }
+JSON
+set +e
+c1a_fm="$(OPENSOP_LOCAL_HOME="$c1a_home" "$cli" run "$c1a_fail_proc" --local --json)"; c1a_frc=$?
+set -e
+[ "$c1a_frc" -ne 0 ] || { echo "FAIL: c1a-fail run should exit non-zero"; exit 1; }
+c1a_frid="$(jq -r '.run_id' <<<"$c1a_fm")"
+c1a_fail_dur="$(jq -r '.duration_ms' "$c1a_home/runs/$c1a_frid/audit.jsonl")"
+[ -n "$c1a_fail_dur" ] && [ "$c1a_fail_dur" != "null" ] && [ "$c1a_fail_dur" -ge 0 ] 2>/dev/null \
+  || { echo "FAIL: failed step should still record duration_ms (got: $c1a_fail_dur)"; exit 1; }
+echo "PASS: C1a — duration_ms recorded even for a failed step (failure path covered)"
+
+# (6) llm step (stub path): model, tokens_out, token_source present in receipt.
+c1a_llm_proc="$c1a_home/c1a-llm.sop.json"
+cat > "$c1a_llm_proc" <<'JSON'
+{ "name": "c1a-llm", "inputs": {},
+  "steps": [
+    { "id": "think", "type": "llm",
+      "model": "claude-haiku-4-5",
+      "prompt": "Return a greeting.",
+      "expected_output_schema": { "greeting": { "type": "string", "required": true } }
+    }
+  ] }
+JSON
+# OSL_LLM_STUB bypasses the network; value is a valid JSON stub that passes schema validation.
+c1a_llm_m="$(OPENSOP_LOCAL_HOME="$c1a_home" \
+  OSL_LLM_STUB='{"greeting":"hello from stub"}' \
+  "$cli" run "$c1a_llm_proc" --local --json)"
+[ "$(jq -r '.status' <<<"$c1a_llm_m")" = "completed" ] \
+  || { echo "FAIL: c1a llm stub run should complete, got: $(jq -r '.status' <<<"$c1a_llm_m")"; exit 1; }
+c1a_llm_rid="$(jq -r '.run_id' <<<"$c1a_llm_m")"
+c1a_llm_audit="$c1a_home/runs/$c1a_llm_rid/audit.jsonl"
+# model field must be set.
+c1a_llm_model="$(jq -r '.model // ""' "$c1a_llm_audit")"
+[ -n "$c1a_llm_model" ] \
+  || { echo "FAIL: llm receipt missing model field"; exit 1; }
+# token_source must be set (should be 'chars' for stub path since no real API response).
+c1a_llm_ts="$(jq -r '.token_source // ""' "$c1a_llm_audit")"
+[ -n "$c1a_llm_ts" ] \
+  || { echo "FAIL: llm receipt missing token_source field"; exit 1; }
+# tokens_out must be a non-negative integer.
+c1a_llm_tout="$(jq -r '.tokens_out // -1' "$c1a_llm_audit")"
+[ "$c1a_llm_tout" -ge 0 ] 2>/dev/null \
+  || { echo "FAIL: llm receipt tokens_out not a non-negative integer (got: $c1a_llm_tout)"; exit 1; }
+echo "PASS: C1a — llm step (stub) records model, token_source, tokens_out in audit receipt"
+
+# --------------------------------------------------------------------------- #
+# Fix 1 regression: no hasher present → result_hash is "unavailable" AND the
+# receipt is still written (the CLI must not abort under set -e).
+# Simulate a missing hasher by prepending a PATH that contains none of
+# sha256sum / shasum / openssl.  The step itself must still produce a receipt
+# with result_hash=="unavailable" and status=="failed" (the step exits non-zero).
+# --------------------------------------------------------------------------- #
+fix1_proc="$c1a_home/fix1.sop.json"
+cat > "$fix1_proc" <<'JSON'
+{ "name": "fix1", "inputs": {},
+  "steps": [
+    { "id": "boom", "type": "shell", "run": "echo oops; exit 5" }
+  ] }
+JSON
+fix1_home="$(mktemp -d)"
+# Build a minimal PATH that has bash and jq but NOT sha256sum/shasum/openssl.
+_safe_path=""
+for _d in /usr/bin /bin /usr/local/bin; do
+  [ -d "$_d" ] && _safe_path="${_safe_path:+$_safe_path:}$_d"
+done
+# Wrap sha256sum + shasum + openssl with stubs that always fail.
+fix1_stub_dir="$(mktemp -d)"
+for _stubcmd in sha256sum shasum openssl; do
+  printf '#!/bin/sh\nexit 127\n' > "$fix1_stub_dir/$_stubcmd"
+  chmod +x "$fix1_stub_dir/$_stubcmd"
+done
+set +e
+fix1_out="$(OPENSOP_LOCAL_HOME="$fix1_home" PATH="$fix1_stub_dir:$_safe_path" \
+  "$cli" run "$fix1_proc" --local --json 2>/dev/null)"; fix1_rc=$?
+set -e
+# CLI exits non-zero because the step exits 5.
+[ "$fix1_rc" -ne 0 ] || { echo "FAIL: Fix1 — failing step should exit non-zero, got $fix1_rc"; exit 1; }
+fix1_rid="$(jq -r '.run_id' <<<"$fix1_out")"
+fix1_audit="$fix1_home/runs/$fix1_rid/audit.jsonl"
+[ -f "$fix1_audit" ] || { echo "FAIL: Fix1 — audit.jsonl not written (CLI aborted before receipt)"; exit 1; }
+fix1_rh="$(jq -r '.result_hash' "$fix1_audit")"
+[ "$fix1_rh" = "unavailable" ] \
+  || { echo "FAIL: Fix1 — result_hash should be 'unavailable' without hasher, got: $fix1_rh"; exit 1; }
+fix1_st="$(jq -r '.status' "$fix1_audit")"
+[ "$fix1_st" = "failed" ] \
+  || { echo "FAIL: Fix1 — step receipt status should be 'failed', got: $fix1_st"; exit 1; }
+rm -rf "$fix1_home" "$fix1_stub_dir"
+echo "PASS: Fix1 — no hasher present: result_hash='unavailable', receipt still written, not aborted"
+
+# --------------------------------------------------------------------------- #
+# Fix 2 regression: old-vs-new receipt comparison should NOT produce a false
+# positive for identical outputs when one receipt has result_hash==null (pre-C1a)
+# and the other has a real hash (post-C1a).
+# Construct two audit files manually and assert diff.identical==true.
+# --------------------------------------------------------------------------- #
+fix2_home="$(mktemp -d)"
+mkdir -p "$fix2_home/runs/r1" "$fix2_home/runs/r2"
+# r1: pre-C1a receipt — no result_hash field.
+jq -nc '{run_id:"r1",step:"s",type:"shell",executor:"external",status:"completed",
+         exit_code:0,started_at:"2026-01-01T00:00:00Z",ended_at:"2026-01-01T00:00:01Z",
+         duration_ms:1000, output:{stdout:"hello"}}' \
+   > "$fix2_home/runs/r1/audit.jsonl"
+jq -nc '{run_id:"r1",process:"p",process_file:"/p.sop.json",started_at:"2026-01-01T00:00:00Z",
+         status:"completed",ended_at:"2026-01-01T00:00:01Z",duration_ms:1000,inputs:{}}' \
+   > "$fix2_home/runs/r1/manifest.json"
+printf '{"stdout":"hello"}' > "$fix2_home/runs/r1/context.json"
+# r2: post-C1a receipt — result_hash populated.
+jq -nc '{run_id:"r2",step:"s",type:"shell",executor:"external",status:"completed",
+         exit_code:0,started_at:"2026-01-01T00:00:05Z",ended_at:"2026-01-01T00:00:06Z",
+         duration_ms:950, result_hash:"abc123def456abc123def456abc123def456abc123def456abc123def456ab12",
+         output:{stdout:"hello"}}' \
+   > "$fix2_home/runs/r2/audit.jsonl"
+jq -nc '{run_id:"r2",process:"p",process_file:"/p.sop.json",started_at:"2026-01-01T00:00:05Z",
+         status:"completed",ended_at:"2026-01-01T00:00:06Z",duration_ms:950,inputs:{}}' \
+   > "$fix2_home/runs/r2/manifest.json"
+printf '{"stdout":"hello"}' > "$fix2_home/runs/r2/context.json"
+fix2_diff="$(OPENSOP_LOCAL_HOME="$fix2_home" "$cli" diff r1 r2 --local --json)"
+fix2_identical="$(jq -r '.identical' <<<"$fix2_diff")"
+[ "$fix2_identical" = "true" ] \
+  || { echo "FAIL: Fix2 — old(null hash) vs new(real hash) with same outputs should be identical:true, got: $(jq -c . <<<"$fix2_diff")"; exit 1; }
+rm -rf "$fix2_home"
+echo "PASS: Fix2 — old-vs-new receipt (null vs real result_hash) does not false-positive when outputs match"
+
+# --------------------------------------------------------------------------- #
+# Fix 3: waiting-step receipts carry duration_ms + result_hash:"pending".
+# Use the existing form process (already created above) and inspect its receipt.
+# --------------------------------------------------------------------------- #
+fix3_proc="$c1a_home/fix3-form.sop.json"
+cat > "$fix3_proc" <<'JSON'
+{ "name": "fix3-form", "inputs": {},
+  "steps": [
+    { "id": "collect", "type": "form",
+      "inputs": [{"name":"x","type":"string","required":true}] }
+  ] }
+JSON
+fix3_home="$(mktemp -d)"
+set +e
+fix3_m="$(OPENSOP_LOCAL_HOME="$fix3_home" "$cli" run "$fix3_proc" --local --json)"; fix3_rc=$?
+set -e
+[ "$fix3_rc" -eq 0 ] || { echo "FAIL: Fix3 — form pause should exit 0, got $fix3_rc"; exit 1; }
+fix3_rid="$(jq -r '.run_id' <<<"$fix3_m")"
+fix3_audit="$fix3_home/runs/$fix3_rid/audit.jsonl"
+# duration_ms must be present and numeric.
+fix3_dur="$(jq -r '.duration_ms' "$fix3_audit")"
+[ -n "$fix3_dur" ] && [ "$fix3_dur" != "null" ] && [ "$fix3_dur" -ge 0 ] 2>/dev/null \
+  || { echo "FAIL: Fix3 — waiting form receipt missing duration_ms (got: $fix3_dur)"; exit 1; }
+# result_hash must be "pending".
+fix3_rh="$(jq -r '.result_hash' "$fix3_audit")"
+[ "$fix3_rh" = "pending" ] \
+  || { echo "FAIL: Fix3 — waiting form receipt result_hash should be 'pending', got: $fix3_rh"; exit 1; }
+rm -rf "$fix3_home"
+echo "PASS: Fix3 — form waiting receipt carries duration_ms and result_hash='pending'"
+
+rm -rf "$c1a_home"
+
 echo "ALL PASS"

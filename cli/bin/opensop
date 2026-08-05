@@ -2211,6 +2211,32 @@ cmd_schema_validate() {
 # =========================================================================== #
 
 _local_now()    { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# Portable SHA-256 digest of stdin → 64-char hex string on stdout.
+# Tries sha256sum (Linux coreutils), shasum -a 256 (macOS), then openssl dgst.
+# Echoes nothing if none are available — callers must handle empty output.
+# NEVER called without `|| true` guard (see Fix 1 in C1a adversarial review).
+_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -c1-64
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -c1-64
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | sed 's/.*= //' | cut -c1-64
+  else
+    return 0  # no hasher — emit nothing; caller falls back to "unavailable"
+  fi
+}
+# Milliseconds since epoch (GNU date +%s%3N). Used for duration_ms in receipts.
+# Falls back to seconds*1000 on systems where %N is unavailable (non-GNU date).
+_local_now_ms() {
+  local ms; ms="$(date +%s%3N 2>/dev/null)"
+  # Detect BSD/macOS date: it returns the literal "%3N" as text when %N is
+  # unsupported.  In that case fall back to seconds * 1000.
+  if [[ "$ms" == *N* ]] || [[ -z "$ms" ]]; then
+    ms=$(( $(date +%s) * 1000 ))
+  fi
+  echo "$ms"
+}
 # timestamp + PID + $RANDOM: distinct across processes (PID) and hardened against
 # the rare same-second/recycled-PID collision. `date %N` is unportable (BSD), so
 # we don't rely on sub-second precision.
@@ -2287,9 +2313,9 @@ local_run() {
     _v_i=$((_v_i+1))
   done
 
-  local run_id run_dir started
+  local run_id run_dir started started_ms
   run_id="$(_local_run_id)"; run_dir="$OPENSOP_LOCAL_HOME/runs/$run_id"
-  mkdir -p "$run_dir"; started="$(_local_now)"
+  mkdir -p "$run_dir"; started="$(_local_now)"; started_ms="$(_local_now_ms)"
   trap '_local_finalize_trap "$run_dir"' EXIT    # safety net: never leave a run "running"
   jq -nc --arg n "$name" --arg p "$proc_file" --arg id "$run_id" --arg t "$started" --argjson inp "$ctx" \
     '{run_id:$id, process:$n, process_file:$p, started_at:$t, status:"running", inputs:$inp}' > "$run_dir/manifest.json"
@@ -2340,6 +2366,7 @@ local_run() {
       approval) wait_reason="waiting_for_approval" ;;
       *)        wait_reason="waiting_for_callback" ;;
     esac
+    local wait_duration_ms; wait_duration_ms=$(( $(_local_now_ms) - started_ms ))
     jq -c --arg s "waiting" \
           --argjson idx "$((wait_index + 1))" \
           --argjson widx "$wait_index" \
@@ -2347,9 +2374,11 @@ local_run() {
           --arg reason "$wait_reason" \
           --arg since "$wait_since" \
           --argjson expects "$wait_expects" \
+          --argjson dur "$wait_duration_ms" \
        '.status=$s
         | .cursor={next_index:$idx}
-        | .waiting={step:$step, index:$widx, reason:$reason, expects:$expects, since:$since}' \
+        | .waiting={step:$step, index:$widx, reason:$reason, expects:$expects, since:$since}
+        | .duration_ms=$dur' \
        "$run_dir/manifest.json" > "$run_dir/manifest.json.tmp" \
     && mv "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
     trap - EXIT    # finalized normally; safety net no longer needed
@@ -2365,7 +2394,9 @@ local_run() {
   fi
 
   local ended; ended="$(_local_now)"
-  jq -c --arg s "$run_status" --arg e "$ended" '.status=$s | .ended_at=$e' \
+  local run_duration_ms; run_duration_ms=$(( $(_local_now_ms) - started_ms ))
+  jq -c --arg s "$run_status" --arg e "$ended" --argjson dur "$run_duration_ms" \
+     '.status=$s | .ended_at=$e | .duration_ms=$dur' \
      "$run_dir/manifest.json" > "$run_dir/manifest.json.tmp" && mv "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
   trap - EXIT    # finalized normally; drop the interrupted-run safety net
 
@@ -2424,8 +2455,10 @@ _local_step_loop() {
 
     # Reset explicitly each iteration — re-`local x` (no `=`) does NOT clear a
     # value already local in this function, which would leak one step into the next.
-    local out_raw="" rc=0 s_started s_ended
-    s_started="$(_local_now)"
+    local out_raw="" rc=0 s_started s_ended s_started_ms
+    s_started="$(_local_now)"; s_started_ms="$(_local_now_ms)"
+    # C1a: per-step metrics; llm-specific fields are set inside the llm case below.
+    local s_llm_model="" s_llm_tokens_in=0 s_llm_tokens_out=0 s_llm_token_source="none"
     case "$stype" in
       automated)
         local script="$srun"
@@ -2444,19 +2477,28 @@ _local_step_loop() {
       form)
         # Pause — append a "waiting" receipt and return the waiting signal.
         # context.json is already up-to-date (written after last completed step).
+        # C1a Fix 3: compute duration_ms at the pause point so the receipt carries
+        # the field consistently with all other step types.  result_hash="pending"
+        # is the canonical sentinel for a step that has not yet produced output
+        # (local_diff treats "pending" as non-comparable per Fix 2).
+        local _form_pause_ms; _form_pause_ms=$(( $(_local_now_ms) - s_started_ms ))
         jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
-               --arg a "$s_started" \
+               --arg a "$s_started" --argjson dur "$_form_pause_ms" \
           '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
-            reason:"waiting_for_input", started_at:$a}' >> "$audit"
+            reason:"waiting_for_input", started_at:$a,
+            duration_ms:$dur, result_hash:"pending"}' >> "$audit"
         echo "waiting:$i"
         return 0 ;;
       approval)
         # Approval pause — byte-parity with StepExecutors::Approval (reason: waiting_for_approval).
         # context.json is already up-to-date (written after last completed step).
+        # C1a Fix 3: same duration_ms + result_hash:"pending" treatment as form above.
+        local _appr_pause_ms; _appr_pause_ms=$(( $(_local_now_ms) - s_started_ms ))
         jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
-               --arg a "$s_started" \
+               --arg a "$s_started" --argjson dur "$_appr_pause_ms" \
           '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
-            reason:"waiting_for_approval", started_at:$a}' >> "$audit"
+            reason:"waiting_for_approval", started_at:$a,
+            duration_ms:$dur, result_hash:"pending"}' >> "$audit"
         echo "waiting:$i"
         return 0 ;;
       wait)
@@ -2474,12 +2516,15 @@ _local_step_loop() {
           rc=0
         elif jq -e 'has("until")' <<<"$wait_block" >/dev/null 2>&1; then
           # Async pause — record an advisory "until" and pause.
-          local wait_until_val
+          # C1a Fix 3: duration_ms + result_hash:"pending" for consistency.
+          local wait_until_val _wait_pause_ms
           wait_until_val="$(jq -r '.until' <<<"$wait_block")"
+          _wait_pause_ms=$(( $(_local_now_ms) - s_started_ms ))
           jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
-                 --arg a "$s_started" --arg u "$wait_until_val" \
+                 --arg a "$s_started" --arg u "$wait_until_val" --argjson dur "$_wait_pause_ms" \
             '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
-              reason:"waiting_for_callback", until:$u, started_at:$a}' >> "$audit"
+              reason:"waiting_for_callback", until:$u, started_at:$a,
+              duration_ms:$dur, result_hash:"pending"}' >> "$audit"
           echo "waiting:$i"
           return 0
         else
@@ -2637,6 +2682,23 @@ $llm_rendered_prompt"
 
             local llm_resp_json; llm_resp_json="$(cat "$llm_resp_tmp")"; rm -f "$llm_resp_tmp"
 
+            # C1a: capture token usage from the Anthropic response (usage block).
+            # Only update the outer metrics variables on the final (successful) attempt;
+            # but we always parse here so failed attempts still accumulate the last read.
+            local _llm_tin _llm_tout
+            _llm_tin="$(jq -r '.usage.input_tokens // empty' <<<"$llm_resp_json" 2>/dev/null)"
+            _llm_tout="$(jq -r '.usage.output_tokens // empty' <<<"$llm_resp_json" 2>/dev/null)"
+            if [[ -n "$_llm_tin" && "$_llm_tin" =~ ^[0-9]+$ ]]; then
+              s_llm_tokens_in="$_llm_tin"
+              s_llm_token_source="api"
+            fi
+            if [[ -n "$_llm_tout" && "$_llm_tout" =~ ^[0-9]+$ ]]; then
+              s_llm_tokens_out="$_llm_tout"
+              s_llm_token_source="api"
+            fi
+            s_llm_model="$(jq -r '.model // ""' <<<"$llm_resp_json" 2>/dev/null)"
+            [[ -z "$s_llm_model" ]] && s_llm_model="$llm_model"
+
             # Extract the first text content block.
             if ! llm_raw_text="$(jq -r '
               .content | if type != "array" then error("no content array") else . end |
@@ -2690,6 +2752,13 @@ $llm_rendered_prompt"
           fi
 
           # Validation passed.
+          # C1a: if no real API usage was captured (stub path), compute a char-count
+          # proxy for output tokens so the field is always populated.
+          if [[ "$s_llm_token_source" == "none" && -n "$llm_cleaned" ]]; then
+            s_llm_tokens_out="${#llm_cleaned}"
+            s_llm_token_source="chars"
+            [[ -z "$s_llm_model" ]] && s_llm_model="$llm_model"
+          fi
           llm_validated="$llm_parsed"
           llm_ok=false  # sentinel to exit the while (validated successfully)
         done
@@ -3246,17 +3315,42 @@ $llm_rendered_prompt"
     else
       out_json="$(jq -nc --arg s "$out_raw" '{stdout:$s}')"
     fi
+    local s_ended_ms; s_ended_ms="$(_local_now_ms)"
     s_ended="$(_local_now)"
+    local step_duration_ms; step_duration_ms=$(( s_ended_ms - s_started_ms ))
     local sstatus; [ "$rc" -eq 0 ] && sstatus="completed" || sstatus="failed"
     # Fold the step's stderr into the receipt so `show` surfaces it; drop the
     # temp log afterwards (and never leave an empty one lying around).
     local serr=""
     [ -s "$run_dir/$sid.stderr.log" ] && serr="$(cat "$run_dir/$sid.stderr.log")"
     rm -f "$run_dir/$sid.stderr.log"
+    # C1a: canonical result hash — jq -Sc (sorted keys, compact) piped to _sha256.
+    # Stable for identical outputs; recorded even on failure (hash of the error object).
+    # MUST NOT abort under set -e: pipeline wrapped in $(...) with || true, then
+    # truncated to 64 chars (openssl dgst may return 64+, sha256sum exactly 64).
+    # Falls back to "unavailable" when no hasher is present — receipt still written.
+    local result_hash _canon
+    _canon="$(jq -Sc . <<<"$out_json" 2>/dev/null)" || _canon=""
+    result_hash="$(printf '%s' "$_canon" | _sha256 2>/dev/null || true)"
+    result_hash="${result_hash:0:64}"
+    [[ -z "$result_hash" ]] && result_hash="unavailable"
+    # C1a: assemble the metric supplement; include llm fields only for llm steps.
+    local llm_metrics="{}"
+    if [[ "$stype" == "llm" && -n "$s_llm_model" ]]; then
+      llm_metrics="$(jq -nc \
+        --arg model "$s_llm_model" \
+        --argjson tin "$s_llm_tokens_in" \
+        --argjson tout "$s_llm_tokens_out" \
+        --arg src "$s_llm_token_source" \
+        '{model:$model, tokens_in:$tin, tokens_out:$tout, token_source:$src}')"
+    fi
     jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" --arg st "$sstatus" --argjson rc "$rc" \
       --arg a "$s_started" --arg b "$s_ended" --argjson out "$out_json" --arg se "$serr" \
-      '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:$st, exit_code:$rc, started_at:$a, ended_at:$b, output:$out}
-       + (if $se=="" then {} else {stderr:$se} end)' >> "$audit"
+      --argjson dur "$step_duration_ms" --arg rh "$result_hash" --argjson llmm "$llm_metrics" \
+      '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:$st, exit_code:$rc,
+        started_at:$a, ended_at:$b, duration_ms:$dur, result_hash:$rh, output:$out}
+       + (if $se=="" then {} else {stderr:$se} end)
+       + $llmm' >> "$audit"
 
     if [ "$rc" -eq 0 ]; then
       ctx="$(jq -c --arg id "$sid" --argjson o "$out_json" '.[$id]=$o' <<<"$ctx")"
@@ -4265,12 +4359,22 @@ local_diff() {
         # Last receipt per step-id (in case of waiting→completed two-line audit).
         ($s1 | map(select(.step == $sid)) | last // null) as $ra |
         ($s2 | map(select(.step == $sid)) | last // null) as $rb |
-        maybe_diff("steps.\($sid).state";      $ra.status;      $rb.status) +
+        maybe_diff("steps.\($sid).state";       $ra.status;      $rb.status) +
         maybe_diff("steps.\($sid).sub_state";  $ra.reason;      $rb.reason) +
         maybe_diff("steps.\($sid).outputs";    $ra.output;      $rb.output) +
         maybe_diff("steps.\($sid).decided_by"; $ra.decided_by;  $rb.decided_by) +
         maybe_diff("steps.\($sid).confidence"; $ra.confidence;  $rb.confidence) +  # mirrors remote StepSerializer.confidence
-        maybe_diff("steps.\($sid).duration_ms";$ra.duration_ms; $rb.duration_ms) +
+        # C1a: result_hash diff — only compare when BOTH receipts carry a usable
+        # hash (not null, not "unavailable", not "pending").  Mixed-version audits
+        # (one pre-C1a receipt with null vs one with a real hash) would otherwise
+        # always report identical:false even when the outputs are equal.  When
+        # either side lacks a usable hash, fall through to the outputs comparison
+        # already emitted above (which covers the mixed-version case faithfully).
+        (if (($ra.result_hash != null and $ra.result_hash != "unavailable" and $ra.result_hash != "pending") and
+             ($rb.result_hash != null and $rb.result_hash != "unavailable" and $rb.result_hash != "pending"))
+         then maybe_diff("steps.\($sid).result_hash"; $ra.result_hash; $rb.result_hash)
+         else []
+         end) +
         maybe_diff("steps.\($sid).exit_code";  $ra.exit_code;   $rb.exit_code)     # local-only extra (shell exit status)
       ) | add // []) |
 
