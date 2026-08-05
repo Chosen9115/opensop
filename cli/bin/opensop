@@ -1691,7 +1691,7 @@ cmd_suggest() {
 #
 # Output:
 #   pretty: NAME / STATE / LAST STATUS / LAST RUN / NEXT RUN table
-#   --json: [{name,status,last_status,last_run_at,next_run_at}]  (§9.4 shape)
+#   --json: [{name,version,state,last_status,last_run_at,next_run_at,active_instances}]  (§9.4 shape)
 
 cmd_ps() {
   if [[ "$REMOTE_MODE" != true ]]; then local_ps "$@"; return $?; fi
@@ -1707,15 +1707,29 @@ cmd_ps() {
 
   _ps_remote_render() {
     local resp; resp=$(api_get "/sop/processes/status")
-    local entries; entries=$(echo "$resp" | jq -c '[.processes[] | {name:.name, status:.state, last_status:.last_status, last_run_at:.last_run_at, next_run_at:.next_run_at}]')
+    # Pass through the §9.4 shape verbatim — the server already emits the
+    # correct field names (state, version, active_instances, etc.).
+    local entries; entries=$(echo "$resp" | jq -c '[.processes[] | {
+      name:             .name,
+      version:          .version,
+      state:            .state,
+      last_status:      .last_status,
+      last_run_at:      .last_run_at,
+      next_run_at:      .next_run_at,
+      active_instances: .active_instances
+    }]')
     _ps_emit "$entries"
   }
 
   if $follow; then
     trap 'printf "\n"; exit 0' INT
     while true; do
-      clear
-      _ps_remote_render
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
+        _ps_remote_render
+      else
+        { clear 2>/dev/null || true; }
+        _ps_remote_render
+      fi
       sleep 2
     done
   else
@@ -1782,8 +1796,9 @@ local_ps() {
       done < <(find . -maxdepth 2 -name '*.sop.json' 2>/dev/null)
     fi
 
-    # Step 2: for each discovered process, derive status + rollup from run manifests.
-    # Build a jq-ready JSON array: [{name, status, last_status, last_run_at, next_run_at}]
+    # Step 2: for each discovered process, derive state + rollup from run manifests.
+    # Build a jq-ready JSON array matching §9.4:
+    # [{name, version, state, last_status, last_run_at, next_run_at, active_instances}]
     local entries="[]"
 
     if [[ ! -s "$_procs_file" ]]; then
@@ -1794,6 +1809,10 @@ local_ps() {
 
     while IFS=$'\t' read -r _pname _pfile; do
       [[ -z "$_pname" ]] && continue
+
+      # Read version from the process file (null if absent or unreadable).
+      local _pversion; _pversion="$(jq -r '.version // null' "$_pfile" 2>/dev/null)" || _pversion="null"
+      [[ "$_pversion" == "null" ]] && _pversion="null"
 
       # Collect manifest data for this process name.
       # Build arrays for: all started_at, ended_at+status for terminal runs,
@@ -1815,12 +1834,14 @@ local_ps() {
 
       # Derive fields in jq — all in one pass over the collected data.
       local _entry; _entry="$(jq -nc \
-        --arg name "$_pname" \
+        --arg  name    "$_pname" \
+        --arg  version "$_pversion" \
         --argjson data "$_mf_data" '
         # §9.2: running if any manifest has status ∈ {running, waiting}
         ($data | map(select(.status == "running" or .status == "waiting")) | length > 0) as $any_active |
+        ($data | map(select(.status == "running" or .status == "waiting")) | length) as $active_count |
 
-        # status: running > open (no scheduler yet, so no "scheduled")
+        # state: running > open (no scheduler yet, so no "scheduled")
         ($any_active | if . then "running" else "open" end) as $state |
 
         # §9.3 last_run_at: most recent started_at across all manifests
@@ -1840,11 +1861,13 @@ local_ps() {
         ) as $last_status |
 
         {
-          name:         $name,
-          status:       $state,
-          last_status:  $last_status,
-          last_run_at:  $last_run_at,
-          next_run_at:  null
+          name:             $name,
+          version:          (if $version == "null" then null else $version end),
+          state:            $state,
+          last_status:      $last_status,
+          last_run_at:      $last_run_at,
+          next_run_at:      null,
+          active_instances: $active_count
         }
       ')"
       entries="$(jq -c --argjson e "$_entry" '. + [$e]' <<<"$entries")"
@@ -1856,8 +1879,17 @@ local_ps() {
   if $follow; then
     trap 'printf "\n"; exit 0' INT
     while true; do
-      clear
-      _ps_local_render
+      if [[ "$OUTPUT_MODE" == "json" ]]; then
+        # NDJSON mode: one compact JSON array per poll on its own line.
+        # No terminal escapes; safe for machine consumers redirecting stdout.
+        _ps_local_render
+      else
+        # Pretty mode: only clear when writing to a real TTY.
+        if is_tty; then
+          { clear 2>/dev/null || true; }
+        fi
+        _ps_local_render
+      fi
       sleep 2
     done
   else
@@ -1867,7 +1899,8 @@ local_ps() {
 
 # _ps_emit ENTRIES_JSON
 #   Render the ps table (pretty) or JSON array (--json / piped).
-#   ENTRIES_JSON: compact JSON array of {name,status,last_status,last_run_at,next_run_at}.
+#   ENTRIES_JSON: compact JSON array matching §9.4:
+#     {name, version, state, last_status, last_run_at, next_run_at, active_instances}
 _ps_emit() {
   local entries="$1"
 
@@ -1894,7 +1927,7 @@ _ps_emit() {
     return 0
   fi
 
-  printf '%s\n' "$entries" | jq -r '.[] | "\(.name)\t\(.status)\t\(.last_status)\t\(.last_run_at // "-")\t\(.next_run_at // "-")"' | \
+  printf '%s\n' "$entries" | jq -r '.[] | "\(.name)\t\(.state)\t\(.last_status)\t\(.last_run_at // "-")\t\(.next_run_at // "-")"' | \
     while IFS=$'\t' read -r name state last_status last_run next_run; do
       # Color for state.
       local state_color="$C_DIM"
