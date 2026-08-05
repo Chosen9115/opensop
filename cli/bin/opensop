@@ -864,12 +864,16 @@ EOF
 # _cmd_help_command <name> — per-command detail from the registry.
 _cmd_help_command() {
   local name="$1"
-  local line summary usage category backend
+  local line="" row summary usage category backend
 
-  # Literal (non-regex) match on the first field — a grep pattern would let
-  # 'help .*' or 'help schema.*' spuriously match a row and exit 0, misleading
-  # agents that key on the usage_error exit code.
-  line="$(_registry_raw | awk -F'|' -v name="$name" '$1 == name { print; exit }')"
+  # Byte-exact match on the first field, in pure bash. Neither a grep regex nor
+  # awk -v is safe here: grep would let 'help .*' match a row, and awk -v decodes
+  # backslash escapes (so 'help \162un' would alias to 'run'). ${row%%|*} strips
+  # at the first '|' with no interpretation, so agents keying on the usage_error
+  # exit code get a truthful unknown-command signal.
+  while IFS= read -r row; do
+    if [[ "${row%%|*}" == "$name" ]]; then line="$row"; break; fi
+  done < <(_registry_raw)
   [[ -n "$line" ]] \
     || die "no help for '${name}'" "usage_error" "run 'opensop help' for the command list"
 

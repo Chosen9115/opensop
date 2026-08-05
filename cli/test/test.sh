@@ -3714,7 +3714,7 @@ echo "PASS: B1 --remote help — renders regardless of server config (local-only
 
 # (12) Codex#2b: registry lookup is literal, not regex — 'help .*' / 'help schema.*'
 #      must NOT spuriously match a row; they must error like any unknown command.
-for pat in '.*' 'schema.*' 'ru.'; do
+for pat in '.*' 'schema.*' 'ru.' '\162un' '\x72un'; do
   set +e
   out="$("$cli" help "$pat" --json 2>&1)"; rc=$?
   set -e
