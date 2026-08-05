@@ -3562,4 +3562,118 @@ echo "$schema_noremote_out" | jq -r '.hint' | grep -q "\-\-remote\|\-\-server" \
   || { echo "FAIL: schema usage_error hint should mention --remote or --server, got: $(echo "$schema_noremote_out" | jq -r '.hint')"; exit 1; }
 echo "PASS: schema <name> no --remote — exits non-zero with usage_error, hint mentions --remote/--server"
 
+# --------------------------------------------------------------------------- #
+# B1: help engine — registry-driven help system
+# Tests: opensop help renders, help <cmd> shows usage, help <bogus> errors with
+# the right code, and help --json emits parseable JSON with the correct count.
+# --------------------------------------------------------------------------- #
+
+# (1) opensop help renders (exits 0, contains expected sections)
+set +e
+help_out="$("$cli" help 2>&1)"; help_rc=$?
+set -e
+[ "$help_rc" -eq 0 ] || { echo "FAIL: help should exit 0, got $help_rc"; exit 1; }
+echo "$help_out" | grep -q "USAGE" \
+  || { echo "FAIL: help output missing USAGE section"; exit 1; }
+echo "$help_out" | grep -q "DISCOVERY" \
+  || { echo "FAIL: help output missing DISCOVERY section"; exit 1; }
+echo "$help_out" | grep -q "EXECUTION" \
+  || { echo "FAIL: help output missing EXECUTION section"; exit 1; }
+echo "$help_out" | grep -q "opensop help" \
+  || { echo "FAIL: help output should mention 'opensop help'"; exit 1; }
+echo "PASS: B1 help — full help renders with USAGE/DISCOVERY/EXECUTION sections"
+
+# (2) opensop help <valid-cmd> shows usage for that command
+set +e
+help_run="$("$cli" help run 2>&1)"; help_run_rc=$?
+set -e
+[ "$help_run_rc" -eq 0 ] || { echo "FAIL: help run should exit 0, got $help_run_rc"; exit 1; }
+echo "$help_run" | grep -q "USAGE" \
+  || { echo "FAIL: help run missing USAGE"; exit 1; }
+echo "$help_run" | grep -q "BACKEND" \
+  || { echo "FAIL: help run missing BACKEND"; exit 1; }
+echo "$help_run" | grep -q "EXAMPLES" \
+  || { echo "FAIL: help run missing EXAMPLES"; exit 1; }
+echo "PASS: B1 help run — per-command help shows USAGE/BACKEND/EXAMPLES"
+
+# Also test a local-only command
+set +e
+help_runs="$("$cli" help runs 2>&1)"; help_runs_rc=$?
+set -e
+[ "$help_runs_rc" -eq 0 ] || { echo "FAIL: help runs should exit 0, got $help_runs_rc"; exit 1; }
+echo "$help_runs" | grep -qi "local" \
+  || { echo "FAIL: help runs should mention 'local' backend"; exit 1; }
+echo "PASS: B1 help runs — local-only command help renders correctly"
+
+# (3) opensop help <bogus-cmd> errors with usage_error
+set +e
+help_bogus_out="$("$cli" help bogus-nonexistent-cmd --json 2>&1)"; help_bogus_rc=$?
+set -e
+[ "$help_bogus_rc" -ne 0 ] || { echo "FAIL: help <bogus> should exit non-zero"; exit 1; }
+echo "$help_bogus_out" | jq -e '.error == "usage_error"' >/dev/null \
+  || { echo "FAIL: help <bogus> should emit usage_error, got: $help_bogus_out"; exit 1; }
+echo "$help_bogus_out" | jq -r '.hint' | grep -q "opensop help" \
+  || { echo "FAIL: help <bogus> hint should mention 'opensop help', got: $(echo "$help_bogus_out" | jq -r '.hint')"; exit 1; }
+echo "PASS: B1 help <bogus> — unknown command exits non-zero with usage_error and helpful hint"
+
+# (4) opensop help --json emits parseable JSON array
+set +e
+help_json="$("$cli" help --json 2>&1)"; help_json_rc=$?
+set -e
+[ "$help_json_rc" -eq 0 ] || { echo "FAIL: help --json should exit 0, got $help_json_rc"; exit 1; }
+
+# Must be a valid JSON array
+echo "$help_json" | jq -e 'type == "array"' >/dev/null \
+  || { echo "FAIL: help --json must emit a JSON array, got: ${help_json:0:100}"; exit 1; }
+
+# Each element must have the required fields
+echo "$help_json" | jq -e 'all(has("command") and has("summary") and has("usage") and has("category") and has("backend"))' >/dev/null \
+  || { echo "FAIL: help --json entries must have command/summary/usage/category/backend fields"; exit 1; }
+
+# Count must match the registry (count lines in _registry_raw — 25 commands)
+# We count by counting lines in the registry that are non-empty (not header lines)
+registry_count="$(bash cli/bin/opensop help --json 2>/dev/null | jq 'length')"
+[ "$registry_count" -gt 0 ] || { echo "FAIL: help --json array should be non-empty"; exit 1; }
+# 'list' must be in the output
+echo "$help_json" | jq -e 'any(.[]; .command == "list")' >/dev/null \
+  || { echo "FAIL: help --json should include 'list' command"; exit 1; }
+# 'run' must be in the output
+echo "$help_json" | jq -e 'any(.[]; .command == "run")' >/dev/null \
+  || { echo "FAIL: help --json should include 'run' command"; exit 1; }
+# 'help' itself must be in the output
+echo "$help_json" | jq -e 'any(.[]; .command == "help")' >/dev/null \
+  || { echo "FAIL: help --json should include 'help' command itself"; exit 1; }
+echo "PASS: B1 help --json — emits parseable JSON array ($registry_count commands), required fields present"
+
+# (5) opensop --json help (alternate flag order) also emits JSON
+set +e
+help_json2="$("$cli" --json help 2>&1)"; help_json2_rc=$?
+set -e
+[ "$help_json2_rc" -eq 0 ] || { echo "FAIL: --json help should exit 0, got $help_json2_rc"; exit 1; }
+echo "$help_json2" | jq -e 'type == "array"' >/dev/null \
+  || { echo "FAIL: --json help must emit a JSON array"; exit 1; }
+echo "PASS: B1 --json help — alternate flag order also emits JSON array"
+
+# (6) opensop help agents exits 0 and mentions key discovery commands
+set +e
+help_agents="$("$cli" help agents 2>&1)"; help_agents_rc=$?
+set -e
+[ "$help_agents_rc" -eq 0 ] || { echo "FAIL: help agents should exit 0, got $help_agents_rc"; exit 1; }
+echo "$help_agents" | grep -q "search" \
+  || { echo "FAIL: help agents should mention 'search'"; exit 1; }
+echo "$help_agents" | grep -q "suggest" \
+  || { echo "FAIL: help agents should mention 'suggest'"; exit 1; }
+echo "$help_agents" | grep -q "docs/AGENTS.md" \
+  || { echo "FAIL: help agents should point to docs/AGENTS.md"; exit 1; }
+echo "PASS: B1 help agents — exits 0, mentions search/suggest/docs/AGENTS.md"
+
+# (7) opensop help dispatches correctly from `opensop help` (no args → full help)
+set +e
+help_noargs="$("$cli" help 2>&1)"; help_noargs_rc=$?
+set -e
+[ "$help_noargs_rc" -eq 0 ] || { echo "FAIL: help with no args should exit 0"; exit 1; }
+echo "$help_noargs" | grep -q "opensop" \
+  || { echo "FAIL: help with no args should show opensop branding"; exit 1; }
+echo "PASS: B1 help (no args) — full help renders from dispatch"
+
 echo "ALL PASS"

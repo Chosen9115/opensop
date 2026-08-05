@@ -405,7 +405,7 @@ Commands marked **[remote]** require `--remote` or `--server <url>`. All others 
 | `opensop instances [--state X] [--process Y]` | List runs — local by default; **[remote]** paginated `GET /sop/instances` with `--remote` |
 | **Config** | |
 | `opensop config [set <key> <value>]` | Manage remote server config (url + token) |
-| `opensop help` | Full help |
+| `opensop help [<command>\|agents] [--json]` | Full help, per-command detail, agent quick-start, or machine-readable JSON index |
 
 ## Local cache
 

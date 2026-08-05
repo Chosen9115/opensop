@@ -675,124 +675,433 @@ cmd_fork() {
 }
 
 # --------------------------------------------------------------------------- #
+# Command registry — single source of truth for every subcommand.
+#
+# Format (pipe-delimited, 5 fields per line):
+#   name | summary | usage | category | backend
+#
+# category: discovery | inspection | execution | cells | authoring | admin | config
+# backend:  local | remote | dual
+#   local  — no server, no curl
+#   remote — requires --remote or --server
+#   dual   — default local; add --remote for server mode
+#
+# RULES:
+#   - Add a row here when adding a command.
+#   - cmd_help renders from this table — do NOT hardcode cmd names elsewhere
+#     in cmd_help; derive them from _registry_*.
+#   - cmd_help_command() and cmd_help --json also read this table.
+# --------------------------------------------------------------------------- #
+
+# _registry_raw — emit the raw registry lines (one per command).
+# Intentionally NOT an associative array so we preserve insertion order
+# and work cleanly on bash 4+ without `declare -A` footguns.
+_registry_raw() {
+  cat <<'REGISTRY'
+list|list processes in the cell chain (or server with --remote)|list [dir] [--tag <tag>] [--conflicts]|discovery|dual
+search|ranked text search over process names, descriptions, and tags|search <keyword> [...]|discovery|dual
+suggest|describe a task in prose; get the top-matching process|suggest "<task description>" [--threshold N]|discovery|dual
+schema|show the full definition of a named process (remote only)|schema <name>|discovery|remote
+status|show the current state of a run|status <run_id>|inspection|dual
+steps|list per-step state of a run|steps <run_id>|inspection|dual
+diff|compare two runs of the same process|diff <run_id1> <run_id2>|inspection|dual
+history|recent runs of a specific process, newest-first|history --process <name> [--limit N]|inspection|remote
+compass|top processes by run-count, recency, and failure rate|compass|inspection|remote
+run|start a new run of a process|run <name/file.sop.json> [--input k=v ...]|execution|dual
+dry-run|validate inputs and preview steps — no run created|dry-run <name/file.sop.json> [--input k=v ...]|execution|dual
+submit|resume a paused (waiting) run by supplying step outputs|submit <run_id> <step-id> [--output k=v ...]|execution|dual
+cancel|cancel a running or waiting run|cancel <run_id> [--reason TEXT]|execution|dual
+runs|list local runs|runs|execution|local
+show|show a local run's manifest and per-step receipts|show <run_id>|execution|local
+init|create .opensop/ in cwd making it an OpenSOP cell|init [--name N] [--parent PATH]|cells|local
+scope|print the active cell and ancestor chain|scope|cells|local
+annotate|append a policy event to a skill's lineage history|annotate <skill> <event-type> <json>|cells|local
+lineage|print a skill's lineage entry (status, metadata, history)|lineage <skill>|cells|local
+fork|copy an ancestor cell's skill into the active cell|fork <name> [--from <cell>]|cells|local
+register|POST a .sop.yaml to /sop/processes/register|register <process.yaml>|authoring|remote
+schema validate|client-side YAML lint — no server round-trip|schema validate <file.yaml>|authoring|local
+instances|list runs — local by default, paginated server list with --remote|instances [--state X] [--process Y]|admin|dual
+config|show or set remote server config (url and token)|config [set url <URL>; set token <TOKEN>]|config|local
+help|show help for a command or the full command reference|help [<command>] [--json]|config|local
+REGISTRY
+}
+
+# _registry_field name field_index
+#   Emit the value of field $2 (1-based) for the command named $1.
+#   Returns non-zero if the command is not found.
+_registry_field() {
+  local name="$1" field="$2"
+  local line
+  line="$(_registry_raw | grep -m1 "^${name}|")" || return 1
+  # cut -d'|' -f N
+  echo "$line" | cut -d'|' -f"$field"
+}
+
+# _registry_json — emit the full registry as a JSON array.
+_registry_json() {
+  local first=true
+  printf '[\n'
+  while IFS='|' read -r name summary usage category backend; do
+    [[ -z "$name" ]] && continue
+    if $first; then first=false; else printf ',\n'; fi
+    jq -nc \
+      --arg cmd      "$name"     \
+      --arg summary  "$summary"  \
+      --arg usage    "$usage"    \
+      --arg category "$category" \
+      --arg backend  "$backend"  \
+      '{command:$cmd, summary:$summary, usage:$usage, category:$category, backend:$backend}'
+  done < <(_registry_raw)
+  printf '\n]\n'
+}
+
+# --------------------------------------------------------------------------- #
 # Subcommand: help
 # --------------------------------------------------------------------------- #
 
 cmd_help() {
+  local subcmd=""
+  local want_json=false
+
+  # --json may arrive via the global --json flag (stripped by main and stored in
+  # OUTPUT_MODE) OR as an explicit arg after 'help'.  Honor both.
+  [[ "$OUTPUT_MODE" == "json" ]] && want_json=true
+
+  # Parse help-specific flags/args.
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) want_json=true ;;
+      -*)     die "unknown flag '$1'" "unknown_flag" "opensop help [<command>|agents] [--json]" ;;
+      *)      subcmd="$1" ;;
+    esac
+    shift
+  done
+
+  # --json with no subcommand: emit full registry as JSON.
+  if $want_json && [[ -z "$subcmd" ]]; then
+    _registry_json
+    return 0
+  fi
+
+  # help agents: concise agent-oriented orientation.
+  if [[ "$subcmd" == "agents" ]]; then
+    _cmd_help_agents
+    return 0
+  fi
+
+  # help <command>: per-command detail.
+  if [[ -n "$subcmd" ]]; then
+    _cmd_help_command "$subcmd"
+    return 0
+  fi
+
+  # Default: full human-readable help rendered from the registry.
+  _cmd_help_full
+}
+
+# _cmd_help_full — render the full command reference from the registry.
+_cmd_help_full() {
+  printf '%sopensop%s — local-first CLI for OpenSOP (v%s)\n\n' "$C_BOLD" "$C_RESET" "$OPENSOP_CLI_VERSION"
+  printf '%sUSAGE%s\n  opensop <command> [args]\n\n' "$C_BOLD" "$C_RESET"
+  printf '  %sopensop help <command>%s    per-command usage and examples\n' "$C_BOLD" "$C_RESET"
+  printf '  %sopensop help agents%s       agent-oriented quick-start\n' "$C_BOLD" "$C_RESET"
+  printf '  %sopensop help --json%s       machine-readable command index\n\n' "$C_BOLD" "$C_RESET"
+
+  local cur_cat=""
+  while IFS='|' read -r name summary usage category backend; do
+    [[ -z "$name" ]] && continue
+    if [[ "$category" != "$cur_cat" ]]; then
+      cur_cat="$category"
+      printf '\n%s%s%s\n' "$C_BOLD" "${category^^}" "$C_RESET"
+    fi
+    local tag=""
+    case "$backend" in
+      remote) tag=" [remote]" ;;
+      dual)   tag=" [local|remote]" ;;
+    esac
+    printf '  %-28s %s%s\n' "$name" "$summary" "$tag"
+  done < <(_registry_raw)
+
   cat <<EOF
-${C_BOLD}opensop${C_RESET} — thin CLI for OpenSOP runtimes (v$OPENSOP_CLI_VERSION)
-
-${C_BOLD}USAGE${C_RESET}
-  opensop <command> [args]
-
-${C_BOLD}DISCOVERY${C_RESET}
-  list [--tag <tag>]            list all registered processes (optionally filtered by tag)
-  search <keyword> [...]        ranked text search over process names, descriptions, tags
-  suggest "<task description>"  inverse retrieval — describe a task, get a process recommendation
-  schema <name>                 show the full definition of a process [remote]
-
-${C_BOLD}INSPECTION${C_RESET}
-  status <id>                   show the current state of a run
-  steps <id>                    show all steps of a run
-  diff <id1> <id2>              compare two runs of the same process
-  history --process <name> [--limit N]  recent runs of a specific process (newest-first)
-  compass                       top processes by run-count, recency, and failure rate
-
-${C_BOLD}EXECUTION${C_RESET}
-  run <name> [opts]             start a new run of a process
-  dry-run <name> [opts]         preview what would happen — validates inputs, no execution
-  submit <id> <step-id> [opts]  submit outputs to advance a paused step
-  cancel <id> [--reason TEXT]   cancel a running run
-
-${C_BOLD}LOCAL EXECUTION (default — no server required)${C_RESET}
-  run <name|file.sop.json>           run a process locally; bare name resolves across the cell chain (nearest wins)
-  dry-run <name|file.sop.json>       preview a local process — validates inputs, shows step walkthrough, no run created
-  submit <run_id> <step-id> [opts]   resume a paused (waiting) run — inject outputs and re-enter execution at cursor
-                                     opts: --output k=v (repeatable), --decided-by <actor>, --confidence <float>
-  status <run_id>                    show state of a local run (mirrors remote status shape)
-  steps <run_id>                     list per-step state from a local run's audit log
-  diff <run_id1> <run_id2>           compare two local runs of the same process (inputs/outputs/per-step state)
-  cancel <run_id> [--reason TEXT]    cancel a running or waiting local run; completed/failed/cancelled → rejected
-  list [dir] [--conflicts]           list local processes; no arg + inside a cell walks the chain; --conflicts marks shadowed entries
-  search <kw...>                     ranked text search over cell-chain processes (no server)
-  suggest "<task>" [--threshold N]   intent scoring over cell-chain processes (no server)
-  runs                               list local runs
-  show <run_id>                      show a local run's manifest + per-step receipts
-  ${C_DIM}⚠ local steps run as shell on this machine — only run process files you trust${C_RESET}
-
-${C_BOLD}LOCAL STEP TYPES (v0.7 — full SPEC parity)${C_RESET}
-  automated          run a shell script; JSON stdout merged into context
-  shell              alias for automated
-  noop               no-op placeholder; passes through context unchanged
-  form               pauses run (waiting_for_input); resume via: opensop submit <run_id> <step-id> --output k=v
-  approval           pauses run (waiting_for_approval); expects decision=approve|reject (or custom outputs/schema)
-  wait               wait.seconds → completes immediately with {waited:true}; wait.until → pauses (waiting_for_callback)
-  llm                call Anthropic Claude; requires ANTHROPIC_API_KEY; model must start with "claude"
-  webhook            outbound HTTP; sync → completes with response; callback → pauses (waiting_for_callback); poll → unsupported
-  subprocess         run a child process locally; child context merged under step id; depth guard (max 16 levels)
-
-${C_BOLD}CELLS (v0.6 — fractal addressing)${C_RESET}
-  init [--name N] [--parent PATH]   create .opensop/ in cwd; parent auto-detected if cwd is inside an ancestor cell
-  scope                             print the active cell + ancestor chain (errors when cwd is not inside any cell)
-  annotate <skill> <type> <json>    append a policy event to the skill's lineage history in the active cell
-  lineage <skill>                   print a skill's lineage entry (status, metadata, history) in the active cell
-  fork <name> [--from <cell>]       copy an ancestor cell's skill into the active cell + record forked_from snapshot
-
-${C_BOLD}AUTHORING${C_RESET}
-  register <process.yaml>       POST a .sop.yaml to /sop/processes/register (requires --remote or --server)
-  schema validate <file.yaml>   client-side YAML lint (no server round-trip)
-
-${C_BOLD}ADMIN${C_RESET}
-  instances [--state X] [--process Y]   list runs (paginated; --remote for server)
-
-${C_BOLD}CONFIG${C_RESET}
-  config                        show current config
-  config set url <URL>          set the server URL
-  config set token <TOKEN>      set the API token
 
 ${C_BOLD}GLOBAL OPTIONS${C_RESET}
   --json                        emit JSON to stdout (default when piped)
   --pretty                      pretty-print (default in TTY)
-  --remote                      route dual commands to the configured remote server (OPENSOP_URL)
-  --server <url>                set the server URL for this invocation and enable remote mode
-  --local                       deprecated no-op (local is now the default); kept for script compatibility
+  --remote                      route dual commands to the configured remote server
+  --server <url>                set the server URL for this invocation (implies --remote)
+  --local                       deprecated no-op (local is now the default)
   --help, -h                    show this help
   --version, -v                 print version
 
-${C_BOLD}INPUT FORMS (for run/dry-run/submit)${C_RESET}
+${C_BOLD}INPUT FORMS (run / dry-run / submit)${C_RESET}
   --inputs '<json>'             pass inputs as a JSON object
   --inputs-file <path>          read inputs from a JSON file
-  --input KEY=VALUE             repeatable; build the inputs object piece by piece
-                                (use --outputs / --output / --outputs-file for submit)
-
-${C_BOLD}EXAMPLES${C_RESET}
-  # Local (default — no server):
-  opensop run ./greet.sop.json --input name=Ana          # run locally, no server
-  opensop submit <run_id> collect --output email=a@b.com # resume a paused form step
-  opensop status <run_id>                                # local run state
-  opensop list                                           # list local process files
-  opensop runs                                           # list local runs
-  opensop show <run_id>                                  # local run receipts
-
-  # Remote (opt-in with --remote or --server):
-  opensop config set url https://demo.opensop.ai
-  opensop config set token demo-public-token-resets-daily
-  opensop --remote list
-  opensop --remote run lead-qualification \\
-    --input lead_name="Ana García" \\
-    --input lead_email=ana@example.com \\
-    --input source=website
-  opensop --remote status <run-id>
-  opensop --remote history --process lead-qualification --limit 5
-  opensop --server https://demo.opensop.ai register ./my-process.sop.yaml
-  opensop schema validate ./my-process.sop.yaml  # always local (no server)
+  --input KEY=VALUE             repeatable; build inputs piece by piece
+  (use --outputs / --output / --outputs-file for submit)
 
 ${C_BOLD}ENVIRONMENT${C_RESET}
   OPENSOP_URL                   override config server URL for one call
   OPENSOP_TOKEN                 override config token for one call
   OPENSOP_HOME                  config + cache dir (default: ~/.opensop)
-  OPENSOP_LOCAL_HOME            local-mode receipts dir (default: active cell's .opensop/ when inside a cell; else ~/.opensop-local)
+  OPENSOP_LOCAL_HOME            local-mode receipts dir (default: active cell's .opensop/ or ~/.opensop-local)
   NO_COLOR                      disable ANSI color output
+
+${C_BOLD}LOCAL STEP TYPES (v0.7 — full SPEC parity)${C_RESET}
+  automated/shell   run a shell script; JSON stdout merged into context
+  noop              pass-through; no execution
+  form              pause (waiting_for_input); resume via: opensop submit <run_id> <step-id> --output k=v
+  approval          pause (waiting_for_approval); expects decision=approve|reject
+  wait              wait.seconds completes immediately; wait.until pauses (waiting_for_callback)
+  llm               call Anthropic Claude; requires ANTHROPIC_API_KEY
+  webhook           outbound HTTP; sync or callback (waiting_for_callback); poll unsupported
+  subprocess        run a child process locally; depth-guarded (max 16)
+
+${C_DIM}⚠  local steps run as shell on this machine — only run process files you trust${C_RESET}
+
+${C_BOLD}EXAMPLES${C_RESET}
+  opensop run ./greet.sop.json --input name=Ana       # local run
+  opensop submit <run_id> collect --output email=alice@example.com
+  opensop status <run_id>
+  opensop list && opensop runs
+  opensop --remote run lead-qual --input name=Ana     # remote run
+  opensop help run                                    # per-command detail
+  opensop help --json | jq '.[].command'              # machine-readable index
+EOF
+}
+
+# _cmd_help_command <name> — per-command detail from the registry.
+_cmd_help_command() {
+  local name="$1"
+  local line summary usage category backend
+
+  line="$(_registry_raw | grep -m1 "^${name}|")" \
+    || die "no help for '${name}'" "usage_error" "run 'opensop help' for the command list"
+
+  IFS='|' read -r _ summary usage category backend <<< "$line"
+
+  printf '%s%s%s — %s\n\n' "$C_BOLD" "$name" "$C_RESET" "$summary"
+  printf '%sUSAGE%s\n  opensop %s\n\n' "$C_BOLD" "$C_RESET" "$usage"
+
+  local backend_label
+  case "$backend" in
+    local)  backend_label="local only (no server, no curl)" ;;
+    remote) backend_label="remote only (requires --remote or --server <url>)" ;;
+    dual)   backend_label="local by default; add --remote or --server for server mode" ;;
+    *)      backend_label="$backend" ;;
+  esac
+  printf '%sBACKEND%s\n  %s\n\n' "$C_BOLD" "$C_RESET" "$backend_label"
+
+  # Per-command examples block.
+  printf '%sEXAMPLES%s\n' "$C_BOLD" "$C_RESET"
+  _cmd_help_examples "$name"
+}
+
+# _cmd_help_examples <name> — emit examples for a named command.
+_cmd_help_examples() {
+  case "$1" in
+    list)
+      cat <<'EX'
+  opensop list                         # list processes in the active cell chain
+  opensop list /path/to/dir            # list processes in an explicit directory
+  opensop list --conflicts             # show shadowed entries (cell chain resolution)
+  opensop --remote list                # list processes registered on the server
+  opensop --remote list --tag sales    # filter by tag (server)
+EX
+      ;;
+    search)
+      cat <<'EX'
+  opensop search lead                  # local: ranked text search
+  opensop --remote search lead         # server: ranked text search
+EX
+      ;;
+    suggest)
+      cat <<'EX'
+  opensop suggest "qualify an inbound lead"     # local intent-match
+  opensop --remote suggest "score a prospect"   # server intent-match
+EX
+      ;;
+    schema)
+      cat <<'EX'
+  opensop --remote schema lead-qualification    # show full process definition
+  opensop schema validate ./my.sop.yaml         # client-side YAML lint (no server)
+EX
+      ;;
+    status)
+      cat <<'EX'
+  opensop status <run_id>              # local run state
+  opensop --remote status <run_id>     # server run state
+EX
+      ;;
+    steps)
+      cat <<'EX'
+  opensop steps <run_id>               # local per-step audit log
+  opensop --remote steps <run_id>      # server per-step state
+EX
+      ;;
+    diff)
+      cat <<'EX'
+  opensop diff <run_id1> <run_id2>     # compare two runs (local)
+  opensop --remote diff <id1> <id2>    # compare two runs (server)
+EX
+      ;;
+    history)
+      cat <<'EX'
+  opensop --remote history --process lead-qualification --limit 10
+EX
+      ;;
+    compass)
+      cat <<'EX'
+  opensop --remote compass             # top processes by usage and failure rate
+EX
+      ;;
+    run)
+      cat <<'EX'
+  opensop run ./greet.sop.json --input name=Ana
+  opensop run greet --input name=Ana           # bare name resolves in cell chain
+  opensop run greet --inputs '{"name":"Ana"}'  # JSON object form
+  opensop --remote run lead-qual --input name=Ana
+EX
+      ;;
+    dry-run)
+      cat <<'EX'
+  opensop dry-run ./greet.sop.json --input name=Ana   # preview local run
+  opensop --remote dry-run lead-qual --input name=Ana  # preview server run
+EX
+      ;;
+    submit)
+      cat <<'EX'
+  opensop submit <run_id> collect --output email=alice@example.com
+  opensop submit <run_id> approve --output decision=approve --decided-by agent:mybot
+  opensop --remote submit <run_id> <step-id> --output k=v
+EX
+      ;;
+    cancel)
+      cat <<'EX'
+  opensop cancel <run_id>                      # cancel a local run
+  opensop cancel <run_id> --reason "timeout"   # with a reason
+  opensop --remote cancel <run_id>
+EX
+      ;;
+    runs)
+      cat <<'EX'
+  opensop runs                                 # list all local runs (tsv)
+EX
+      ;;
+    show)
+      cat <<'EX'
+  opensop show <run_id>                        # manifest + per-step receipts
+  opensop show <run_id> --json                 # machine-readable
+EX
+      ;;
+    init)
+      cat <<'EX'
+  opensop init                                 # init cell in cwd (auto-detect parent)
+  opensop init --name myteam --parent ../      # explicit name + parent
+EX
+      ;;
+    scope)
+      cat <<'EX'
+  opensop scope                                # active cell + ancestor chain
+  opensop scope --json                         # machine-readable
+EX
+      ;;
+    annotate)
+      cat <<'EX'
+  opensop annotate my-skill promote '{"to":"m2"}'
+  opensop annotate my-skill bless   '{"by":"human"}'
+EX
+      ;;
+    lineage)
+      cat <<'EX'
+  opensop lineage my-skill                     # print lineage entry
+  opensop lineage my-skill --json              # machine-readable
+EX
+      ;;
+    fork)
+      cat <<'EX'
+  opensop fork greet-skill                     # copy from nearest ancestor
+  opensop fork greet-skill --from /path/cell   # copy from a specific cell
+EX
+      ;;
+    register)
+      cat <<'EX'
+  opensop --remote register ./my-process.sop.yaml
+  opensop --server https://my-server register ./my-process.sop.yaml
+EX
+      ;;
+    "schema validate")
+      cat <<'EX'
+  opensop schema validate ./my-process.sop.yaml    # lint only, no server
+  opensop schema validate ./my.sop.yaml --json      # structured {valid, errors}
+EX
+      ;;
+    instances)
+      cat <<'EX'
+  opensop instances                            # list local runs
+  opensop --remote instances --state running   # server runs, filtered by state
+  opensop --remote instances --process lead-qual
+EX
+      ;;
+    config)
+      cat <<'EX'
+  opensop config                               # show current config
+  opensop config set url https://demo.opensop.ai
+  opensop config set token demo-public-token-resets-daily
+EX
+      ;;
+    help)
+      cat <<'EX'
+  opensop help                                 # full command reference
+  opensop help run                             # per-command detail
+  opensop help agents                          # agent quick-start
+  opensop help --json                          # machine-readable command index
+EX
+      ;;
+    *)
+      printf '  (no examples — see opensop help)\n'
+      ;;
+  esac
+}
+
+# _cmd_help_agents — concise agent-oriented orientation.
+_cmd_help_agents() {
+  cat <<EOF
+${C_BOLD}OpenSOP for Agents${C_RESET}
+
+The OpenSOP CLI is designed so an agent can discover, run, and audit
+processes without writing HTTP requests or parsing custom formats.
+
+${C_BOLD}DISCOVER${C_RESET}
+  opensop search <keyword>               ranked search over local processes
+  opensop suggest "<task description>"   intent-based match — describe the work
+  opensop list                           enumerate all processes in the cell chain
+  opensop help --json                    machine-readable index of CLI commands
+
+${C_BOLD}RUN LOCALLY (no server, no curl)${C_RESET}
+  opensop run <name|file.sop.json> --input key=value
+  opensop status <run_id>                check run state
+  opensop steps  <run_id>                per-step audit
+  opensop submit <run_id> <step-id> --output key=value   resume a paused step
+  opensop show   <run_id> --json         full receipt (inputs, outputs, audit)
+
+${C_BOLD}RUN ON A SERVER (--remote)${C_RESET}
+  opensop --remote run <name> --input key=value
+  opensop --remote status <run_id>
+  opensop --remote submit <run_id> <step-id> --output key=value
+
+${C_BOLD}KEY PATTERNS FOR AGENTS${C_RESET}
+  - Prefer 'suggest' and 'search' over parsing 'list' output.
+  - Check 'status' in a poll loop after 'run'; exit when state != running/waiting.
+  - Parse JSON output: pipe any command with --json to jq.
+  - On pause (status == waiting), inspect manifest.waiting for expected outputs,
+    then call 'submit' with those outputs to resume.
+  - Errors emit {error, message, hint?} to stderr when --json is set — parse them.
+
+${C_BOLD}FULL GUIDE${C_RESET}
+  docs/AGENTS.md           — discover → build → run → iterate → evolve
+  docs/CLAUDE-INTEGRATION.md  — Claude Code / Claude agent integration recipe
+
+${C_DIM}⚠  local steps execute arbitrary shell — only run process files you trust${C_RESET}
 EOF
 }
 
@@ -4103,7 +4412,7 @@ main() {
           die "--server requires a URL argument" "usage_error" "opensop --server <url> <command>"
         fi
         ;;
-      --help|-h|help)      cmd_help; exit 0 ;;
+      --help|-h)           cmd_help; exit 0 ;;
       --version|-v|version) cmd_version; exit 0 ;;
       *) args+=("$_a") ;;
     esac
@@ -4181,6 +4490,9 @@ main() {
     annotate)   cmd_annotate "$@" ;;
     lineage)    cmd_lineage "$@" ;;
     fork)       cmd_fork "$@" ;;
+    # help is local-only: does not need curl, does not need config.
+    # Dispatch here so 'opensop help <cmd>' and 'opensop help --json' work.
+    help)       cmd_help "$@" ;;
     *)          die "unknown command '$cmd' — run 'opensop help' for usage" "unknown_command" "run opensop help" ;;
   esac
 }
