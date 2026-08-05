@@ -4500,4 +4500,128 @@ echo "PASS: Fix2c — heal --apply re-failure: §11.4 warning on stderr"
 
 rm -rf "$f2_home"
 
+# =========================================================================== #
+# C1b: opensop bench tests (no API key — stub mode + failure paths)
+# =========================================================================== #
+
+# Locate the bench directory relative to the CLI bin (same logic as _bench_find_dir).
+cli_dir="$(cd "$(dirname "$cli")" && pwd)"
+bench_dir="$cli_dir/../bench"
+
+# ----- (C1b-1) bench --stub runs offline and exits 0 -----
+set +e
+bench_stub_out="$("$cli" bench --stub 2>&1)"; bench_stub_rc=$?
+set -e
+[ "$bench_stub_rc" -eq 0 ] \
+  || { echo "FAIL: C1b bench --stub should exit 0, got $bench_stub_rc (output: ${bench_stub_out:0:200})"; exit 1; }
+echo "PASS: C1b — bench --stub exits 0 (no API key needed)"
+
+# ----- (C1b-2) bench --stub output contains scoreboard header -----
+echo "$bench_stub_out" | grep -q "opensop bench" \
+  || { echo "FAIL: C1b bench --stub output should contain '=== opensop bench ===' header"; exit 1; }
+echo "PASS: C1b — bench --stub scoreboard header present"
+
+# ----- (C1b-3) bench --stub scoreboard contains arm names -----
+echo "$bench_stub_out" | grep -q "skill" \
+  || { echo "FAIL: C1b bench --stub scoreboard should include 'skill' arm"; exit 1; }
+echo "$bench_stub_out" | grep -q "json_only" \
+  || { echo "FAIL: C1b bench --stub scoreboard should include 'json_only' arm"; exit 1; }
+echo "$bench_stub_out" | grep -q "opensop" \
+  || { echo "FAIL: C1b bench --stub scoreboard should include 'opensop' arm"; exit 1; }
+echo "PASS: C1b — bench --stub scoreboard shows all 3 arms"
+
+# ----- (C1b-4) bench --stub --json emits valid JSON with arms array -----
+set +e
+bench_json_out="$("$cli" bench --stub --json 2>&1)"; bench_json_rc=$?
+set -e
+[ "$bench_json_rc" -eq 0 ] \
+  || { echo "FAIL: C1b bench --stub --json should exit 0, got $bench_json_rc"; exit 1; }
+echo "$bench_json_out" | jq -e 'type == "object"' >/dev/null \
+  || { echo "FAIL: C1b bench --stub --json should emit a JSON object"; exit 1; }
+echo "$bench_json_out" | jq -e '.arms | type == "array"' >/dev/null \
+  || { echo "FAIL: C1b bench --stub --json .arms should be an array"; exit 1; }
+echo "$bench_json_out" | jq -e '.arms | length == 3' >/dev/null \
+  || { echo "FAIL: C1b bench --stub --json should have 3 arms"; exit 1; }
+echo "PASS: C1b — bench --stub --json emits valid scoreboard JSON with 3 arms"
+
+# ----- (C1b-5) bench --stub --json scoreboard fields are correct -----
+echo "$bench_json_out" | jq -e 'all(.arms[]; has("arm") and has("reliability") and has("runs"))' >/dev/null \
+  || { echo "FAIL: C1b bench --stub --json arms must have arm/reliability/runs fields"; exit 1; }
+echo "PASS: C1b — bench --stub --json arm objects have required fields"
+
+# ----- (C1b-6) bench --stub -- single arm filter works -----
+set +e
+bench_one_arm="$("$cli" bench --stub --arm opensop 2>&1)"; bench_one_arm_rc=$?
+set -e
+[ "$bench_one_arm_rc" -eq 0 ] \
+  || { echo "FAIL: C1b bench --stub --arm opensop should exit 0, got $bench_one_arm_rc"; exit 1; }
+echo "$bench_one_arm" | grep -q "opensop" \
+  || { echo "FAIL: C1b bench --stub --arm opensop should show opensop arm"; exit 1; }
+echo "PASS: C1b — bench --stub --arm opensop (single-arm filter)"
+
+# ----- (C1b-7) bench --stub scorer: stub skill/json_only arms return field_match=0/N
+# (they include a phantom item, so checker produces field_match=false)
+bench_skill_fm="$(echo "$bench_json_out" | jq -r '.arms[] | select(.arm=="skill") | .field_match')"
+[ "$bench_skill_fm" -eq 0 ] 2>/dev/null \
+  || { echo "FAIL: C1b bench skill arm: stub response has phantom item so field_match should be 0, got $bench_skill_fm"; exit 1; }
+echo "PASS: C1b — bench stub: skill arm field_match=0 (phantom item detected by checker)"
+
+bench_jo_fm="$(echo "$bench_json_out" | jq -r '.arms[] | select(.arm=="json_only") | .field_match')"
+[ "$bench_jo_fm" -eq 0 ] 2>/dev/null \
+  || { echo "FAIL: C1b bench json_only arm: stub response has phantom item so field_match should be 0, got $bench_jo_fm"; exit 1; }
+echo "PASS: C1b — bench stub: json_only arm field_match=0 (phantom item detected by checker)"
+
+# ----- (C1b-8) no-key graceful exit (without --stub) -----
+# Unset ANTHROPIC_API_KEY in a subshell and confirm bench exits non-zero with config_missing.
+set +e
+no_key_out="$(env -u ANTHROPIC_API_KEY "$cli" bench 2>&1)"; no_key_rc=$?
+set -e
+[ "$no_key_rc" -ne 0 ] \
+  || { echo "FAIL: C1b bench without key should exit non-zero, got 0"; exit 1; }
+echo "$no_key_out" | grep -q "ANTHROPIC_API_KEY\|config_missing\|API key" \
+  || { echo "FAIL: C1b bench without key should mention ANTHROPIC_API_KEY, got: ${no_key_out:0:200}"; exit 1; }
+echo "PASS: C1b — bench without API key exits non-zero with clear message (config_missing)"
+
+# ----- (C1b-9) bench --json without key also errors gracefully -----
+set +e
+no_key_json_out="$(env -u ANTHROPIC_API_KEY "$cli" bench --json 2>&1)"; no_key_json_rc=$?
+set -e
+[ "$no_key_json_rc" -ne 0 ] \
+  || { echo "FAIL: C1b bench --json without key should exit non-zero"; exit 1; }
+echo "PASS: C1b — bench --json without key exits non-zero"
+
+# ----- (C1b-10) bench unknown flag exits non-zero -----
+set +e
+bad_flag_out="$("$cli" bench --bogus-flag 2>&1)"; bad_flag_rc=$?
+set -e
+[ "$bad_flag_rc" -ne 0 ] \
+  || { echo "FAIL: C1b bench --bogus-flag should exit non-zero"; exit 1; }
+echo "PASS: C1b — bench unknown flag exits non-zero"
+
+# ----- (C1b-11) bench --stub --n 1 (single run) -----
+set +e
+bench_n1_out="$("$cli" bench --stub --n 1 --json 2>&1)"; bench_n1_rc=$?
+set -e
+[ "$bench_n1_rc" -eq 0 ] \
+  || { echo "FAIL: C1b bench --stub --n 1 should exit 0, got $bench_n1_rc"; exit 1; }
+echo "$bench_n1_out" | jq -e '.n_per_arm == 1' >/dev/null \
+  || { echo "FAIL: C1b bench --stub --n 1 should have n_per_arm=1 in JSON"; exit 1; }
+echo "PASS: C1b — bench --stub --n 1 single-run mode"
+
+# ----- (C1b-12) bench is in registry -----
+help_json_for_bench="$("$cli" help --json 2>&1)"
+echo "$help_json_for_bench" | jq -e 'any(.[]; .command == "bench")' >/dev/null \
+  || { echo "FAIL: C1b bench must appear in help --json registry"; exit 1; }
+echo "PASS: C1b — bench is registered in help --json"
+
+# ----- (C1b-13) bench help examples render -----
+set +e
+bench_help_out="$("$cli" help bench 2>&1)"; bench_help_rc=$?
+set -e
+[ "$bench_help_rc" -eq 0 ] \
+  || { echo "FAIL: C1b help bench should exit 0, got $bench_help_rc"; exit 1; }
+echo "$bench_help_out" | grep -q "stub\|STUB" \
+  || { echo "FAIL: C1b help bench should mention --stub"; exit 1; }
+echo "PASS: C1b — help bench renders with examples (--stub visible)"
+
 echo "ALL PASS"

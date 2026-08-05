@@ -1,0 +1,16 @@
+{
+  "action_items": [
+    {
+      "owner": "Bob Navarro",
+      "task": "Fix the CSV export race condition"
+    },
+    {
+      "owner": "Carol Singh",
+      "task": "Complete the WCAG 2.1 AA accessibility audit"
+    },
+    {
+      "owner": "Dave Wu",
+      "task": "Write integration tests for payments-flow edge cases"
+    }
+  ]
+}
