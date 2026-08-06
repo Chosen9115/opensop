@@ -2968,9 +2968,14 @@ $llm_rendered_prompt"
 
             # [LOW] curl call uses a bash array so $ANTHROPIC_API_KEY and the
             # request body are not subject to word-splitting (mirrors wh_curl_args).
+            # [FIX1] Bounded timeouts: --connect-timeout 10 --max-time 120 so a
+            # stalled connection cannot hang the engine indefinitely.  A timeout
+            # surfaces via curl's non-zero exit, which sets rc=1 below and follows
+            # the existing failure path (step recorded as failed, run aborted).
             local llm_resp_tmp; llm_resp_tmp="$(mktemp)"
             local llm_http_status
-            local llm_curl_args=(-sS -X POST "https://api.anthropic.com/v1/messages"
+            local llm_curl_args=(-sS --connect-timeout 10 --max-time 120
+              -X POST "https://api.anthropic.com/v1/messages"
               -H "x-api-key: $ANTHROPIC_API_KEY"
               -H "anthropic-version: 2023-06-01"
               -H "content-type: application/json"
@@ -5474,7 +5479,13 @@ cmd_bench() {
 
     rm -f "$proc_tmp"
 
+    # [FIX2] Initialize recall=0 unconditionally BEFORE the rc==0 branch so that
+    # a failed opensop run (network/timeout/validation error) leaves recall at 0
+    # and the accumulator below can reference it safely under set -u.  Without
+    # this, `local recall=0` was declared only inside the success branch, causing
+    # an "unbound variable" abort on any failed run under set -euo pipefail.
     local schema_valid="false" field_match="false" detail="opensop run failed (rc=$rc)" tout=0
+    local recall=0
 
     if [[ $rc -eq 0 && -n "$run_out" ]]; then
       # Get run_id from the manifest output
@@ -5499,7 +5510,6 @@ cmd_bench() {
         raw_text="$(jq -c '.extract // empty' <<<"$context_json" 2>/dev/null || true)"
       fi
 
-      local recall=0
       if [[ -n "$raw_text" && "$raw_text" != "null" ]]; then
         local chk; chk="$(_bench_check_output "$raw_text" "$expected_json")"
         schema_valid="$(jq -r '.schema_valid' <<<"$chk")"

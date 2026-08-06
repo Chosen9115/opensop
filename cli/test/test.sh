@@ -4730,4 +4730,67 @@ grep -q 'max-time' "$cli" \
   || { echo "FAIL: Fix1-2 --max-time not found in bench curl calls"; exit 1; }
 echo "PASS: Fix1-2 — --connect-timeout and --max-time present in bench curl calls (timeouts bounded)"
 
+# ----- (Fix1-3) timeout flags are in the LLM engine (llm_curl_args), not just bench arms -----
+# The LLM step engine uses llm_curl_args to call the Anthropic API.  Without bounded timeouts
+# there, a stalled network call hangs the whole process forever.  Static check: the block
+# that declares llm_curl_args must include both timeout flags.
+grep -A 12 'local llm_curl_args=' "$cli" | grep -q 'connect-timeout' \
+  || { echo "FAIL: Fix1-3 --connect-timeout not found in llm_curl_args (LLM engine missing timeout)"; exit 1; }
+grep -A 12 'local llm_curl_args=' "$cli" | grep -q 'max-time' \
+  || { echo "FAIL: Fix1-3 --max-time not found in llm_curl_args (LLM engine missing timeout)"; exit 1; }
+echo "PASS: Fix1-3 — --connect-timeout and --max-time present in llm_curl_args (LLM engine bounded)"
+
+# ----- (Fix2-bench-fail) opensop arm: failed run records recall=0, bench continues -----
+# Regression for the set -u "unbound variable" abort: `recall` was declared only inside
+# the rc==0 success branch.  On a failed opensop run (rc!=0), the accumulator referenced
+# an unset variable → the entire bench loop aborted under set -euo pipefail.
+#
+# Test strategy: build a minimal bench task dir whose process file has a shell step
+# that exits 1.  Run opensop bench --stub --arm opensop --n 2 against that task dir.
+# All N=2 runs must complete (bench did not abort), the arm's .runs==2, and the
+# opensop arm must have schema_valid=false and recall=0 (both metrics start at 0
+# and stay there when the run fails).
+fail_task_dir="$OPENSOP_LOCAL_HOME/fail-bench-task"
+mkdir -p "$fail_task_dir/processes"
+# Symlink the real fixtures/measure/prompts so the bench can source checker.sh and
+# load meeting-notes.txt.  Only the process file is swapped for a failing one.
+ln -s "$bench_dir_for_tests/fixtures" "$fail_task_dir/fixtures"
+ln -s "$bench_dir_for_tests/measure"  "$fail_task_dir/measure"
+ln -s "$bench_dir_for_tests/prompts"  "$fail_task_dir/prompts"
+# Process that always fails (shell step exits 1; no API call needed).
+cat > "$fail_task_dir/processes/extract-action-items.sop.json" <<'JSON'
+{
+  "name": "fail-proc",
+  "inputs": { "meeting_notes": "" },
+  "steps": [
+    { "id": "extract", "type": "shell", "run": "echo intentional-failure >&2; exit 1" }
+  ]
+}
+JSON
+
+set +e
+fail_bench_out="$("$cli" bench --stub --arm opensop --n 2 "$fail_task_dir" --json 2>&1)"
+fail_bench_rc=$?
+set -e
+
+# (a) bench must exit 0 — a failed subprocess must NOT abort the bench itself
+[ "$fail_bench_rc" -eq 0 ] \
+  || { echo "FAIL: Fix2-bench-fail bench should exit 0 even when opensop runs fail, got $fail_bench_rc (output: ${fail_bench_out:0:300})"; exit 1; }
+echo "PASS: Fix2-bench-fail — bench exits 0 despite failing opensop subprocess (no set -u abort)"
+
+# (b) the opensop arm must have accumulated exactly 2 runs (loop continued through both)
+fail_opensop_runs="$(jq -r '.arms[] | select(.arm=="opensop") | .runs' <<<"$fail_bench_out" 2>/dev/null || echo "")"
+[ "$fail_opensop_runs" = "2" ] \
+  || { echo "FAIL: Fix2-bench-fail opensop arm should have 2 runs (loop continued), got '$fail_opensop_runs' — output: ${fail_bench_out:0:300}"; exit 1; }
+echo "PASS: Fix2-bench-fail — all N=2 runs completed (bench loop not aborted by failed opensop run)"
+
+# (c) recall must be 0 (failed runs contribute 0 to recall_sum).
+# Format is recall_sum/recall_max where recall_max = N * expected_items.
+# With N=2 runs and 3 expected items: recall_max = 6, so the string is "0/6".
+fail_opensop_recall="$(jq -r '.arms[] | select(.arm=="opensop") | .recall' <<<"$fail_bench_out" 2>/dev/null || echo "")"
+fail_opensop_recall_sum="$(jq -r '.arms[] | select(.arm=="opensop") | .recall_sum' <<<"$fail_bench_out" 2>/dev/null || echo "")"
+[ "$fail_opensop_recall_sum" = "0" ] \
+  || { echo "FAIL: Fix2-bench-fail opensop arm recall_sum should be 0 (failed runs → recall=0), got '$fail_opensop_recall_sum'"; exit 1; }
+echo "PASS: Fix2-bench-fail — failed runs contribute recall=0 to accumulator (not unbound variable)"
+
 echo "ALL PASS"
