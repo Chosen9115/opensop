@@ -55,7 +55,7 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
   **Per SPEC §11.4:** fault records may contain process input data (PII risk). The engine warns
   the user on every fault write. Fault records are excluded from version control via `.gitignore`
-  entries (`**/*.fault.json`, `.opensop/faults/`) in both `cli/` and the repo root. Do not push
+  entries (`**/fault.json`, `.opensop/faults/`) in both `cli/` and the repo root. Do not push
   fault records.
 
   **`opensop heal <run_id>`** — diagnosis mode: print the fault record and `debug_prompt` for a
