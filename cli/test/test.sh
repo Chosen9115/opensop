@@ -4516,6 +4516,79 @@ fi
 rm -rf "$inst_pin_dir" "$inst_fake_dir"
 echo "PASS: install.sh --version — pin mismatch aborts before writing destination (existing install untouched)"
 
+# --------------------------------------------------------------------------- #
+# Default install flow: install.sh with a valid .sha256 installs without
+# --allow-unverified (exit 0, binary written).
+#
+# Strategy: stub curl to serve the real bin/opensop + the committed
+# bin/opensop.sha256.  The install.sh checksum verification path must
+# succeed and the binary must land at the expected destination.
+# No network access; no real curl invoked.
+# --------------------------------------------------------------------------- #
+def_inst_prefix="$(mktemp -d)"
+def_inst_dir="${def_inst_prefix}/bin"
+mkdir -p "$def_inst_dir"
+
+def_inst_stub_dir="$(mktemp -d)"
+# The committed .sha256 lives alongside the binary.
+def_inst_sha256="${here}/bin/opensop.sha256"
+cat > "${def_inst_stub_dir}/curl" <<CURLSTUB_DEF
+#!/usr/bin/env bash
+dest=""
+args=()
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) dest="\$2"; shift 2 ;;
+    *) args+=("\$1"); shift ;;
+  esac
+done
+url=""
+for a in "\${args[@]:-}"; do url="\$a"; done
+# Serve the committed .sha256 for checksum requests; serve the real binary otherwise.
+if [[ "\$url" == *".sha256"* ]]; then
+  cp "${def_inst_sha256}" "\$dest"
+  exit 0
+fi
+cp "${here}/bin/opensop" "\$dest"
+exit 0
+CURLSTUB_DEF
+chmod +x "${def_inst_stub_dir}/curl"
+
+set +e
+def_inst_out="$(PATH="${def_inst_stub_dir}:${PATH}" \
+  bash "$here/install.sh" --prefix "$def_inst_prefix" 2>&1)"; def_inst_rc=$?
+set -e
+
+[ "$def_inst_rc" -eq 0 ] || {
+  echo "FAIL: default install.sh (with committed .sha256) should exit 0; got $def_inst_rc"
+  echo "  output: $def_inst_out"
+  rm -rf "$def_inst_prefix" "$def_inst_stub_dir"
+  exit 1
+}
+
+# The binary must exist and be executable.
+[ -x "${def_inst_dir}/opensop" ] || {
+  echo "FAIL: default install.sh — binary not written or not executable at ${def_inst_dir}/opensop"
+  rm -rf "$def_inst_prefix" "$def_inst_stub_dir"
+  exit 1
+}
+
+# The output must confirm checksum verification, not warn about --allow-unverified.
+echo "$def_inst_out" | grep -q "checksum verified" || {
+  echo "FAIL: default install.sh — expected 'checksum verified' in output; got: $def_inst_out"
+  rm -rf "$def_inst_prefix" "$def_inst_stub_dir"
+  exit 1
+}
+
+echo "$def_inst_out" | grep -qi "allow-unverified" && {
+  echo "FAIL: default install.sh — output should not mention --allow-unverified when checksum is present; got: $def_inst_out"
+  rm -rf "$def_inst_prefix" "$def_inst_stub_dir"
+  exit 1
+}
+
+rm -rf "$def_inst_prefix" "$def_inst_stub_dir"
+echo "PASS: install.sh default flow — committed .sha256 enables verified install (exit 0, no --allow-unverified)"
+
 # Cleanup temp dirs from security tests.
 rm -rf "$upg_pin_dir" "$upg_fake_dir" "$upg_install_dir" "$upg_nosum_dir" "$upg_mismatch_dir"
 

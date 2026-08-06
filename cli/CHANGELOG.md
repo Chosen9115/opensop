@@ -9,6 +9,15 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Security
+
+- **Committed `bin/opensop.sha256`** so the default `curl … | bash` installer and
+  `opensop upgrade` can verify downloads without `--allow-unverified`. The file
+  contains the SHA-256 digest of `bin/opensop` in `sha256sum` two-field format
+  (`<digest>  opensop`). Regenerate it with `make checksum` whenever `bin/opensop`
+  changes; commit both files together. GPG/cosign release signing is tracked as a
+  follow-up and is not yet implemented.
+
 ### Added
 
 - **A1: `opensop ps` — process status view (SPEC §9).** Surfaces the §9 process
