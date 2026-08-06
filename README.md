@@ -4,141 +4,140 @@
 
 # OpenSOP
 
-> Process as Infrastructure for agentic processes.
+> ### The model is nondeterministic. Your process shouldn't be.
 
-**Terraform is to cloud resources what OpenSOP is to agentic processes.**
+OpenSOP packages an agent's process as a **file in your repo** — same steps, same output contract, a receipt for every run. Version it, fork it, run it anywhere. One bash file, no server, no account.
 
-Agentic processes are infrastructure. Version them. Fork them. Run them locally, with no server. Keep the receipts.
-
-Read [MANIFESTO.md](./MANIFESTO.md) for the full thesis.
-
----
-
-## The problem
-
-Agents are good at doing steps and bad at remembering which steps. Left alone, an agent re-invents the procedure every time — slowly, inconsistently, unauditably. And when a step fails, it fills the gap with confident-sounding prose instead of stopping.
-
-A morning briefing makes this concrete. Pull Slack, Gmail, Calendar, Notion, then synthesize. Without a harness, Calendar times out at 7:51:34. The agent doesn't say that — it says _"your schedule looks clear this morning."_ You had two meetings.
-
-**OpenSOP makes "the agent can't launder missing data" mechanical.** A process declares its steps; each step declares what it requires. When Calendar fails, the runtime stops. It does not ask the LLM to fill the gap. You get back exactly what was collected — with a receipt.
-
----
-
-## Quick start (local, no server)
+**Docker did this for environments; OpenSOP does it for procedures.** Docker pins the bits — OpenSOP pins the **steps, the output schema, and the audit trail**. And when a step can't meet its contract, the run **stops and says so** instead of improvising.
 
 ```bash
-# 1. Install the CLI (one file, deps: bash 4+ + jq)
+# Install the CLI — one file, deps: bash 4+ and jq
 curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/opensop \
   -o opensop && chmod +x opensop
 
-# 2. Initialize a process cell in your project
-./opensop init
-
-# 3. Author a process (or ask your agent to write one)
-cat > greet.sop.json <<'EOF'
-{
-  "opensop": "0.6",
-  "process": {
-    "name": "greet",
-    "version": "1.0",
-    "description": "A simple greeting process",
-    "inputs": [{ "name": "name", "type": "string", "required": true }],
-    "steps": [
-      {
-        "id": "say-hello",
-        "name": "Say hello",
-        "type": "automated",
-        "run": "echo \"Hello, $OSL_INPUT_NAME!\""
-      }
-    ]
-  }
-}
-EOF
-
-# 4. Run it — no server, no network, no account
-./opensop run ./greet.sop.json --input name=Ana
+# Turn a process you already run into an OpenSOP process — and see the difference
+./opensop onboard
 ```
 
-Every run writes append-only receipts under `.opensop/runs/<id>/`. Query them with `opensop show <run_id>`.
+Read [MANIFESTO.md](./MANIFESTO.md) for the thesis. Spec: [SPEC.md](./SPEC.md) (v0.7).
 
 ---
 
-## The CLI is the primary interface
+## The three problems
 
-`cli/bin/opensop` is a single bash file with no build step, no package manager, no compiled artifact. It is the product. The file is the binary.
+You're building on agents. Three things are biting you:
 
-**Local execution is the default.** `run`, `list`, `search`, `suggest`, `status`, `steps`, `diff`, `runs`, `show` — all execute locally against `.sop.json` files with no server, no curl, no account. Remote is opt-in.
+1. **Reliability.** The demo worked. The 400th run gave a different answer, a different shape, or a confident lie. You can't put your name on output that changes every run.
+2. **Portability.** The "skill" is trapped in a prompt and a specific setup. Move it and you rebuild everything. It isn't a file you can ship.
+3. **Auditability.** An agent did something wrong in production and there's no trace of *which step*. No receipts, no way to prove what happened.
 
-```bash
-# Local (default — no server):
-opensop run ./morning-briefing.sop.json --input date=2026-06-11
-opensop submit <run_id> fetch-calendar --output success=true --output events='{...}'
-opensop status <run_id>
-opensop list
-opensop runs
-opensop show <run_id>
+OpenSOP is the layer that fixes the *process*, so the model can stay creative where it needs to be.
 
-# Remote (opt-in — requires a running OpenSOP server):
-opensop config set url https://your-server.example.com
-opensop config set token $TOKEN
-opensop --remote list
-opensop --remote run lead-qualification --input lead_name="Ana García"
-opensop --remote status <run-id>
-opensop --server https://your-server.example.com register ./my-process.sop.yaml
+| Problem | What OpenSOP does |
+|---|---|
+| **Reliability** | A process declares its steps; each declares what it requires and returns; outputs validate against a schema. When a step can't meet its contract, the runtime **stops** — it never asks the LLM to launder the gap. Prove the gain yourself with [`opensop bench`](#proof-run-it-yourself). |
+| **Portability** | It's a **plain file in your repo.** Nothing to export, nothing to migrate — **git is the versioning.** Fork it, ship it in a commit; the lineage is recorded, not lost in a doc. Runs on the local CLI with no account; the server is optional. |
+| **Auditability** | Every run writes **append-only receipts** (`manifest.json` / `audit.jsonl` / `context.json`) to your repo — not another dashboard. `opensop ps` and `opensop watch` show what's running, scheduled, and last-status, in your terminal. |
+
+> OpenSOP fixes the *procedure*, the *output contract*, and the *audit trail* — not the laws of nondeterminism. An LLM step still calls a model; what changes is that its output must conform, the step stops if it can't, and every run leaves a receipt.
+
+---
+
+## Who it's for
+
+**You sell agents.** Your customers don't churn because your agent is dumb — they churn because it's *unreliable*: it worked in the demo and drifted in production, and one day their ops lead pasted the wrong output into a shared channel. Ship processes that are reproducible and auditable, and that **stop instead of lying** when a step can't meet its contract. **Prove reliability before you ship: `opensop bench`.**
+
+**You run an AI-transformation practice.** You take a client's messy skill and make it real. `opensop onboard` it, `opensop bench` it, and hand the client a **before/after reliability report** you can invoice against. What you leave behind is a **file the client owns** — a process in their repo that survives your handoff — not a prompt that rots after you're gone.
+
+**You're a CTO / AI director already running agents.** It's 2am, an agent misfired in prod, and there's no trace of which step. OpenSOP **wraps what you already run** — it's a format + contract, not another orchestrator or dashboard to migrate to. Receipts land in your repo; `opensop onboard` an existing skill and bench it in ~10 minutes. One auditable file, checksum-verified install, no daemon.
+
+---
+
+## Why not LangGraph / n8n / a dashboard?
+
+OpenSOP is a **format + a contract + receipts** — not an orchestrator, not a canvas, not a SaaS. It **wraps** what you already have.
+
+| Tool | Decides | OpenSOP |
+|---|---|---|
+| LangGraph / CrewAI / AutoGen | *how an agent thinks* | defines *what a process is allowed to do* — typed steps, an output contract, receipts — around your agent |
+| n8n / Zapier | *wiring between SaaS apps* | the contract for the process itself, versioned in your repo, run by your agents |
+| Langfuse / a dashboard | *observing calls in their UI* | the receipt lives in your repo; `ps`/`watch` read it in your terminal |
+
+- **"My agents already work."** Great — `opensop onboard` one and `opensop bench` it. If it's already reliable, you lose ten minutes; if it isn't, you found out before your customer did.
+- **"curl-installed bash in my stack?"** It's one file you can read before you run it (that's the point), checksum-verified on install and upgrade, no daemon, no account. See [Install verification](./cli/README.md#install-verification--threat-model).
+- **"Standard, or one repo?"** Pre-1.0, but the spec is open ([SPEC.md](./SPEC.md), Apache-2.0) and a `.sop.json` is a plain file. Worst case, you keep the file and drop the tool.
+
+---
+
+## Proof: run it yourself
+
+`opensop bench` runs the same task three ways and scores it. Task: *extract the action items from a set of meeting notes.* Three arms, **n=10 runs each, on Claude Haiku and Sonnet**:
+
+- **skill** — the naive prompt a person writes ("extract all action items… list what you found").
+- **json-only** — the same ask, but demanding JSON with the schema in the prompt. Isolates *format* from *scope*.
+- **openSOP** — the encoded process: JSON schema **+ an explicit scope rule** + field rules.
+
+| Model | Arm | Recall (found the 3 real) | Valid JSON | **Exact & usable** | Phantom items | Median time |
+|---|---|:---:|:---:|:---:|:---:|:---:|
+| Haiku | skill | **3/3** | 0/10 | 0/10 | +4 | 2.69 s |
+| Haiku | json-only | **3/3** | 10/10 | 0/10 | +4 | 2.51 s |
+| Haiku | **openSOP** | **3/3** | **10/10** | **10/10** | **+0** | **1.56 s** |
+| Sonnet | skill | **3/3** | 0/10 | 0/10 | +5 | 5.49 s |
+| Sonnet | json-only | **3/3** | 10/10 | 0/10 | +3 | 3.85 s |
+| Sonnet | **openSOP** | **3/3** | **10/10** | **10/10** | **+0** | **2.68 s** |
+
+Read it honestly:
+
+- **Recall is 3/3 in every arm.** The model is *not* the problem — it always finds the three real action items. This isn't a strawman where the naive prompt "can't read."
+- **The failure is scope-creep.** Every naive run inflates the 3 real items into 6–8 by promoting informal commitments to "action items" — a *different set every run*.
+- **`json-only` is the control that matters.** Asking for JSON gives 10/10 valid structure and **still 0/10 exact** — it keeps inventing 3–5 phantom items. **Format alone doesn't buy reliability.** Only the encoded scope rule does.
+- **openSOP: 10/10 exact, zero phantoms, ~2× faster**, and its schema-constrained output was **byte-identical across all 10 runs in this benchmark** (a measured result on this task — not a promise that every LLM step is deterministic).
+
+Same model. Same notes. **Reliability 0 → 10/10.**
+
+<details>
+<summary>One naive run vs. one openSOP run (real outputs)</summary>
+
+**skill (naive) — prose, 6 items, a different set next run:**
+```
+Action Items
+1. Bob Navarro — Fix the CSV export race condition before 2026-08-12.
+2. Carol Singh — Complete the WCAG 2.1 AA accessibility audit by 2026-08-15.
+3. Dave Wu — Write integration tests for payments-flow edge cases by 2026-08-14.
+4. Bob Navarro — File a planning ticket for the data-grid upgrade sprint.
+5. Alice Chen — Follow up with customers on the batch-import escalations.
+6. Alice Chen — Raise staging reliability as a P1 in the infra backlog.
 ```
 
-`--local` is a deprecated no-op kept for script compatibility. Local is now the default.
-
-`register` and `schema <name>` (server-side schema fetch) are remote-only — they talk to a running OpenSOP server.
-
-**Install:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/opensop \
-  -o opensop && chmod +x opensop
+**openSOP — exactly the three, structured, identical every run:**
+```json
+{"action_items":[
+  {"owner":"Bob Navarro","task":"Fix the CSV export race condition"},
+  {"owner":"Carol Singh","task":"Complete the WCAG 2.1 AA accessibility audit"},
+  {"owner":"Dave Wu","task":"Write integration tests for payments-flow edge cases"}]}
 ```
+</details>
 
-The CLI source lives at [`cli/bin/opensop`](./cli/bin/opensop) in this repo.
+Run it on your machine — `opensop bench` (add `ANTHROPIC_API_KEY` for a live run, or `--stub` offline). Full numbers + the reproducible video are in [`cli/bench/`](./cli/bench/). *(n=10 is a demo sample, not a statistical claim — the point is the shape.)*
 
 ---
 
 ## A process is a file
 
-One serialization, one model (SPEC v0.6):
+One model, two serializations (SPEC v0.7):
 
-- **`.sop.json`** — the canonical format for local CLI execution (what `opensop run` reads)
-- **`.sop.yaml`** — YAML variant accepted by server implementations for `POST /sop/processes/register`
-
-The same process lives in your repo, reviews in your PRs, ships in your commits. Fork it. Version it. The lineage is recorded, not copied-and-forgotten in a doc.
-
-The morning-briefing process:
+- **`.sop.json`** — the canonical format the local CLI runs (`opensop run`).
+- **`.sop.yaml`** — the wrapped variant a server accepts at `POST /sop/processes/register`.
 
 ```yaml
-opensop: "0.6"
+opensop: "0.7"
 process:
   name: morning-briefing
   version: "1.0"
-  trigger: { type: schedule, cron: "50 7 * * 1-5" }
   inputs:
     - { name: date, type: string, format: date, required: true }
   steps:
-    - id: fetch-slack
-      name: Fetch Slack
-      type: automated
-      run: ./scripts/fetch-slack.sh
-      outputs:
-        - { name: success, type: boolean }
-        - { name: unread_count, type: number }
-
-    - id: fetch-gmail
-      name: Fetch Gmail
-      type: automated
-      run: ./scripts/fetch-gmail.sh
-      outputs:
-        - { name: success, type: boolean }
-
     - id: fetch-calendar
-      name: Fetch Calendar
       type: automated
       run: ./scripts/fetch-calendar.sh
       outputs:
@@ -146,109 +145,70 @@ process:
         - { name: events, type: object }
 
     - id: synthesize
-      name: Synthesize brief
       type: llm
-      model: claude-opus-4-7
-      expected_output_schema:
-        brief: string
-      condition: |
-        steps.fetch-slack.outputs.success == true &&
-        steps.fetch-gmail.outputs.success == true &&
-        steps.fetch-calendar.outputs.success == true
-      prompt: "Synthesize a 200-word brief from these sources..."
+      model: claude-haiku-4-5
+      # The gate that makes "the agent can't launder missing data" mechanical:
+      # if the fetch returned success:false, the LLM is never asked.
+      condition: "steps.fetch-calendar.outputs.success == true"
+      expected_output_schema: { brief: string }
+      prompt: "Synthesize a 200-word brief from these sources…"
       outputs:
         - { name: brief, type: string }
-
-    - id: deliver
-      name: Deliver to Slack
-      type: notification
-      channel: slack
-      to: "#daily-briefings"
-      body: "{{ steps.synthesize.outputs.brief }}"
 ```
 
-The `condition:` on the synthesize step is what makes "the agent can't launder missing data" mechanical: if any fetch returned `success: false`, the LLM is never asked.
+If Calendar times out, the run stops at the gate. It does **not** hand the LLM a blank calendar and let it say *"your schedule looks clear this morning."* You get back exactly what was collected — with a receipt.
 
 ---
 
-## The standard
+## The CLI is the product
 
-Twelve step types, strict semantics:
+`cli/bin/opensop` is a single bash file — no build step, no package manager, no compiled artifact. The file *is* the binary. Local execution is the default; the server is opt-in.
 
-| Step type | What it does | Local execution |
+```bash
+opensop onboard                       # scaffold a process, validate it, and bench it
+opensop run ./greet.sop.json --input name=Ana   # run locally — no server, no account
+opensop bench                         # 3-arm reliability comparison (skill / json-only / openSOP)
+opensop ps                            # every process: open / scheduled / running · last status
+opensop watch                         # the same, live in your terminal (--remote for a server)
+opensop heal <run_id>                 # a failed step → an agent-actionable fix prompt
+opensop show <run_id>                 # the receipts for a run
+opensop search "qualify a lead"       # find an existing process before writing a new one
+opensop upgrade                       # verified, atomic self-update
+```
+
+Every run writes append-only receipts under `$OPENSOP_LOCAL_HOME/runs/<id>/`. Full command reference: [`cli/README.md`](./cli/README.md). Agent-facing guide: [`docs/AGENTS.md`](./docs/AGENTS.md).
+
+---
+
+## The step types
+
+| Step | What it does | Local execution |
 |---|---|---|
-| `automated` | Run a script (any language, detected by extension) | Full |
-| `shell` | Alias for `automated` | Full |
-| `noop` | No-op placeholder; passes context through | Full |
-| `form` | Collect data from a human or agent | Pauses (waiting_for_input); resume via `submit` |
-| `approval` | Binary gate — a human must approve or reject | Pauses (waiting_for_approval); resume via `submit` |
-| `wait` | Pause until a condition or timer | `wait.seconds` completes immediately; `wait.until` pauses |
-| `llm` | Direct LLM call with prompt + expected output schema | Full (requires `ANTHROPIC_API_KEY`; model must start with `claude`) |
-| `webhook` | Outbound HTTP call (sync or callback) | Sync completes with response; callback pauses |
-| `subprocess` | Start another OpenSOP process | Full (depth-guarded at 16 levels) |
-| `notification` | Fire-and-forget message (email, Slack, SMS) | Server-side only |
-| `judgment` | LLM or human decision with confidence threshold and escalation | Server-side only |
-| `loop` | Iterate over a list, accumulating outputs | Server-side only |
+| `automated` / `shell` | Run a script in any language | Full |
+| `noop` | Pass context through | Full |
+| `form` | Collect data from a human or agent | Pauses; resume with `submit` |
+| `approval` | A human must approve or reject | Pauses; resume with `submit` |
+| `wait` | Pause on a timer or condition | `seconds` immediate; `until` pauses |
+| `llm` | LLM call with a prompt + `expected_output_schema` | Full (`ANTHROPIC_API_KEY`) |
+| `webhook` | Outbound HTTP (sync or callback) | Sync full; callback pauses |
+| `subprocess` | Start another process | Full (depth-guarded) |
+| `loop` / `judgment` / `notification` | Iterate / LLM-or-human decision / send | Server-side |
 
-Full grammar in [`SPEC.md`](./SPEC.md).
+Full grammar and the `/sop/*` API contract: [`SPEC.md`](./SPEC.md).
 
 ---
 
-## Real-world proof: gbrain, mineralized
+## The optional server
 
-To stress-test the "agents plan, runtime runs" thesis, we OpenSOPized six workflows from [gbrain](https://github.com/garrytan/gbrain) (Garry Tan's open-source knowledge brain for agents):
+The CLI runs everything locally with no server. When you want shared orchestration, a team audit log, or a monitoring API, point the CLI at any server that implements the [`SPEC.md`](./SPEC.md) `/sop/*` contract — including per-process status at `GET /sop/processes/status`, which backs `opensop ps --remote` / `opensop watch --remote`.
 
-| Process | Steps | LLM steps | Deterministic steps |
-|---|---|---|---|
-| `gbrain-meeting-ingest` | 8 | 1 | 7 |
-| `gbrain-data-research-tracker` | 9 | 1–2 | 7–8 |
-| `gbrain-dream-consolidation-audit` | 7 | 1 | 6 |
-| `gbrain-skill-authoring` | 9 | 2 | 7 |
-| `gbrain-retrieval-regression` | 10 | 1 | 9 |
-| `gbrain-upgrade-migration` | 14 | 1 | 13 |
-| **Total across 6 processes** | **57** | **~7** | **~50** |
-
-~88% of agent operations moved from LLM calls to deterministic code. Most "agent decisions" weren't really decisions — they were CLI calls or data fetches dressed up as cognitive work.
-
----
-
-## Optional server
-
-The CLI runs processes locally with no server. When you need shared orchestration, a team audit log, or a monitoring UI, you can point the CLI at a server implementation of the [SPEC.md](./SPEC.md) `/sop/*` contract.
-
-**Reference implementation:** [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) — a Rails 8 server that implements the full spec. It adds:
-
-- **Team visibility** — shared audit log, admin UI dashboard, process metrics
-- **Shared orchestration** — multi-actor workflows where humans and agents drive the same endpoints
-- **Webhook-triggered processes** — HMAC-verified inbound triggers with `input_mapping`
-- **Auto-generated REST API** — every registered process gets the same endpoints automatically
-
-The `/sop/*` API contract is specified in [`SPEC.md`](./SPEC.md). Any conforming server works with the CLI's `--remote` flag — you are not locked to the reference implementation.
-
----
-
-## Status
-
-OpenSOP is at MVP per [`SPEC.md`](./SPEC.md) §8. Honest accounting:
-
-**Local CLI (v0.8.0):**
-- `automated`, `shell`, `noop`, `llm`, `webhook` (sync), `subprocess`, `form`, `approval`, `wait` (seconds) — full local execution
-- `wait` (until) — pauses run; resume via `submit`; long-timer support tracked
-- `webhook` (callback) — pauses run; local callback wiring not yet implemented
-- Cells / fractal addressing (v0.6) — `init`, `scope`, `fork`, `lineage`, `annotate`
-
-**Reference server (opensop-rails):**
-- Real and exercised in production: YAML parser, instance executor, REST API, admin UI, RSpec coverage, audit-trail receipts. Step types that execute fully end-to-end: `form`, `automated`, `webhook` (sync + callback modes), `loop`, `llm`. Third-party webhook triggers (`trigger: type: webhook`) are real — HMAC-verified, with `input_mapping` templating.
-- Partial: `judgment` (LLM routing wired via the CLI; server-side LLM router pending), `approval` (state transitions work; no human-facing approval queue UI yet), `notification` (state machine + parsing complete; executor returns `notified: true` without dispatching — wire your channel adapters before relying on it), `subprocess` (parses; doesn't yet spawn the child instance), `wait` (returns immediately for `seconds:` durations; long timer support tracked).
-- Planned next: `webhook` poll-mode response, replay protection for inbound triggers, LLM-backed judgment router, subprocess execution, real `wait` timers, Process Designer UI, metrics + constraint detection, embedding-based `suggest` once catalogs cross ~150 entries.
+Reference server: [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) — Rails 8, team visibility, HMAC-verified webhook triggers, shared audit log. The server is optional infrastructure; `opensop run` never requires it.
 
 ---
 
 ## Used internally at Coba
 
-[Coba](https://coba.ai) runs internal operations and scheduled engineering agents on OpenSOP. Improvements that come out of that work flow upstream first.
-
-`opensop-worker` is a Rust daemon scheduling specialized agents across Rails projects. They review PRs, bump dependencies, resolve conflicts, re-run CI, generate `AGENTS.md` files, write release notes, and handle the small engineering chores humans usually defer or forget. Each job is a typed `.sop.yaml` process — named steps, bounded inputs and outputs, structured prompts, parsed responses, size caps, git diff checks, append-only receipts. The agents do the creative work. OpenSOP provides the rails.
+[Coba](https://coba.ai) runs internal operations and scheduled engineering agents on OpenSOP; improvements flow upstream first. Specialized agents review PRs, bump dependencies, resolve conflicts, re-run CI, and handle the chores humans defer — each as a typed `.sop` process with named steps, bounded I/O, structured prompts, size caps, git-diff checks, and append-only receipts. The agents do the creative work. OpenSOP provides the rails.
 
 ---
 
@@ -257,23 +217,16 @@ OpenSOP is at MVP per [`SPEC.md`](./SPEC.md) §8. Honest accounting:
 | Doc | For | Covers |
 |---|---|---|
 | [`MANIFESTO.md`](./MANIFESTO.md) | Everyone | The thesis — why processes are infrastructure |
-| [`SPEC.md`](./SPEC.md) | Architects + implementors | Formal OpenSOP 0.6 specification and `/sop/*` API contract |
-| [`docs/AGENTS.md`](./docs/AGENTS.md) | Agent builders + process authors | Install, format reference, authoring playbook, self-check rubric |
-| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | Forks | PR workflow + private process libraries |
-| [opensop-rails](https://github.com/Chosen9115/opensop-rails) | Self-hosters | Reference server: install, API docs, architecture |
+| [`SPEC.md`](./SPEC.md) | Architects + implementors | The OpenSOP v0.7 spec and `/sop/*` API contract |
+| [`docs/AGENTS.md`](./docs/AGENTS.md) | Agent builders | Discover → run → build → openSOP-ize → evolve |
+| [`EVOLUTION.md`](./EVOLUTION.md) | Process authors | Mineralization tiers — hardening a process over time |
+| [`cli/README.md`](./cli/README.md) | CLI users | Full command reference + install verification |
+| [opensop-rails](https://github.com/Chosen9115/opensop-rails) | Self-hosters | The reference server |
 
 ---
-
-## Contributing
-
-PRs welcome. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) first — especially if you're forking to keep a private process library alongside the public engine.
 
 ## License
 
 Apache 2.0. See [`LICENSE`](./LICENSE).
 
----
-
-**Ready to ship your first process?** Install the CLI, run `opensop init`, author a `.sop.json`, run it. No server required.
-
-[Star the repo](https://github.com/Chosen9115/opensop) if OpenSOP is useful — it tells us the standard is worth hardening.
+**Turn a process you run into one that runs the same way every time — `opensop onboard`.** If OpenSOP is useful, [star the repo](https://github.com/Chosen9115/opensop) — it tells us the standard is worth hardening.
