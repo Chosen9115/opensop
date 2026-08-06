@@ -6238,6 +6238,83 @@ cmd_onboard() {
     || die "process file is not valid JSON: $proc_file" "invalid_json" \
            "fix the JSON syntax and re-run: opensop onboard $proc_file"
 
+  # -----------------------------------------------------------------------
+  # Structural validation — gates: name, steps[], step id+type uniqueness.
+  # Must run BEFORE dry-run; dry-run only checks input values, not structure.
+  # -----------------------------------------------------------------------
+  local _struct_errors
+  _struct_errors="$(jq -r '
+    (if has("process") then .process else . end) as $p |
+    # Locally-supported step types (SPEC §3 local set).
+    ["automated","shell","noop","form","approval","wait","llm","webhook","subprocess"] as $ok_types |
+    [
+      # 1. name must be a non-empty string.
+      (if (($p.name | type) != "string") or ($p.name | length) == 0 then
+        "missing or empty field: name (must be a non-empty string)"
+       else null end),
+      # 2. steps must be present and a non-empty array.
+      (if ($p | has("steps") | not) then
+        "missing field: steps (required)"
+       elif ($p.steps | type) != "array" then
+        "invalid field: steps (must be an array)"
+       elif ($p.steps | length) == 0 then
+        "invalid field: steps (must be a non-empty array)"
+       else null end)
+    ] +
+    # 3. Per-step checks: id non-empty string, type in $ok_types.
+    (if (($p | has("steps")) and ($p.steps | type) == "array") then
+      [$p.steps[] |
+        . as $s |
+        (
+          (if (($s.id | type) != "string") or ($s.id | length) == 0 then
+            "step missing or empty id"
+           else null end),
+          (if ($s.type | type) != "string" or ($s.type | length) == 0 then
+            ("step " + ($s.id // "(no id)") + ": missing or empty type")
+           elif ([$ok_types[] | . == $s.type] | any | not) then
+            ("step " + ($s.id // "(no id)") + ": unsupported type " + $s.type + " (accepted: " + ($ok_types | join(", ")) + ")")
+           else null end)
+        )
+      ]
+    else [] end) +
+    # 4. step ids must be unique.
+    (if (($p | has("steps")) and ($p.steps | type) == "array") then
+      ($p.steps | map(.id) | to_entries |
+        map(select(
+          .value != null and .value != "" and
+          (. as $e | ($p.steps | map(.id) | indices($e.value) | length) > 1) and
+          # report only on first occurrence to avoid duplicate messages
+          (. as $e | ($p.steps | map(.id) | index($e.value)) == $e.key)
+        )) |
+        map("duplicate step id: " + .value))
+    else [] end)
+    | map(select(. != null)) | .[]
+  ' "$proc_file" 2>/dev/null || true)"
+
+  if [[ -n "$_struct_errors" ]]; then
+    if $json_out; then
+      jq -nc \
+        --argjson scaffolded "$( $scaffolded && echo true || echo false)" \
+        --arg process_file "$proc_file" \
+        --argjson validated false \
+        --argjson bench_result_or_skipped '"skipped"' \
+        --arg error_detail "$_struct_errors" \
+        '{scaffolded:$scaffolded,process_file:$process_file,validated:false,
+          bench_result_or_skipped:$bench_result_or_skipped,
+          error:"validation_failed",message:$error_detail}'
+    else
+      printf '%sstructural validation failed:%s\n' "$C_RED" "$C_RESET"
+      printf '%s\n' "$_struct_errors" | while IFS= read -r _line; do
+        printf '  %s\n' "$_line"
+      done
+      printf '\n'
+      printf 'Fix the process file and re-run:\n'
+      printf '  opensop onboard %s\n' "$proc_file"
+      printf '\n'
+    fi
+    exit 1
+  fi
+
   if ! $json_out; then
     printf '%s--- step 2: validate ---%s\n' "$C_BOLD" "$C_RESET"
     printf '\n'

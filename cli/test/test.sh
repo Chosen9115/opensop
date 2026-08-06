@@ -5686,6 +5686,105 @@ onboard_nokey_bench="$(echo "$onboard_nokey_out" | jq -r '.bench_result_or_skipp
   || { echo "FAIL: E1 onboard (no-key) — expected bench_result_or_skipped=skipped, got '$onboard_nokey_bench'"; exit 1; }
 echo "PASS: E1 onboard (no-key) — bench_result_or_skipped=skipped (graceful no-key path)"
 
+# --------------------------------------------------------------------------- #
+# E1: onboard — structural validation gate (negative tests)
+#
+# The onboard validate step must REJECT structurally invalid files BEFORE
+# calling dry-run.  Each case below must: exit non-zero, set error=validation_failed
+# in --json output, and include a message describing what is wrong.
+# --------------------------------------------------------------------------- #
+
+# (e) empty JSON object {} — no name, no steps
+onboard_empty_proc="$onboard_tmp/struct-empty.sop.json"
+printf '{}' > "$onboard_empty_proc"
+set +e
+onboard_empty_out="$("$cli" onboard "$onboard_empty_proc" --json 2>&1)"
+onboard_empty_rc=$?
+set -e
+[ "$onboard_empty_rc" -ne 0 ] \
+  || { echo "FAIL: E1 structural-empty — should exit non-zero, got 0"; exit 1; }
+echo "PASS: E1 structural (empty {}) — exits non-zero"
+printf '%s\n' "$onboard_empty_out" | jq -e '.error == "validation_failed"' >/dev/null 2>&1 \
+  || { echo "FAIL: E1 structural-empty — expected error=validation_failed in --json output, got: $onboard_empty_out"; exit 1; }
+echo "PASS: E1 structural (empty {}) — error=validation_failed in --json"
+printf '%s\n' "$onboard_empty_out" | jq -e '.validated == false' >/dev/null 2>&1 \
+  || { echo "FAIL: E1 structural-empty — expected validated=false in --json output"; exit 1; }
+echo "PASS: E1 structural (empty {}) — validated=false in --json"
+
+# (f) steps present but empty array
+onboard_emptysteps_proc="$onboard_tmp/struct-emptysteps.sop.json"
+printf '{"name":"test","steps":[]}' > "$onboard_emptysteps_proc"
+set +e
+onboard_emptysteps_out="$("$cli" onboard "$onboard_emptysteps_proc" --json 2>&1)"
+onboard_emptysteps_rc=$?
+set -e
+[ "$onboard_emptysteps_rc" -ne 0 ] \
+  || { echo "FAIL: E1 structural (empty steps) — should exit non-zero, got 0"; exit 1; }
+echo "PASS: E1 structural (empty steps []) — exits non-zero"
+printf '%s\n' "$onboard_emptysteps_out" | jq -e '.error == "validation_failed"' >/dev/null 2>&1 \
+  || { echo "FAIL: E1 structural (empty steps) — expected error=validation_failed"; exit 1; }
+echo "PASS: E1 structural (empty steps []) — error=validation_failed in --json"
+
+# (g) step with an unsupported type
+onboard_badtype_proc="$onboard_tmp/struct-badtype.sop.json"
+printf '{"name":"test","steps":[{"id":"s1","type":"unsupported-type"}]}' > "$onboard_badtype_proc"
+set +e
+onboard_badtype_out="$("$cli" onboard "$onboard_badtype_proc" --json 2>&1)"
+onboard_badtype_rc=$?
+set -e
+[ "$onboard_badtype_rc" -ne 0 ] \
+  || { echo "FAIL: E1 structural (bad type) — should exit non-zero, got 0"; exit 1; }
+echo "PASS: E1 structural (unsupported type) — exits non-zero"
+printf '%s\n' "$onboard_badtype_out" | jq -e '.error == "validation_failed"' >/dev/null 2>&1 \
+  || { echo "FAIL: E1 structural (bad type) — expected error=validation_failed"; exit 1; }
+echo "PASS: E1 structural (unsupported type) — error=validation_failed in --json"
+# message must mention the bad type
+printf '%s\n' "$onboard_badtype_out" | jq -r '.message // ""' | grep -q "unsupported-type" \
+  || { echo "FAIL: E1 structural (bad type) — message should mention the bad type name"; exit 1; }
+echo "PASS: E1 structural (unsupported type) — message mentions the bad type"
+
+# (h) step missing id
+onboard_noid_proc="$onboard_tmp/struct-noid.sop.json"
+printf '{"name":"test","steps":[{"type":"shell","run":"echo ok"}]}' > "$onboard_noid_proc"
+set +e
+onboard_noid_out="$("$cli" onboard "$onboard_noid_proc" --json 2>&1)"
+onboard_noid_rc=$?
+set -e
+[ "$onboard_noid_rc" -ne 0 ] \
+  || { echo "FAIL: E1 structural (no id) — should exit non-zero, got 0"; exit 1; }
+echo "PASS: E1 structural (step missing id) — exits non-zero"
+printf '%s\n' "$onboard_noid_out" | jq -e '.error == "validation_failed"' >/dev/null 2>&1 \
+  || { echo "FAIL: E1 structural (no id) — expected error=validation_failed"; exit 1; }
+echo "PASS: E1 structural (step missing id) — error=validation_failed in --json"
+
+# (i) duplicate step ids
+onboard_dupid_proc="$onboard_tmp/struct-dupid.sop.json"
+printf '{"name":"test","steps":[{"id":"s1","type":"noop"},{"id":"s1","type":"noop"}]}' > "$onboard_dupid_proc"
+set +e
+onboard_dupid_out="$("$cli" onboard "$onboard_dupid_proc" --json 2>&1)"
+onboard_dupid_rc=$?
+set -e
+[ "$onboard_dupid_rc" -ne 0 ] \
+  || { echo "FAIL: E1 structural (dup ids) — should exit non-zero, got 0"; exit 1; }
+echo "PASS: E1 structural (duplicate step ids) — exits non-zero"
+printf '%s\n' "$onboard_dupid_out" | jq -e '.error == "validation_failed"' >/dev/null 2>&1 \
+  || { echo "FAIL: E1 structural (dup ids) — expected error=validation_failed"; exit 1; }
+echo "PASS: E1 structural (duplicate step ids) — error=validation_failed in --json"
+
+# (j) happy path: minimal valid process (name + one valid step) passes structural gate
+onboard_minimal_proc="$onboard_tmp/struct-valid.sop.json"
+printf '{"name":"minimal","steps":[{"id":"s1","type":"noop"}]}' > "$onboard_minimal_proc"
+set +e
+onboard_minimal_out="$(ANTHROPIC_API_KEY="" "$cli" onboard "$onboard_minimal_proc" --json 2>&1)"
+onboard_minimal_rc=$?
+set -e
+[ "$onboard_minimal_rc" -eq 0 ] \
+  || { echo "FAIL: E1 structural (minimal valid) — should exit 0, got $onboard_minimal_rc: ${onboard_minimal_out:0:300}"; exit 1; }
+echo "PASS: E1 structural (minimal valid) — exits 0"
+printf '%s\n' "$onboard_minimal_out" | jq -e '.validated == true' >/dev/null 2>&1 \
+  || { echo "FAIL: E1 structural (minimal valid) — expected validated=true: ${onboard_minimal_out:0:300}"; exit 1; }
+echo "PASS: E1 structural (minimal valid) — validated=true (passes structural + dry-run gate)"
+
 # Cleanup
 rm -rf "$onboard_tmp"
 
