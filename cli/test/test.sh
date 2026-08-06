@@ -5414,4 +5414,129 @@ ro_opensop_runs="$(jq -r '.arms[] | select(.arm=="opensop") | .runs' <<<"$ro_ben
   || { echo "FAIL: Fix3-readonly opensop arm should have 1 run, got '$ro_opensop_runs' — output: ${ro_bench_out:0:400}"; exit 1; }
 echo "PASS: Fix3-readonly — opensop arm completed 1 run against read-only task dir (scoreboard produced)"
 
+# --------------------------------------------------------------------------- #
+# A2: opensop watch — live dashboard (one-shot via hidden --once flag)
+#
+# Tests:
+#   1. --json --once in a non-TTY context: emits valid NDJSON (one compact JSON
+#      array), no ANSI escape bytes (ESC = \x1b), no clear-screen bytes (\x0c).
+#   2. Pretty --once: emits a header line and a process table (not raw JSON).
+#   3. --interval 0 is rejected with usage_error (not a positive integer).
+#   4. --interval abc is rejected with usage_error.
+#   5. Unknown flag --bogus errors with unknown_flag.
+#   6. TERM unset does NOT abort (TERM-safe guard).
+#   7. --once exits 0.
+#
+# We run inside the watch_dir cell, which has one process (watch-proc.sop.json)
+# and one completed run, so the status array is non-empty and more interesting.
+# --------------------------------------------------------------------------- #
+
+watch_dir="$OPENSOP_LOCAL_HOME/watch-test"
+mkdir -p "$watch_dir/processes"
+( cd "$watch_dir" && env -u OPENSOP_LOCAL_HOME "$cli" init --json >/dev/null )
+
+cat > "$watch_dir/processes/watch-proc.sop.json" <<'JSON'
+{ "name": "watch-proc", "inputs": {},
+  "steps": [ { "id": "s", "type": "shell", "run": "echo hello" } ] }
+JSON
+
+# Seed a completed run so last_status == "ok" (more interesting than "never")
+( cd "$watch_dir" && env -u OPENSOP_LOCAL_HOME "$cli" run processes/watch-proc.sop.json --local --json >/dev/null )
+
+# (1) --json --once: valid NDJSON, no ESC bytes, no form-feed (clear)
+watch_json_out="$(
+  cd "$watch_dir" && \
+  env -u OPENSOP_LOCAL_HOME TERM=dumb "$cli" watch --json --once 2>&1
+)"
+
+# Must exit 0 — captured via || guard
+set +e
+(
+  cd "$watch_dir" && \
+  env -u OPENSOP_LOCAL_HOME TERM=dumb "$cli" watch --json --once >/dev/null 2>&1
+)
+watch_json_rc=$?
+set -e
+[ "$watch_json_rc" -eq 0 ] \
+  || { echo "FAIL: watch --json --once should exit 0, got $watch_json_rc"; exit 1; }
+echo "PASS: watch --json --once — exits 0"
+
+# Output must be valid JSON array
+echo "$watch_json_out" | jq -e 'type == "array"' >/dev/null 2>&1 \
+  || { echo "FAIL: watch --json --once output is not a JSON array: $watch_json_out"; exit 1; }
+echo "PASS: watch --json --once — output is a JSON array"
+
+# Must contain watch-proc with last_status ok
+echo "$watch_json_out" | jq -e '.[] | select(.name == "watch-proc" and .last_status == "ok")' >/dev/null 2>&1 \
+  || { echo "FAIL: watch --json --once should show watch-proc with last_status=ok: $watch_json_out"; exit 1; }
+echo "PASS: watch --json --once — watch-proc present with last_status=ok"
+
+# Must NOT contain ESC bytes (no ANSI color escapes in JSON mode)
+if printf '%s' "$watch_json_out" | grep -qP '\x1b' 2>/dev/null; then
+  echo "FAIL: watch --json --once stdout contains ESC bytes (ANSI escapes leak into JSON mode)"
+  exit 1
+fi
+echo "PASS: watch --json --once — no ESC bytes in output (no ANSI escapes)"
+
+# (2) Pretty --once: header line present, not a bare JSON array
+watch_pretty_out="$(
+  cd "$watch_dir" && \
+  env -u OPENSOP_LOCAL_HOME TERM=dumb NO_COLOR=1 "$cli" --pretty watch --once 2>&1
+)"
+[[ "$watch_pretty_out" == *"source:"* ]] \
+  || { echo "FAIL: watch --pretty --once missing 'source:' header line; got: $watch_pretty_out"; exit 1; }
+echo "PASS: watch --pretty --once — header line with 'source:' printed"
+
+[[ "$watch_pretty_out" == *"watch-proc"* ]] \
+  || { echo "FAIL: watch --pretty --once missing process row; got: $watch_pretty_out"; exit 1; }
+echo "PASS: watch --pretty --once — process table row present"
+
+# (3) --interval 0 rejected (not a positive integer)
+set +e
+( cd "$watch_dir" && env -u OPENSOP_LOCAL_HOME "$cli" watch --interval 0 --json 2>&1 >/dev/null ); iv0_rc=$?
+set -e
+[ "$iv0_rc" -ne 0 ] \
+  || { echo "FAIL: watch --interval 0 should exit non-zero"; exit 1; }
+echo "PASS: watch --interval 0 — rejected (not a positive integer)"
+
+# (4) --interval abc rejected
+set +e
+( cd "$watch_dir" && env -u OPENSOP_LOCAL_HOME "$cli" watch --interval abc --json 2>&1 >/dev/null ); ivabc_rc=$?
+set -e
+[ "$ivabc_rc" -ne 0 ] \
+  || { echo "FAIL: watch --interval abc should exit non-zero"; exit 1; }
+echo "PASS: watch --interval abc — rejected (not numeric)"
+
+# (5) Unknown flag --bogus → unknown_flag error
+set +e
+( cd "$watch_dir" && env -u OPENSOP_LOCAL_HOME "$cli" watch --bogus --json >/dev/null 2>&1 ); bogus_rc=$?
+set -e
+[ "$bogus_rc" -ne 0 ] \
+  || { echo "FAIL: watch --bogus should exit non-zero"; exit 1; }
+echo "PASS: watch --bogus — exits non-zero with unknown_flag error"
+
+# (6) TERM unset does NOT abort (TERM-safe clear guard)
+set +e
+(
+  cd "$watch_dir" && \
+  env -u OPENSOP_LOCAL_HOME -u TERM "$cli" watch --json --once >/dev/null 2>&1
+)
+term_unset_rc=$?
+set -e
+[ "$term_unset_rc" -eq 0 ] \
+  || { echo "FAIL: watch with TERM unset should exit 0, got $term_unset_rc"; exit 1; }
+echo "PASS: watch — TERM unset does not abort (TERM-safe guard works)"
+
+# (7) --interval flag accepts valid positive integer
+set +e
+(
+  cd "$watch_dir" && \
+  env -u OPENSOP_LOCAL_HOME "$cli" watch --interval 3 --json --once >/dev/null 2>&1
+)
+iv_valid_rc=$?
+set -e
+[ "$iv_valid_rc" -eq 0 ] \
+  || { echo "FAIL: watch --interval 3 --json --once should exit 0, got $iv_valid_rc"; exit 1; }
+echo "PASS: watch --interval 3 --json --once — accepts valid interval"
+
 echo "ALL PASS"

@@ -20,6 +20,43 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Added
 
+- **A2: `opensop watch` — live-refreshing terminal dashboard (SPEC §9).**
+  A self-refreshing observability terminal for process status. Architecture
+  decision: bash CLI feature, not a Rails web page; the server only provides data.
+
+  - **Data derivation reuse:** extracts the §9.4 enumeration/rollup logic from
+    `local_ps` into `_ps_collect_local_entries` (shared top-level helper), and the
+    remote fetch from `cmd_ps` into `_ps_collect_remote_entries`. No SPEC §9 logic
+    is duplicated — `cmd_watch` calls these same helpers.
+
+  - **Redraw loop:** on each tick, clear + reprint (TTY guard: `is_tty` before
+    calling `clear`; `{ clear 2>/dev/null || true; }` makes it TERM-safe). Interval
+    defaults to 2s; `--interval N` sets an explicit positive-integer period.
+
+  - **Header line (pretty mode):** each refresh prints `source: <local|URL>
+    interval: Ns  <UTC timestamp>` above the process table so the dashboard is
+    self-describing without scrolling back.
+
+  - **`--json` mode:** emits compact NDJSON — one status array per refresh on
+    its own line, no ANSI escapes, no clear. Safe to pipe to `jq -c .[]`.
+
+  - **`--remote`:** delegates to `_ps_collect_remote_entries` →
+    `GET /sop/processes/status` (G1 endpoint). Local is the default.
+
+  - **Clean INT handling:** trap INT before the loop; in pretty mode print a
+    trailing newline; in JSON mode emit nothing. No stray output in either mode.
+
+  - **`--once` (hidden test hook):** run exactly one iteration and exit. Lets
+    `test/test.sh` verify the output shape without delivering SIGINT from bash.
+
+  - **Columns:** NAME · STATE (green running / blue scheduled / dim open) ·
+    LAST STATUS (green ok / red error / dim never) · LAST RUN · NEXT RUN.
+    Rendered by the shared `_ps_emit` helper.
+
+  - **Registry:** registered in `_registry_raw` (category `inspection`,
+    backend `dual`). Wired in `main()`. Help examples + README row + this
+    CHANGELOG entry added in the same commit.
+
 - **A1: `opensop ps` — process status view (SPEC §9).** Surfaces the §9 process
   status model locally without requiring a server.
 

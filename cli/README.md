@@ -429,6 +429,7 @@ Commands marked **[remote]** require `--remote` or `--server <url>`. All others 
 | `opensop schema <name>` | **[remote]** Full process definition (`GET /sop/<name>/schema`) — requires `--remote` or `--server` |
 | **Inspection** | |
 | `opensop ps [--follow]` | Process status table: `open`/`running`, last result, last/next run time. `--follow` polls every 2s. (**[remote]** `GET /sop/processes/status` with `--remote`) |
+| `opensop watch [--interval N]` | Live-refreshing terminal dashboard. Auto-clears and reprints every `N` seconds (default 2). `--json` emits NDJSON — one compact array per refresh, no escapes. Ctrl-C to exit cleanly. (**[remote]** `GET /sop/processes/status` with `--remote`) |
 | `opensop status <run_id>` | State of a local run (or **[remote]** `GET /sop/<name>/<id>` with `--remote`) |
 | `opensop steps <run_id>` | Per-step state of a local run (or **[remote]** with `--remote`) |
 | `opensop diff <id1> <id2>` | Compare two runs of the same process |
