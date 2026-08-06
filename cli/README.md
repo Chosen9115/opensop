@@ -98,9 +98,7 @@ curl -fsSL .../install.sh | bash -s -- --prefix /usr/local
 curl -fsSL .../install.sh | bash -s -- --dry-run
 ```
 
-The installer checks bash version, verifies `jq` is available, and prints a `$PATH` hint if `~/.local/bin` is not yet on your path.
-
-**Verifying downloads / signing (planned):** the installer and `opensop upgrade` both fetch a companion `.sha256` checksum file from the same release location and verify the download's SHA-256 before writing anything. If no checksum file is published at the release URL the install aborts (unless `--allow-unverified` is passed). Full GPG signing of releases is planned as a follow-up; SHA-256 verification is the current security posture.
+The installer checks bash version, verifies `jq` is available, and prints a `$PATH` hint if `~/.local/bin` is not yet on your path. See [Install verification & threat model](#install-verification--threat-model) for what the checksum check does and does not protect against.
 
 ### Direct download (one line)
 
@@ -133,6 +131,10 @@ opensop upgrade --pin 0.9.0  # specific version
 - `bash` 4+ (Linux default; macOS needs `brew install bash` — see above)
 - `jq` — `brew install jq` / `apt install jq` / `dnf install jq`
 - `curl` — needed by `install.sh`, `opensop upgrade`, and the **remote backend** (`--remote` / `--server`); local execution does not need it
+
+## Install verification & threat model
+
+**What checksum verification does — and doesn't — protect against.** The installer and `opensop upgrade` fetch a companion `.sha256` file and refuse to replace your binary unless the download's SHA-256 matches (opt out with `--allow-unverified`). This protects against *corruption in transit*: truncated downloads, CDN/proxy mangling, and partial caches. It does **not** protect against a compromised source: the binary and its checksum are served from the same GitHub origin, so an attacker who can modify this repository or its CDN path can replace both consistently. There are no cryptographic signatures on releases today, and we won't pretend a checksum is one. Your actual trust anchor when running `curl … | bash` is TLS to `raw.githubusercontent.com` plus the integrity of this repository and its maintainer's GitHub account. If that trust model is insufficient for your environment: read `install.sh` and `bin/opensop` before running them (they're plain bash — that's the point), install from a specific tag with `--pin X.Y.Z`, cross-check the digest against the one published in that version's GitHub Release notes and its git history, or vendor the file into your own repo and diff on upgrade. We may add Sigstore-based release signing later if the project gains CI; we'd rather ship no signature than an unverified one.
 
 ## Quick start
 

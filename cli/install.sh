@@ -39,7 +39,9 @@
 #   The installer fetches a companion <binary>.sha256 checksum file from the
 #   same release location and verifies the download before installing.  If no
 #   checksum file is published yet, the install aborts unless --allow-unverified
-#   is passed.  GPG signing is planned as a follow-up.
+#   is passed.
+#   Note: the checksum and the binary come from the same origin — this verifies
+#   transfer integrity, not source authenticity.  See cli/README.md.
 
 set -euo pipefail
 
@@ -253,7 +255,7 @@ if [[ $sum_curl_exit -eq 0 && -s "$TMP_SUM" ]]; then
   _ok "checksum verified (${actual_sum:0:16}…)"
 else
   if [[ "$ALLOW_UNVERIFIED" != "true" ]]; then
-    _die "no checksum file found at ${CHECKSUM_URL} — cannot verify download integrity.\nPass --allow-unverified to skip (not recommended). GPG signing is planned."
+    _die "no checksum file found at ${CHECKSUM_URL} — cannot verify download integrity.\nPass --allow-unverified to skip (not recommended). See 'Install verification & threat model' in cli/README.md."
   fi
   _warn "no checksum file found — proceeding unverified (--allow-unverified passed)"
 fi
