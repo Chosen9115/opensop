@@ -5836,4 +5836,261 @@ echo "PASS: onboard --n (missing value) — clean usage_error, no set-u abort"
 # Cleanup
 rm -rf "$onboard_tmp"
 
+# --------------------------------------------------------------------------- #
+# C1a follow-up: resumed-completion metrics — form step
+#
+# Verifies that when a paused form step is submitted:
+#   (a) the waiting event carries duration_ms (>=0) + result_hash:"pending"
+#       [already tested in Fix3; this adds a cross-check for the resume side]
+#   (b) the COMPLETED event appended by local_submit carries:
+#       - duration_ms (integer >= 0)
+#       - result_hash (64-char lowercase hex — NOT "pending")
+#   (c) submitting the same outputs twice (to two different runs) produces the
+#       SAME result_hash (reproducibility: same input → same digest)
+#   (d) the run's manifest.duration_ms after resume reflects total wall time
+#       (it must be present and >= the pre-pause value, and clearly not zero)
+#   (e) failure path: a resumed step that completes with a non-zero output
+#       still records duration_ms + result_hash (hash of the error/output object)
+# --------------------------------------------------------------------------- #
+c1af_dir="$OPENSOP_LOCAL_HOME/c1af-form"
+mkdir -p "$c1af_dir"
+cat > "$c1af_dir/c1af.sop.json" <<'JSON'
+{
+  "name": "c1af-test",
+  "inputs": {},
+  "steps": [
+    { "id": "pre",     "type": "shell", "run": "echo pre-step" },
+    { "id": "collect", "type": "form",
+      "inputs": [
+        { "name": "email",  "type": "string",  "required": true },
+        { "name": "opt_in", "type": "boolean", "required": false }
+      ]
+    },
+    { "id": "post",    "type": "shell",
+      "run": "echo got=$(echo \"$OSL_CONTEXT\" | jq -r '.collect.email')" }
+  ]
+}
+JSON
+
+# --- (a) Pause and verify waiting event has duration_ms + result_hash:"pending" ---
+c1af_manifest="$("$cli" run "$c1af_dir/c1af.sop.json" --local --json)"
+c1af_run_id="$(jq -r '.run_id' <<<"$c1af_manifest")"
+c1af_audit="$OPENSOP_LOCAL_HOME/runs/$c1af_run_id/audit.jsonl"
+
+[ "$(jq -r '.status' <<<"$c1af_manifest")" = "waiting" ] \
+  || { echo "FAIL: C1a-followup form — initial run should be waiting"; exit 1; }
+
+# Capture the pre-pause manifest.duration_ms for comparison later.
+c1af_prepause_dur="$(jq -r '.duration_ms // 0' <<<"$c1af_manifest")"
+
+jq -e 'select(.step=="collect" and .status=="waiting") |
+       .duration_ms != null and (.duration_ms | type) == "number" and .duration_ms >= 0 and
+       .result_hash == "pending"' "$c1af_audit" >/dev/null \
+  || { echo "FAIL: C1a-followup form — waiting event missing duration_ms>=0 or result_hash:pending"; exit 1; }
+echo "PASS: C1a-followup form — waiting event carries duration_ms>=0 and result_hash='pending'"
+
+# --- (b) Submit and verify completed event carries real duration_ms + result_hash ---
+c1af_result="$("$cli" submit "$c1af_run_id" collect --local \
+  --output email=alice@example.com \
+  --output opt_in=true \
+  --json)"
+
+[ "$(jq -r '.status' <<<"$c1af_result")" = "completed" ] \
+  || { echo "FAIL: C1a-followup form — submit should complete, got $(jq -r '.status' <<<"$c1af_result")"; exit 1; }
+
+# Verify the completed receipt has duration_ms and a real (non-pending) result_hash.
+c1af_completed_receipt="$(jq -c 'select(.step=="collect" and .status=="completed")' "$c1af_audit")"
+[ -n "$c1af_completed_receipt" ] \
+  || { echo "FAIL: C1a-followup form — completed receipt for 'collect' missing from audit"; exit 1; }
+
+jq -e '.duration_ms != null and (.duration_ms | type) == "number" and .duration_ms >= 0' \
+  <<<"$c1af_completed_receipt" >/dev/null \
+  || { echo "FAIL: C1a-followup form — completed receipt missing duration_ms>=0; got: $c1af_completed_receipt"; exit 1; }
+echo "PASS: C1a-followup form — completed receipt carries duration_ms>=0"
+
+# result_hash must be a 64-char lowercase hex string (not "pending", not "unavailable")
+c1af_hash="$(jq -r '.result_hash' <<<"$c1af_completed_receipt")"
+echo "$c1af_hash" | grep -qE '^[0-9a-f]{64}$' \
+  || { echo "FAIL: C1a-followup form — completed receipt result_hash is not 64-char hex; got: $c1af_hash"; exit 1; }
+echo "PASS: C1a-followup form — completed receipt result_hash is a 64-char hex digest (not 'pending')"
+
+# --- (c) Reproducibility: second run with same submitted output produces same hash ---
+c1af_manifest2="$("$cli" run "$c1af_dir/c1af.sop.json" --local --json)"
+c1af_run_id2="$(jq -r '.run_id' <<<"$c1af_manifest2")"
+c1af_audit2="$OPENSOP_LOCAL_HOME/runs/$c1af_run_id2/audit.jsonl"
+"$cli" submit "$c1af_run_id2" collect --local \
+  --output email=alice@example.com \
+  --output opt_in=true \
+  --json >/dev/null
+c1af_hash2="$(jq -r 'select(.step=="collect" and .status=="completed") | .result_hash' "$c1af_audit2")"
+
+[ "$c1af_hash" = "$c1af_hash2" ] \
+  || { echo "FAIL: C1a-followup form — same submitted output produced different hashes: $c1af_hash vs $c1af_hash2"; exit 1; }
+echo "PASS: C1a-followup form — identical submit inputs produce the same result_hash (reproducible)"
+
+# --- (d) Manifest total duration_ms after resume reflects full wall time ---
+c1af_total_dur="$(jq -r '.duration_ms // -1' <<<"$c1af_result")"
+# Must be present (>= 0) and >= the pre-pause segment (sanity: not regressed to 0).
+[ "$c1af_total_dur" -ge 0 ] 2>/dev/null \
+  || { echo "FAIL: C1a-followup form — manifest.duration_ms after resume is not a non-negative integer; got: $c1af_total_dur"; exit 1; }
+[ "$c1af_total_dur" -ge "$c1af_prepause_dur" ] 2>/dev/null \
+  || { echo "FAIL: C1a-followup form — manifest.duration_ms after resume ($c1af_total_dur) < pre-pause value ($c1af_prepause_dur)"; exit 1; }
+echo "PASS: C1a-followup form — manifest.duration_ms after resume (${c1af_total_dur}ms) >= pre-pause (${c1af_prepause_dur}ms)"
+
+# --------------------------------------------------------------------------- #
+# C1a follow-up: resumed-completion metrics — approval step
+# --------------------------------------------------------------------------- #
+c1af_appr_dir="$OPENSOP_LOCAL_HOME/c1af-appr"
+mkdir -p "$c1af_appr_dir"
+cat > "$c1af_appr_dir/c1af_appr.sop.json" <<'JSON'
+{
+  "name": "c1af-appr",
+  "inputs": {},
+  "steps": [
+    { "id": "gate",  "type": "approval" },
+    { "id": "after", "type": "shell", "run": "echo decision=$(echo \"$OSL_CONTEXT\" | jq -r '.gate.decision')" }
+  ]
+}
+JSON
+
+c1af_am="$("$cli" run "$c1af_appr_dir/c1af_appr.sop.json" --local --json)"
+c1af_arun="$(jq -r '.run_id' <<<"$c1af_am")"
+c1af_aaudit="$OPENSOP_LOCAL_HOME/runs/$c1af_arun/audit.jsonl"
+
+[ "$(jq -r '.status' <<<"$c1af_am")" = "waiting" ] \
+  || { echo "FAIL: C1a-followup approval — initial run should be waiting"; exit 1; }
+
+# Waiting event must have duration_ms + result_hash:"pending"
+jq -e 'select(.step=="gate" and .status=="waiting") |
+       .duration_ms >= 0 and .result_hash == "pending"' "$c1af_aaudit" >/dev/null \
+  || { echo "FAIL: C1a-followup approval — waiting event missing duration_ms or pending hash"; exit 1; }
+echo "PASS: C1a-followup approval — waiting event carries duration_ms + result_hash='pending'"
+
+# Submit and verify completed event
+c1af_ares="$("$cli" submit "$c1af_arun" gate --local --output decision=approve --json)"
+[ "$(jq -r '.status' <<<"$c1af_ares")" = "completed" ] \
+  || { echo "FAIL: C1a-followup approval — submit should complete"; exit 1; }
+
+c1af_acomp="$(jq -c 'select(.step=="gate" and .status=="completed")' "$c1af_aaudit")"
+jq -e '.duration_ms >= 0' <<<"$c1af_acomp" >/dev/null \
+  || { echo "FAIL: C1a-followup approval — completed receipt missing duration_ms>=0"; exit 1; }
+c1af_ahash="$(jq -r '.result_hash' <<<"$c1af_acomp")"
+echo "$c1af_ahash" | grep -qE '^[0-9a-f]{64}$' \
+  || { echo "FAIL: C1a-followup approval — completed result_hash is not 64-char hex; got: $c1af_ahash"; exit 1; }
+echo "PASS: C1a-followup approval — completed receipt carries duration_ms>=0 + 64-char result_hash"
+
+# Manifest total duration_ms
+c1af_atotaldur="$(jq -r '.duration_ms // -1' <<<"$c1af_ares")"
+[ "$c1af_atotaldur" -ge 0 ] 2>/dev/null \
+  || { echo "FAIL: C1a-followup approval — manifest.duration_ms after resume not a non-negative integer; got: $c1af_atotaldur"; exit 1; }
+echo "PASS: C1a-followup approval — manifest.duration_ms present and plausible after resume (${c1af_atotaldur}ms)"
+
+# --------------------------------------------------------------------------- #
+# C1a follow-up: subprocess waiting event carries duration_ms + result_hash:"pending"
+#
+# Note: the subprocess step's child run executes immediately in the local engine.
+# This test exercises the path where the child PAUSES — making the parent record
+# a waiting_for_callback event.  We trigger the child pause by giving it a form step.
+# --------------------------------------------------------------------------- #
+c1af_sp_dir="$OPENSOP_LOCAL_HOME/c1af-sp"
+mkdir -p "$c1af_sp_dir"
+
+# Child process: immediately pauses at a form step
+cat > "$c1af_sp_dir/child.sop.json" <<'JSON'
+{
+  "name": "c1af-child",
+  "inputs": {},
+  "steps": [
+    { "id": "ask", "type": "form", "inputs": [{ "name": "answer", "type": "string" }] }
+  ]
+}
+JSON
+
+# Parent process: subprocess that calls the child
+cat > "$c1af_sp_dir/parent.sop.json" <<'JSON'
+{
+  "name": "c1af-parent",
+  "inputs": {},
+  "steps": [
+    { "id": "child_step", "type": "subprocess", "process": "CHILD_PLACEHOLDER" }
+  ]
+}
+JSON
+# Replace the child path placeholder with the actual absolute path.
+sed -i "s|CHILD_PLACEHOLDER|$c1af_sp_dir/child.sop.json|g" "$c1af_sp_dir/parent.sop.json"
+
+set +e
+c1af_sp_m="$("$cli" run "$c1af_sp_dir/parent.sop.json" --local --json)"; c1af_sp_rc=$?
+set -e
+[ "$c1af_sp_rc" -eq 0 ] \
+  || { echo "FAIL: C1a-followup subprocess — parent run should exit 0 (waiting), got $c1af_sp_rc"; exit 1; }
+
+c1af_sp_run="$(jq -r '.run_id' <<<"$c1af_sp_m")"
+c1af_sp_audit="$OPENSOP_LOCAL_HOME/runs/$c1af_sp_run/audit.jsonl"
+
+[ "$(jq -r '.status' <<<"$c1af_sp_m")" = "waiting" ] \
+  || { echo "FAIL: C1a-followup subprocess — parent should be waiting (child paused); got $(jq -r '.status' <<<"$c1af_sp_m")"; exit 1; }
+echo "PASS: C1a-followup subprocess — parent run pauses when child subprocess pauses"
+
+# The waiting event on the parent audit must carry duration_ms + result_hash:"pending"
+jq -e 'select(.step=="child_step" and .status=="waiting" and .reason=="waiting_for_callback") |
+       .duration_ms != null and (.duration_ms | type) == "number" and .duration_ms >= 0 and
+       .result_hash == "pending"' "$c1af_sp_audit" >/dev/null \
+  || { echo "FAIL: C1a-followup subprocess — waiting event missing duration_ms>=0 or result_hash:'pending'"; \
+       echo "  waiting event: $(jq -c 'select(.status=="waiting")' "$c1af_sp_audit")"; exit 1; }
+echo "PASS: C1a-followup subprocess — waiting_for_callback event carries duration_ms>=0 and result_hash='pending'"
+
+# --------------------------------------------------------------------------- #
+# C1a follow-up: failure path — resumed step that fails still records
+#   duration_ms and result_hash in the completed event.
+# (A form submit always succeeds at the local_submit level — the failure path
+# is exercised when a step AFTER the resumed step fails.  The resumed step's
+# completed receipt is still written before the failure, so we assert on it.)
+# --------------------------------------------------------------------------- #
+c1af_fail_dir="$OPENSOP_LOCAL_HOME/c1af-fail"
+mkdir -p "$c1af_fail_dir"
+cat > "$c1af_fail_dir/c1af_fail.sop.json" <<'JSON'
+{
+  "name": "c1af-fail",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "code", "type": "string", "required": true }] },
+    { "id": "bad",  "type": "shell", "run": "echo failing >&2; exit 1" }
+  ]
+}
+JSON
+
+c1af_fm="$("$cli" run "$c1af_fail_dir/c1af_fail.sop.json" --local --json)"
+c1af_frun="$(jq -r '.run_id' <<<"$c1af_fm")"
+c1af_faudit="$OPENSOP_LOCAL_HOME/runs/$c1af_frun/audit.jsonl"
+
+[ "$(jq -r '.status' <<<"$c1af_fm")" = "waiting" ] \
+  || { echo "FAIL: C1a-followup failure-path — initial run should be waiting"; exit 1; }
+
+# Submit to the gate — the run will then proceed to 'bad' and fail.
+set +e
+c1af_fres="$("$cli" submit "$c1af_frun" gate --local --output code=abc --json)"; c1af_fres_rc=$?
+set -e
+# The CLI exits non-zero when the run fails.
+[ "$c1af_fres_rc" -ne 0 ] \
+  || { echo "FAIL: C1a-followup failure-path — submit on a run that fails should exit non-zero"; exit 1; }
+
+# The gate's completed receipt must still carry duration_ms + a real result_hash.
+c1af_fcomp="$(jq -c 'select(.step=="gate" and .status=="completed")' "$c1af_faudit")"
+[ -n "$c1af_fcomp" ] \
+  || { echo "FAIL: C1a-followup failure-path — gate completed receipt missing from audit"; exit 1; }
+jq -e '.duration_ms >= 0' <<<"$c1af_fcomp" >/dev/null \
+  || { echo "FAIL: C1a-followup failure-path — gate completed receipt missing duration_ms>=0"; exit 1; }
+c1af_fhash="$(jq -r '.result_hash' <<<"$c1af_fcomp")"
+echo "$c1af_fhash" | grep -qE '^[0-9a-f]{64}$' \
+  || { echo "FAIL: C1a-followup failure-path — gate completed result_hash not 64-char hex; got: $c1af_fhash"; exit 1; }
+echo "PASS: C1a-followup failure-path — gate completed receipt has duration_ms>=0 + real result_hash even when subsequent step fails"
+
+# The run itself should be 'failed'
+c1af_ffinal_mf="$(cat "$OPENSOP_LOCAL_HOME/runs/$c1af_frun/manifest.json")"
+[ "$(jq -r '.status' <<<"$c1af_ffinal_mf")" = "failed" ] \
+  || { echo "FAIL: C1a-followup failure-path — run should be 'failed' after bad step"; exit 1; }
+echo "PASS: C1a-followup failure-path — run reaches 'failed' state after resumed step + bad downstream step"
+
 echo "ALL PASS"

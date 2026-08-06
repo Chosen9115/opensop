@@ -1694,26 +1694,30 @@ The following fields must be written into each completed step receipt in
 
 **Optionality:** `tokens_in`, `tokens_out`, `token_source`, and `model` are
 present only for `llm` steps. `duration_ms` and `result_hash` are present on
-every **ordinarily-executed** step event (automated/shell/llm/noop) and on
-every **waiting** event (`result_hash: "pending"`). See the scope note below for
-the one currently-reserved case (resumed completions).
+every **ordinarily-executed** step event (automated/shell/llm/noop), on every
+**waiting** event (`result_hash: "pending"`), and on every **resumed-completion**
+event written by `local_submit`.
 
 **Append-only audit semantics (§5.6):** `audit.jsonl` is never mutated. A step
 that pauses writes a **waiting** event carrying `duration_ms` (start → pause) and
-`result_hash: "pending"`. This is shipped for `form`/`approval`/`wait.until`
-today; the remaining pause states (waiting subprocess / waiting callback) are
-covered as the resumed-metrics follow-up lands. When the step later resumes,
-`local_submit` appends a *separate* **completed** event. The `"pending"` value on
-the waiting event is permanent — no event is edited or back-patched. Any reader
-that wants the final digest reads the completed event.
+`result_hash: "pending"`. This is shipped for `form`/`approval`/`wait.until`,
+`subprocess` (waiting-for-callback), and webhook `callback` mode. When the step
+later resumes, `local_submit` appends a *separate* **completed** event carrying
+`duration_ms` (time the submission processing took) and `result_hash` (the real
+SHA-256 digest of the submitted output using the same byte contract as §10.5).
+The `"pending"` value on the waiting event is permanent — no event is edited or
+back-patched. Any reader that wants the final digest reads the completed event.
 
-**Scope (reserved):** capturing `duration_ms` and `result_hash` **on the
-resumed-completion event** (the completed event appended by `local_submit`) is
-**reserved for v0.7.x** — not yet shipped (tracked as the C1a follow-up). Today
-the guarantee covers ordinarily-executed step events and the waiting event's
-`duration_ms` + `result_hash: "pending"`; a resumed step's completed event may
-omit these fields until the follow-up lands. Conforming implementations should
-not rely on the completed-event digest for resumed steps yet.
+**`duration_ms` on the resumed-completion event** measures the active processing
+time from when `local_submit` begins executing to when the receipt is written —
+the system's work on behalf of the submission. This is complementary to the
+pre-pause `duration_ms` already in the waiting event; analysis tools may sum
+both segments for total active time across a pause.
+
+**Note:** this is a CLI-local receipt contract. The Rails server (`opensop-rails`)
+tracks step timing separately in `sop_llm_calls` and step records; the exact
+server-side API for resumed-completion metrics is part of the observability
+terminal (G1/A2, reserved for v0.7.x).
 
 **result_hash and PII:** `result_hash` is a digest, not the data, so it exposes
 no personal data. The `output` object it hashes is written verbatim (not a
@@ -1722,12 +1726,13 @@ addressed in §11.4 (fault-record redaction).
 
 ### 10.3 Manifest-level run summary
 
-**Shipped today (C1a):** the run-level `manifest.json` (§5.5) carries a top-level
-`duration_ms` for completed, failed, and waiting runs. For a run that finishes
-without pausing this is total wall time. For a run that **pauses and resumes**,
-the current value reflects start-to-pause only — accurate total duration for
-resumed runs is **reserved** with the resumed-completion metrics follow-up (the
-same C1a follow-up scoped in §10.2):
+The run-level `manifest.json` (§5.5) carries a top-level `duration_ms` for
+completed, failed, and waiting runs. For a run that finishes without pausing
+this is total wall time. For a run that **pauses and resumes**, `local_submit`
+recomputes `duration_ms` when the run reaches a terminal state (`completed` or
+`failed`) as total wall time from `manifest.started_at` to the moment
+`local_submit` finalizes the run — full end-to-end elapsed time regardless of
+how long the run was paused:
 
 ```json
 { "run_id": "...", "process": "lead-qualification", "status": "completed",
@@ -2009,7 +2014,7 @@ process:
 | 0.1 | Initial spec: process model, 8 step types, instance lifecycle, API surface, server data model |
 | 0.2 | `llm` step, `tools:`, collection outputs, `exit_when:`, `loop:` step, interval trigger (parser-only), `post_review:` hook (roadmapped), shared state (roadmapped), `validation:` on `automated` |
 | 0.6 | Local execution backend (genuine local execution, no server), `.sop.json` flat format, run-dir artifacts (manifest/audit/context), pause/resume state machine, cell substrate (init/scope/annotate/lineage/fork), `shell` and `noop` local-only step types, `executor` audit field, `--conflicts` for list |
-| 0.7 | Process status model (§9): canonical process states (`open`/`scheduled`/`running`) and rollup fields (`last_status`, `last_run_at`, `next_run_at`). Reliability metrics contract (§10): per-step `duration_ms`, `model`, `tokens_in`, `tokens_out`, `result_hash`, `token_source` in run receipts; top-level manifest `duration_ms` (the aggregated `metrics` block is reserved for v0.7.x). Security model (§11): no-telemetry statement, shell-step trust boundary, daemon secrets posture, fault-record redaction rules, stream auth requirement. Stream protocol, self-heal semantics, scheduler-trigger promotion, and server metrics API reserved for v0.7.x. `/sop/*` HTTP contract unchanged. |
+| 0.7 | Process status model (§9): canonical process states (`open`/`scheduled`/`running`) and rollup fields (`last_status`, `last_run_at`, `next_run_at`). Reliability metrics contract (§10): per-step `duration_ms`, `model`, `tokens_in`, `tokens_out`, `result_hash`, `token_source` in run receipts; top-level manifest `duration_ms`; resumed-completion `duration_ms` + `result_hash` on completed events written by `local_submit` (C1a follow-up); `duration_ms` + `result_hash:"pending"` on subprocess and webhook-callback waiting events (C1a follow-up); manifest total-duration-on-resume recomputed as full wall time from run start (C1a follow-up); the aggregated `metrics` block is reserved for v0.7.x. Security model (§11): no-telemetry statement, shell-step trust boundary, daemon secrets posture, fault-record redaction rules, stream auth requirement. Stream protocol, self-heal semantics, scheduler-trigger promotion, and server metrics API reserved for v0.7.x. `/sop/*` HTTP contract unchanged. |
 
 ## Appendix B — Flat vs. wrapped envelope quick reference
 

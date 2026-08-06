@@ -11,6 +11,30 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Added
 
+- **C1a follow-up: reliability metrics on resumed steps.** Completes the deferred
+  piece of §10 (SPEC v0.7). Three behaviors now ship:
+
+  1. **Resumed-completion `duration_ms` + `result_hash`**: the **completed** event
+     appended by `local_submit` now carries `duration_ms` (time from submit start
+     to receipt write) and `result_hash` (SHA-256 of the canonical output, using
+     the exact byte contract from C1a — same `_sha256` helper, same `jq -Sc` +
+     `printf '%s'` no-trailing-newline pipeline). Result is reproducible: same
+     submitted output → same 64-char hex digest across runs.
+
+  2. **Manifest total duration on resume**: when `local_submit` brings a run to
+     a terminal state (`completed` or `failed`), `manifest.duration_ms` is
+     recomputed as total wall time from `manifest.started_at` (via jq's
+     `fromdateiso8601`). Previously only the pre-pause segment was recorded.
+
+  3. **Subprocess/callback waiting events**: `subprocess` (child-paused propagation)
+     and webhook `callback` mode waiting events now carry `duration_ms` (start →
+     pause) and `result_hash: "pending"` — matching the contract already shipped for
+     `form`/`approval`/`wait.until` in C1a.
+
+  SPEC §10.2 and §10.3 "reserved for v0.7.x" caveats removed; spec now matches
+  the shipped CLI. Note: this is a CLI-local receipt contract; no Rails counterpart
+  required (Rails tracks step timing separately in `sop_llm_calls`).
+
 - **C2: `bench/demo/` — reproducible comparison video.** Graduates the C2 terminal
   recording from the `spike/c0-bench` branch onto main. The demo replays verified
   outputs from the 60-run benchmark (3 arms × 2 models × 10 runs) without making
