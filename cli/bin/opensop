@@ -1215,6 +1215,8 @@ EOF
 #   - A companion .sha256 file is fetched and the download verified before
 #     any file is touched.  If the checksum file is absent, --allow-unverified
 #     must be passed explicitly or the upgrade aborts.
+#   - Note: the checksum and the binary come from the same origin — this verifies
+#     transfer integrity, not source authenticity.  See cli/README.md.
 #   - Temp file is created INSIDE the destination directory (same filesystem)
 #     so mv is always atomic.  No cp fallback with a truncation window.
 #   - Destination file mode is preserved (or defaulted to 0755) before rename.
@@ -1377,7 +1379,7 @@ cmd_upgrade() {
     if ! $allow_unverified; then
       die "no checksum file found at ${checksum_url} — cannot verify download integrity" \
           "cli_error" \
-          "pass --allow-unverified to skip verification (not recommended); GPG signing is planned"
+          "pass --allow-unverified to skip verification (not recommended); see 'Install verification & threat model' in cli/README.md"
     fi
     warn "no checksum file found — proceeding unverified (--allow-unverified passed)"
   fi

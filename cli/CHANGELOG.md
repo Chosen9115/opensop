@@ -93,6 +93,17 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Security
 
+- **Honest threat-model documentation; removed unshipped signing promise.**
+  Added "Install verification & threat model" section to `cli/README.md` explaining
+  exactly what SHA-256 checksum verification protects against (transfer corruption)
+  and what it does not (a compromised source, since the binary and checksum share
+  the same GitHub origin). Removed the promise "GPG signing is planned" from
+  `install.sh`, `bin/opensop` (`cmd_upgrade`), and the README — we won't ship a
+  promise we haven't implemented. The die-message and hint text in both tools now
+  point to the README threat-model section instead. A note clarifying the
+  same-origin limitation is added to the header comment of `install.sh` and to the
+  Security block of the `cmd_upgrade` comment in `bin/opensop`.
+
 - **E1 trust-boundary fix: removed `--task <dir>` from `opensop onboard`.**
   `onboard --task <dir>` forwarded an untrusted directory into `cmd_bench`, which sources
   `.env.local` and executes `shell`/`automated` steps from processes in that directory —

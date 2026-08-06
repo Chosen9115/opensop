@@ -61,6 +61,7 @@ Versions are tagged and mirrored to GitHub Releases (`v0.1.0` … current). To c
 3. Promote `CHANGELOG.md`'s `[Unreleased]` to `## [X.Y.Z] — <date>` and add the compare link at the bottom (`[X.Y.Z]: .../compare/<prev>...vX.Y.Z`).
 4. Commit (`bin/opensop` + `bin/opensop.sha256` in the same commit), then `git tag -a vX.Y.Z`, push the branch and the tag.
 5. `gh release create vX.Y.Z --latest --notes-file <changelog-section>`.
+6. Paste the `bin/opensop.sha256` digest into the GitHub Release notes (a second published surface for the digest — note it is same-account, so it aids reproducibility, not authenticity against account compromise).
 
 Follow [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/). A change to flag meaning (e.g. `--local`) is **breaking** — call it out.
 
