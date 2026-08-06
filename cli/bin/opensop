@@ -3021,8 +3021,15 @@ local_run() {
   run_id="$(_local_run_id)"; run_dir="$OPENSOP_LOCAL_HOME/runs/$run_id"
   mkdir -p "$run_dir"; started="$(_local_now)"; started_ms="$(_local_now_ms)"
   trap '_local_finalize_trap "$run_dir"' EXIT    # safety net: never leave a run "running"
-  jq -nc --arg n "$name" --arg p "$proc_file" --arg id "$run_id" --arg t "$started" --argjson inp "$ctx" \
-    '{run_id:$id, process:$n, process_file:$p, started_at:$t, status:"running", inputs:$inp}' > "$run_dir/manifest.json"
+  # started_at_ms: millisecond-precision epoch timestamp for the run start.
+  # Written additively alongside started_at (second-granular ISO string) so that
+  # local_submit can compute total wall time without the 0–999 ms rounding error
+  # that fromdateiso8601 introduces.  Old manifests without this field are handled
+  # by local_submit's backward-compat fallback.
+  jq -nc --arg n "$name" --arg p "$proc_file" --arg id "$run_id" --arg t "$started" \
+        --argjson sms "$started_ms" --argjson inp "$ctx" \
+    '{run_id:$id, process:$n, process_file:$p, started_at:$t, started_at_ms:$sms, status:"running", inputs:$inp}' \
+    > "$run_dir/manifest.json"
 
   local loop_status
   loop_status="$(_local_step_loop "$run_dir" "$proc_file" 0 "$ctx")"
@@ -3824,10 +3831,14 @@ $llm_rendered_prompt"
               fi
               if [[ "$wh_ok" == true ]]; then
                 # Outbound request succeeded — now pause.
+                # C1a follow-up: add duration_ms (start→pause) + result_hash:"pending"
+                # to match the contract already implemented for form/approval/wait.until.
+                local _wh_cb_pause_ms; _wh_cb_pause_ms=$(( $(_local_now_ms) - s_started_ms ))
                 jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
-                       --arg a "$s_started" --arg cb "$wh_cb_id" \
+                       --arg a "$s_started" --arg cb "$wh_cb_id" --argjson dur "$_wh_cb_pause_ms" \
                   '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
-                    reason:"waiting_for_callback", callback_id:$cb, started_at:$a}' >> "$audit"
+                    reason:"waiting_for_callback", callback_id:$cb, started_at:$a,
+                    duration_ms:$dur, result_hash:"pending"}' >> "$audit"
                 echo "waiting:$i"
                 return 0
               fi ;;
@@ -3945,16 +3956,19 @@ $llm_rendered_prompt"
           # We capture the manifest JSON from the child and inspect its status.
           local sp_child_name; sp_child_name="$(jq -r '.name // "unnamed"' "$sp_child_file")"
           local sp_child_started; sp_child_started="$(_local_now)"
+          local sp_child_started_ms; sp_child_started_ms="$(_local_now_ms)"
           local sp_depth_next; sp_depth_next=$(( ${OSL_DEPTH:-0} + 1 ))
 
           # Write child manifest (mirrors local_run's initial manifest write).
+          # started_at_ms provides millisecond precision for total wall-time computation.
           jq -nc \
             --arg n "$sp_child_name" \
             --arg p "$sp_child_file" \
             --arg id "$sp_child_run_id" \
             --arg t "$sp_child_started" \
+            --argjson sms "$sp_child_started_ms" \
             --argjson inp "$sp_child_ctx" \
-            '{run_id:$id, process:$n, process_file:$p, started_at:$t, status:"running", inputs:$inp}' \
+            '{run_id:$id, process:$n, process_file:$p, started_at:$t, started_at_ms:$sms, status:"running", inputs:$inp}' \
             > "$sp_child_run_dir/manifest.json"
 
           # Run the child step loop directly (reuse _local_step_loop, no subshell overhead).
@@ -4004,10 +4018,15 @@ $llm_rendered_prompt"
                 && mv "$sp_child_run_dir/manifest.json.tmp" "$sp_child_run_dir/manifest.json"
 
               # Append a waiting audit receipt for this parent step.
+              # C1a follow-up: add duration_ms (start→pause) + result_hash:"pending"
+              # to match the contract already implemented for form/approval/wait.until.
+              local _sp_pause_ms; _sp_pause_ms=$(( $(_local_now_ms) - s_started_ms ))
               jq -nc --arg rid "$run_id" --arg sid "$sid" --arg t "$stype" --arg ex "$sexec" \
                      --arg a "$s_started" --arg crid "$sp_child_run_id" --arg crdir "$sp_child_run_dir" \
+                     --argjson dur "$_sp_pause_ms" \
                 '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"waiting",
-                  reason:"waiting_for_callback", child_run_id:$crid, child_run_dir:$crdir, started_at:$a}' >> "$audit"
+                  reason:"waiting_for_callback", child_run_id:$crid, child_run_dir:$crdir, started_at:$a,
+                  duration_ms:$dur, result_hash:"pending"}' >> "$audit"
               echo "waiting:$i"
               return 0 ;;
 
@@ -4144,6 +4163,11 @@ $llm_rendered_prompt"
 # Contract: never re-runs steps at index < cursor.next_index (idempotency).
 local_submit() {
   [[ $# -lt 2 ]] && die "usage: opensop submit <run_id> <step-id> [--output KEY=VALUE ...] [--outputs '<json>'] [--decided-by WHO]" "usage_error" "run opensop help"
+  # Capture timing at function entry — measures the full submission processing
+  # interval: arg parsing, validation, process/context loading, output normalization,
+  # context merge, receipt construction, and receipt write.  Anything that happens
+  # before the receipt is appended counts as submission work.
+  local submit_start_ms; submit_start_ms="$(_local_now_ms)"
   local run_id="$1" step_id="$2"; shift 2
 
   local run_dir="$OPENSOP_LOCAL_HOME/runs/$run_id"
@@ -4245,14 +4269,36 @@ local_submit() {
   fi
   local audit="$run_dir/audit.jsonl"
   local submitted_at; submitted_at="$(_local_now)"
+
+  # C1a follow-up: compute result_hash for the submitted output using the EXACT
+  # same byte contract as _local_step_loop: jq -Sc (sorted keys, compact) with no
+  # trailing newline (command substitution strips it), piped through _sha256.
+  # Reuses the existing _sha256 helper — do NOT reimplement.
+  local submit_result_hash _submit_canon
+  _submit_canon="$(jq -Sc . <<<"$out_json" 2>/dev/null)" || _submit_canon=""
+  submit_result_hash="$(printf '%s' "$_submit_canon" | _sha256 2>/dev/null || true)"
+  submit_result_hash="${submit_result_hash:0:64}"
+  [[ -z "$submit_result_hash" ]] && submit_result_hash="unavailable"
+
+  # Measure duration up to — and including — the receipt write.  Capture end time
+  # immediately before the append so the computed value is already in-hand when jq
+  # serialises the receipt; the append itself is sub-millisecond.  The interval
+  # covers: arg parsing, payload construction, schema validation, process/context
+  # loading, output normalisation, context merge, and receipt construction — the
+  # full submission processing interval per SPEC §10.2.
+  local submit_end_ms; submit_end_ms="$(_local_now_ms)"
+  local submit_duration_ms; submit_duration_ms=$(( submit_end_ms - submit_start_ms ))
+
   jq -nc \
     --arg rid "$run_id" --arg sid "$step_id" --arg t "$resumed_stype" --arg ex "$resumed_sexec" \
     --arg a "$submitted_at" --arg b "$submitted_at" \
     --argjson out "$out_json" \
     --arg db "$decided_by" \
     --arg conf "$confidence" \
+    --argjson dur "$submit_duration_ms" \
+    --arg rh "$submit_result_hash" \
     '{run_id:$rid, step:$sid, type:$t, executor:$ex, status:"completed",
-      exit_code:0, started_at:$a, ended_at:$b, output:$out}
+      exit_code:0, started_at:$a, ended_at:$b, duration_ms:$dur, result_hash:$rh, output:$out}
      + (if $db   != "" then {decided_by:$db} else {} end)
      + (if $conf != "" then {confidence:($conf | tonumber)} else {} end)' >> "$audit"
 
@@ -4329,7 +4375,33 @@ local_submit() {
   fi
 
   local ended; ended="$(_local_now)"
-  jq -c --arg s "$run_status" --arg e "$ended" '.status=$s | .ended_at=$e' \
+  # Recompute manifest.duration_ms as TOTAL wall time from run start to now.
+  # The pre-pause value (written by local_run) only covered start→pause;
+  # now that the run has reached a terminal state we replace it with full end-to-end
+  # wall time regardless of how long the run was paused between steps.
+  #
+  # Precision strategy (backward-compat):
+  #   1. Prefer started_at_ms (millisecond-epoch, written by local_run v0.7+).
+  #      This avoids the 0–999 ms rounding error of ISO second-granular timestamps.
+  #   2. Fall back to fromdateiso8601 on started_at (second-granular) if started_at_ms
+  #      is absent — for manifests written by older CLI versions.
+  #   3. If both are null/missing/unparsable, emit null rather than an absurd value
+  #      derived from epoch-0 arithmetic.
+  local now_ms_for_total; now_ms_for_total="$(_local_now_ms)"
+  local total_duration_ms
+  total_duration_ms="$(jq -r --argjson now_ms "$now_ms_for_total" '
+    if .started_at_ms != null and (.started_at_ms | type) == "number" then
+      ($now_ms - .started_at_ms) | if . < 0 then 0 else . end
+    elif .started_at != null and (.started_at | type) == "string" and (.started_at | . != "") then
+      ($now_ms - ((.started_at | fromdateiso8601) * 1000 | floor)) | if . < 0 then 0 else . end
+    else
+      null
+    end
+  ' "$mf" 2>/dev/null)" || total_duration_ms="null"
+  [[ -z "$total_duration_ms" ]] && total_duration_ms="null"
+  # Pass duration as a JSON value (number or null) — jq --argjson handles both.
+  jq -c --arg s "$run_status" --arg e "$ended" --argjson dur "$total_duration_ms" \
+     '.status=$s | .ended_at=$e | .duration_ms=$dur' \
      "$mf" > "$mf.tmp" && mv "$mf.tmp" "$mf"
   trap - EXIT
 
