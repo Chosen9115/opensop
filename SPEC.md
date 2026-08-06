@@ -1834,7 +1834,7 @@ the process operates on personal data.
 **Rules for fault records:**
 
 1. Fault records are local files and must not be pushed to version control.
-   Conforming implementations should include `**/*.fault.json` and
+   Conforming implementations should include `**/fault.json` and
    `.opensop/faults/` in `.gitignore` templates.
 2. Before a fault record is shared externally (e.g. via a future
    `opensop heal --share`), a conforming implementation must provide a

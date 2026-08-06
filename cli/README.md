@@ -392,6 +392,7 @@ Commands marked **[remote]** require `--remote` or `--server <url>`. All others 
 | `opensop cancel <run_id> [--reason TEXT]` | Cancel a local run (or **[remote]** with `--remote`) |
 | `opensop runs` | List all local runs |
 | `opensop show <run_id>` | Local run manifest + per-step receipts |
+| `opensop heal <run_id> [--apply] [--input k=v ...]` | Diagnose a failed run (print fault + debug_prompt); `--apply` re-runs the failed step and continues from there (closed heal loop). Fault records may contain input data — local only, never committed (SPEC §11.4). |
 | **Authoring** | |
 | `opensop register <process.yaml>` | **[remote]** POST a `.sop.yaml` to `/sop/processes/register` — requires `--remote` or `--server` |
 | `opensop schema validate <file.yaml>` | Client-side YAML lint — always local, no server round-trip |
