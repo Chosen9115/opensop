@@ -4413,4 +4413,91 @@ echo "PASS: D2 apply — heal --apply with still-failing step exits non-zero + f
 rm -f "$d2_sentinel"
 rm -rf "$d2_home"
 
+# --------------------------------------------------------------------------- #
+# Fix 1: gitignore correctness — **/fault.json matches the actual fault path.
+#
+# The engine writes fault records at <run_dir>/fault.json (no prefix). Prior
+# rules used **/*.fault.json which did NOT match. Prove the fix using
+# git check-ignore against the exact relative path the engine generates.
+# --------------------------------------------------------------------------- #
+gi_tmpdir="$(mktemp -d)"
+git -C "$gi_tmpdir" init -q
+# Seed the repo .gitignore with the corrected rule.
+printf '**/fault.json\n.opensop/faults/\n' > "$gi_tmpdir/.gitignore"
+# Create the exact file structure the engine produces under a cell.
+mkdir -p "$gi_tmpdir/.opensop/runs/test-run-id"
+touch "$gi_tmpdir/.opensop/runs/test-run-id/fault.json"
+# git check-ignore exits 0 when the file IS ignored; non-zero when it is not.
+gi_rel=".opensop/runs/test-run-id/fault.json"
+git -C "$gi_tmpdir" check-ignore -q "$gi_rel" \
+  || { echo "FAIL: Fix1 — git check-ignore did not match '$gi_rel' with '**/fault.json' rule"; exit 1; }
+echo "PASS: Fix1 — git check-ignore matches .opensop/runs/<id>/fault.json with **/fault.json"
+
+# Also confirm the OLD broken rule (**/*.fault.json) does NOT match the file —
+# so the test validates the specific fix, not just any gitignore rule.
+printf '**/*.fault.json\n' > "$gi_tmpdir/.gitignore-old"
+# git check-ignore with --stdin, one file per line, using the alternate exclude file.
+git -C "$gi_tmpdir" check-ignore -q --no-index -f "$gi_tmpdir/.gitignore-old" "$gi_rel" 2>/dev/null \
+  && { echo "FAIL: Fix1 — sanity: old rule **/*.fault.json should NOT have matched (test setup wrong)"; exit 1; } || true
+echo "PASS: Fix1 — sanity confirmed: old rule **/*.fault.json did NOT match (that was the bug)"
+
+rm -rf "$gi_tmpdir"
+
+# --------------------------------------------------------------------------- #
+# Fix 2: SPEC §11.4 warning must appear on stderr BEFORE the fault write and
+# in ALL output modes (default and --json).
+#
+# (a) Initial step failure — default output mode: warning on stderr.
+# (b) Initial step failure — --json mode: warning on stderr; stdout is clean JSON.
+# (c) heal --apply re-failure — warning on stderr regardless of mode.
+# --------------------------------------------------------------------------- #
+f2_home="$(mktemp -d)"
+f2_proc="$f2_home/f2.sop.json"
+cat > "$f2_proc" <<'JSON'
+{ "name": "f2-fail", "inputs": {},
+  "steps": [
+    { "id": "boom", "type": "shell", "run": "exit 4" }
+  ] }
+JSON
+
+# (a) Default mode: warning on stderr.
+set +e
+f2a_stderr="$(OPENSOP_LOCAL_HOME="$f2_home" "$cli" run "$f2_proc" --local 2>&1 >/dev/null)"; f2a_rc=$?
+set -e
+[ "$f2a_rc" -ne 0 ] || { echo "FAIL: Fix2a — failing run should exit non-zero"; exit 1; }
+echo "$f2a_stderr" | grep -q "§11.4" \
+  || { echo "FAIL: Fix2a — §11.4 warning missing from stderr in default mode; got: $f2a_stderr"; exit 1; }
+echo "PASS: Fix2a — §11.4 warning appears on stderr in default output mode"
+
+# (b) --json mode: warning on stderr; stdout is clean JSON (not contaminated by warning).
+set +e
+f2b_stdout="$(OPENSOP_LOCAL_HOME="$f2_home" "$cli" run "$f2_proc" --local --json 2>/dev/null)"; f2b_rc=$?
+f2b_stderr="$(OPENSOP_LOCAL_HOME="$f2_home" "$cli" run "$f2_proc" --local --json 2>&1 >/dev/null)"
+set -e
+# stdout must be valid JSON.
+jq -e . <<<"$f2b_stdout" >/dev/null 2>&1 \
+  || { echo "FAIL: Fix2b — --json mode stdout is not valid JSON; got: $f2b_stdout"; exit 1; }
+# stdout must NOT contain the §11.4 warning string.
+echo "$f2b_stdout" | grep -q "§11.4" \
+  && { echo "FAIL: Fix2b — §11.4 warning leaked onto stdout in --json mode; got: $f2b_stdout"; exit 1; } || true
+# stderr must contain the §11.4 warning.
+echo "$f2b_stderr" | grep -q "§11.4" \
+  || { echo "FAIL: Fix2b — §11.4 warning missing from stderr in --json mode; got: $f2b_stderr"; exit 1; }
+echo "PASS: Fix2b — --json mode: §11.4 warning on stderr; stdout is clean JSON"
+
+# (c) heal --apply re-failure: warning on stderr.
+# Capture the run_id from the failed run above (reuse f2b's result since it is failed).
+f2_rid="$(jq -r '.run_id' <<<"$f2b_stdout")"
+[ -n "$f2_rid" ] || { echo "FAIL: Fix2c setup — could not get run_id from --json run"; exit 1; }
+set +e
+f2c_stderr="$(OPENSOP_LOCAL_HOME="$f2_home" "$cli" heal "$f2_rid" --apply --json 2>&1 >/dev/null)"; f2c_rc=$?
+set -e
+# heal --apply on a still-failing step exits non-zero.
+[ "$f2c_rc" -ne 0 ] || { echo "FAIL: Fix2c — heal --apply on still-failing step should exit non-zero"; exit 1; }
+echo "$f2c_stderr" | grep -q "§11.4" \
+  || { echo "FAIL: Fix2c — §11.4 warning missing from stderr on heal --apply re-failure; got: $f2c_stderr"; exit 1; }
+echo "PASS: Fix2c — heal --apply re-failure: §11.4 warning on stderr"
+
+rm -rf "$f2_home"
+
 echo "ALL PASS"

@@ -3657,8 +3657,10 @@ $llm_rendered_prompt"
       [[ "$OUTPUT_MODE" != json ]] && err "[$sid] failed (exit $rc): $(jq -rc '.stdout // .' <<<"$out_json" | head -c 160)"
       if [ "$scont" != "true" ]; then
         # D2: write fault record before returning "failed".
-        # Per SPEC §11.4: fault records are sensitive — warn the user, keep local.
+        # Per SPEC §11.4 rule 3: warn the user BEFORE writing, unconditionally
+        # (stderr always; never stdout — preserves machine-readable stdout in --json mode).
         local fault_file="$run_dir/fault.json"
+        warn "SPEC §11.4: writing fault record — may contain process input data; keep local, do not commit"
         local fault_ts; fault_ts="$(_local_now)"
         # Snapshot the step definition for the debug_prompt (schema, prompt, etc.)
         local step_def; step_def="$(jq -c ".steps[$i]" "$proc_file" 2>/dev/null || echo '{}')"
@@ -3701,11 +3703,7 @@ $llm_rendered_prompt"
         jq -c --arg f "$fault_file" '. + {fault_file:$f}' \
           "$run_dir/manifest.json" > "$run_dir/manifest.json.tmp" \
           && mv "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
-        # SPEC §11.4 rule 3: warn that the fault record contains input data.
-        if [[ "$OUTPUT_MODE" != "json" ]]; then
-          err "fault record written: $fault_file"
-          err "WARNING: fault records may contain process input data — keep local, do not commit (see SPEC §11.4)"
-        fi
+        warn "fault record written: $fault_file"
         echo "failed"; return 0
       fi
       ctx="$(jq -c --arg id "$sid" --argjson o "$out_json" '.[$id]=$o' <<<"$ctx")"
@@ -4953,10 +4951,9 @@ local_heal() {
         "the process definition may have changed; ensure the step still exists"
   fi
 
-  # Warn about input data per SPEC §11.4.
-  if [[ "$OUTPUT_MODE" != "json" ]]; then
-    err "WARNING: heal --apply re-runs a step that may have received sensitive input data (see SPEC §11.4)"
-  fi
+  # SPEC §11.4 rule 3: warn before proceeding with a step that may expose sensitive input data.
+  # Unconditional — always emitted to stderr (never stdout), so --json mode stays clean.
+  warn "SPEC §11.4: heal --apply re-runs a step that may have received sensitive input data"
 
   # Load context from last checkpoint (context.json) or manifest inputs.
   local ctx
