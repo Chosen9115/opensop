@@ -1,0 +1,24 @@
+{
+  "name": "extract-action-items",
+  "version": "1.0",
+  "description": "Extract action items (owner + task) from meeting notes and return JSON matching the action-items schema.",
+  "inputs": {
+    "meeting_notes": ""
+  },
+  "steps": [
+    {
+      "id": "extract",
+      "type": "llm",
+      "model": "claude-haiku-4-5-20251001",
+      "prompt_file": "../prompts/opensop.txt",
+      "expected_output_schema": {
+        "action_items": {
+          "type": "array",
+          "required": true
+        }
+      },
+      "max_retries": 2,
+      "retry_on_incomplete": true
+    }
+  ]
+}

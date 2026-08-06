@@ -1,0 +1,65 @@
+Q3 Product Review — Weekly Sync
+Date: 2026-08-05  |  Duration: 45 min
+Attendees: Alice Chen (PM), Bob Navarro (Eng), Carol Singh (Design), Dave Wu (QA)
+
+---
+
+AGENDA ITEMS
+
+1. Sprint retrospective
+
+Alice opened by summarising last sprint. Velocity was lower than planned due to
+on-call interruptions. Bob noted that three of the five stories were blocked on
+design sign-off, which arrived late. Carol acknowledged the delay and committed
+to reviewing PRs within 24 hours going forward.
+
+Key discussion point: the staging environment was unavailable for two days,
+which delayed QA sign-off on the payments flow. Dave flagged this as a recurring
+pattern — the fourth time this quarter that a staging outage caused a slip.
+
+2. Upcoming release: v2.4
+
+The team reviewed the checklist for the v2.4 release, targeting 2026-08-19.
+Two items remain open:
+
+  a) The export CSV feature still has a race condition when downloads exceed
+     500 rows. Bob owns the fix; he estimated two days of work.
+
+  b) The dashboard accessibility audit is pending. Carol needs to complete the
+     WCAG 2.1 AA sweep before the release can be cleared by the compliance team.
+
+Dave raised a concern about regression coverage for the payments flow. He will
+write three additional integration tests covering the edge cases identified
+during the staging outage.
+
+3. Dependency upgrades
+
+Bob mentioned that the team is two major versions behind on the data-grid
+library. He proposed scheduling a dedicated upgrade sprint after v2.4 ships.
+Alice agreed and asked Bob to file a planning ticket so it stays visible.
+
+4. Customer escalations
+
+Alice briefed the team on two escalations received via support this week.
+Both relate to the batch-import feature introduced in v2.2. Alice will follow
+up with the customers and loop in Carol to review the UX flow for edge cases.
+
+---
+
+DECISIONS
+
+- v2.4 target date confirmed: 2026-08-19.
+- Staging environment reliability will be raised as a P1 in the infrastructure
+  backlog by Alice before end of week.
+
+---
+
+ACTION ITEMS
+
+1. Bob Navarro — Fix the CSV export race condition before 2026-08-12.
+2. Carol Singh — Complete the WCAG 2.1 AA accessibility audit by 2026-08-15.
+3. Dave Wu — Write integration tests for payments-flow edge cases by 2026-08-14.
+
+---
+
+Next sync: 2026-08-12, same time.

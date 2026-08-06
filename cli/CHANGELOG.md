@@ -72,6 +72,36 @@ This project follows [Semantic Versioning](https://semver.org/) and the
   applies only to this `--apply` loop; `heal` without `--apply` is diagnosis only.
 
   Registry entry: category `execution`, backend `local`. Wired in `main()`.
+- **C1b: `opensop bench` — 3-arm reliability comparison command.** Runs the
+  honest comparison from the C0 spike as a shipped, productized subcommand.
+
+  - **3 arms:** `skill` (naive prose prompt), `json_only` (same ask + JSON
+    demand, no scope rule — isolates format from scope), `opensop` (runs
+    `.sop.json` process via `opensop run`, gets schema-validation + retries).
+    Exact prompts are in `cli/bench/prompts/`.
+  - **Scoring:** reliability = schema-valid AND field-level match against
+    `cli/bench/fixtures/expected.json`. Case-insensitive (owner, task) set
+    equality via `jq -S`; order-independent. Reuses `cli/bench/measure/checker.sh`
+    from the C0 spike. Prints schema-valid and field-match counts separately so
+    the "format alone doesn't buy reliability" story is legible.
+  - **Metrics per arm over N runs (default 10):** reliability (field_match/N),
+    schema_valid count, median duration (ms), median output tokens. LLM output
+    tokens read from C1a audit receipts for the opensop arm; character count for
+    direct-call arms.
+  - **No API key needed for offline self-test:** `opensop bench --stub` runs
+    the full scoring path using hardcoded stub responses (no network calls,
+    no key). Live runs require `ANTHROPIC_API_KEY`.
+  - **Graceful fail when key missing:** exits non-zero with `config_missing`
+    error and a clear message pointing to `--stub` and the env-var setup.
+  - **`--json` output:** machine-readable scoreboard
+    `{model, n_per_arm, stub, arms: [{arm, reliability, ...}], methodology}`.
+  - **Built-in default task:** `cli/bench/fixtures/` (synthetic
+    Alice/Bob/Carol/Dave meeting notes), `cli/bench/processes/`,
+    `cli/bench/prompts/`, `cli/bench/schema/` — brought from the C0 spike
+    verbatim (already placeholder-clean).
+  - **Registered** in `_registry_raw` (category `bench`, backend `local`);
+    wired in `main()` dispatch; help examples added; README subcommand table
+    updated.
 
 - **C1a: Reliability metrics in local run receipts.** Each executed step's audit entry carries:
   - `duration_ms` — wall-clock milliseconds for that step (via `date +%s%3N`; falls back to

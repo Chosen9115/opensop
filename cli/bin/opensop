@@ -728,6 +728,7 @@ schema validate|client-side YAML lint — no server round-trip|schema validate <
 instances|list runs — local by default, paginated server list with --remote|instances [--state X] [--process Y]|admin|dual
 config|show or set remote server config (url and token)|config [set url <URL>; set token <TOKEN>]|config|local
 help|show help for a command or the full command reference|help [<command>] [--json]|config|local
+bench|3-arm reliability comparison: skill vs json_only vs opensop over N runs|bench [<task-dir>] [--n N] [--model MODEL] [--arm ARMNAME] [--stub]|bench|local
 REGISTRY
 }
 
@@ -1097,6 +1098,16 @@ EX
   opensop help run                             # per-command detail
   opensop help agents                          # agent quick-start
   opensop help --json                          # machine-readable command index
+EX
+      ;;
+    bench)
+      cat <<'EX'
+  opensop bench                                # built-in task, 10 runs, haiku, all arms
+  opensop bench --stub                         # offline self-test (no API key needed)
+  opensop bench --n 5 --model claude-sonnet-4-6  # 5 runs with Sonnet
+  opensop bench --arm opensop                  # opensop arm only
+  opensop bench --json                         # machine-readable scoreboard
+  opensop bench /path/to/my-task              # custom task directory
 EX
       ;;
     *)
@@ -2957,9 +2968,14 @@ $llm_rendered_prompt"
 
             # [LOW] curl call uses a bash array so $ANTHROPIC_API_KEY and the
             # request body are not subject to word-splitting (mirrors wh_curl_args).
+            # [FIX1] Bounded timeouts: --connect-timeout 10 --max-time 120 so a
+            # stalled connection cannot hang the engine indefinitely.  A timeout
+            # surfaces via curl's non-zero exit, which sets rc=1 below and follows
+            # the existing failure path (step recorded as failed, run aborted).
             local llm_resp_tmp; llm_resp_tmp="$(mktemp)"
             local llm_http_status
-            local llm_curl_args=(-sS -X POST "https://api.anthropic.com/v1/messages"
+            local llm_curl_args=(-sS --connect-timeout 10 --max-time 120
+              -X POST "https://api.anthropic.com/v1/messages"
               -H "x-api-key: $ANTHROPIC_API_KEY"
               -H "anthropic-version: 2023-06-01"
               -H "content-type: application/json"
@@ -5074,6 +5090,594 @@ local_heal() {
   [ "$heal_run_status" = "completed" ] || [ "$heal_run_status" = "waiting" ]
 }
 
+# =========================================================================== #
+# BENCH  (C1b)
+#
+# 3-arm reliability comparison: skill vs json_only vs opensop, over N runs,
+# scoring each output against a field-level checker.  Built-in default task:
+# extract-action-items (fixtures in cli/bench/).  Live runs need
+# ANTHROPIC_API_KEY; --stub mode uses the opensop LLM stub for offline tests.
+# =========================================================================== #
+
+# _bench_find_dir — locate the cli/bench directory relative to this script.
+# The script may be installed anywhere; walk up from its real path.
+_bench_find_dir() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # bin/opensop lives in <repo>/cli/bin/ → bench is at <repo>/cli/bench/
+  local candidate; candidate="$(cd "$script_dir/.." && pwd)/bench"
+  if [[ -d "$candidate/fixtures" ]]; then
+    echo "$candidate"; return 0
+  fi
+  return 1
+}
+
+# _bench_strip_fences — remove markdown code fences from LLM output.
+_bench_strip_fences() {
+  printf '%s' "$1" \
+    | sed -E 's/^[[:space:]]*```(json)?[[:space:]]*//' \
+    | sed -E 's/[[:space:]]*```[[:space:]]*$//'
+}
+
+# _bench_check_output RAW_JSON EXPECTED_FILE
+# Calls the checker from bench/measure/checker.sh.
+# Emits: {"schema_valid": bool, "field_match": bool, "detail": "..."}
+_bench_check_output() {
+  local raw_text="$1" expected_file="$2"
+  check_output "$raw_text" "$expected_file" 2>/dev/null \
+    || echo '{"schema_valid":false,"field_match":false,"detail":"checker error"}'
+}
+
+# _bench_median — median of a newline-separated list of numbers (via jq).
+_bench_median() {
+  jq -s 'sort | if length == 0 then null elif (length % 2) == 1 then .[(length/2|floor)] else (.[length/2-1] + .[length/2]) / 2 end'
+}
+
+# _bench_now_ms — wall-clock milliseconds.
+_bench_now_ms() {
+  date +%s%3N 2>/dev/null || echo $(( $(date +%s) * 1000 ))
+}
+
+# cmd_bench — opensop bench [<task-dir>] [--n N] [--model MODEL] [--arm ARM] [--stub] [--json]
+cmd_bench() {
+  local task_dir="" n_runs=10 model="claude-haiku-4-5-20251001"
+  local arm_filter="all" stub_mode=false
+
+  # Parse args  (--json is already consumed by main()'s global flag strip;
+  # read it from OUTPUT_MODE which is set globally for the whole invocation)
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --n)        n_runs="$2"; shift 2 ;;
+      --n=*)      n_runs="${1#--n=}"; shift ;;
+      --model)    model="$2"; shift 2 ;;
+      --model=*)  model="${1#--model=}"; shift ;;
+      --arm)      arm_filter="$2"; shift 2 ;;
+      --arm=*)    arm_filter="${1#--arm=}"; shift ;;
+      --stub)     stub_mode=true; shift ;;
+      --json)     OUTPUT_MODE="json"; shift ;;  # in case called before main() strip
+      --help|-h)
+        printf 'usage: opensop bench [<task-dir>] [--n N] [--model MODEL] [--arm skill|json_only|opensop|all] [--stub] [--json]\n'
+        printf '\n'
+        printf '  Run a 3-arm reliability comparison (skill / json_only / opensop) over N runs.\n'
+        printf '  Default task: built-in extract-action-items (bench/fixtures/).\n'
+        printf '  Live runs require ANTHROPIC_API_KEY.  --stub runs offline (no API calls).\n'
+        printf '\n'
+        printf 'Examples:\n'
+        _cmd_help_examples bench
+        return 0
+        ;;
+      -*)
+        die "unknown flag: $1" "unknown_flag" "opensop bench --help"
+        ;;
+      *)
+        task_dir="$1"; shift
+        ;;
+    esac
+  done
+
+  # Resolve json_out from OUTPUT_MODE (which main() sets from the global --json flag
+  # before dispatching; the per-command --json above handles the standalone case).
+  local json_out=false
+  [[ "$OUTPUT_MODE" == "json" ]] && json_out=true
+
+  # Validate n_runs is a positive integer
+  [[ "$n_runs" =~ ^[1-9][0-9]*$ ]] \
+    || die "--n must be a positive integer, got: $n_runs" "usage_error" "opensop bench --n 10"
+
+  # Validate arm_filter
+  case "$arm_filter" in
+    all|skill|json_only|opensop) ;;
+    *) die "unknown arm: $arm_filter (must be skill, json_only, opensop, or all)" "usage_error" "opensop bench --arm skill" ;;
+  esac
+
+  # Locate built-in bench dir if no task_dir given
+  local bench_dir
+  if [[ -z "$task_dir" ]]; then
+    bench_dir="$(_bench_find_dir)" \
+      || die "built-in bench dir not found (expected adjacent to bin/opensop at ../bench)" \
+             "file_not_found" "pass an explicit task-dir: opensop bench <path>"
+    task_dir="$bench_dir"
+  fi
+
+  # Verify required files exist
+  local fixture_notes="$task_dir/fixtures/meeting-notes.txt"
+  local expected_json="$task_dir/fixtures/expected.json"
+  local checker_sh="$task_dir/measure/checker.sh"
+  local proc_file="$task_dir/processes/extract-action-items.sop.json"
+  local prompt_skill="$task_dir/prompts/skill.txt"
+  local prompt_json_only="$task_dir/prompts/json_only.txt"
+
+  for f in "$fixture_notes" "$expected_json" "$checker_sh" "$proc_file" "$prompt_skill" "$prompt_json_only"; do
+    [[ -f "$f" ]] || die "required bench file missing: $f" "file_not_found" \
+        "ensure bench fixtures are present (opensop bench --help)"
+  done
+
+  # Source checker (defines check_output)
+  # shellcheck source=bench/measure/checker.sh
+  # shellcheck disable=SC1090
+  source "$checker_sh"
+
+  # Stub mode: no API key needed; skip live API check.
+  # Live mode: require ANTHROPIC_API_KEY.
+  if ! $stub_mode; then
+    if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+      # Check for .env.local in task_dir
+      if [[ -f "$task_dir/.env.local" ]]; then
+        # shellcheck disable=SC1090
+        set +u; source "$task_dir/.env.local"; set -u
+      fi
+    fi
+    if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+      die "ANTHROPIC_API_KEY is not set — live bench requires an Anthropic API key.
+  Set it with: export ANTHROPIC_API_KEY=sk-ant-...
+  Or create $task_dir/.env.local containing: ANTHROPIC_API_KEY=sk-ant-...
+  To run without a key (offline self-test): opensop bench --stub" \
+          "config_missing" "export ANTHROPIC_API_KEY=sk-ant-... or use --stub"
+    fi
+    # Require curl for live HTTP calls
+    require_curl
+  fi
+
+  # Determine arms to run
+  local -a arms=()
+  case "$arm_filter" in
+    all) arms=(skill json_only opensop) ;;
+    *)   arms=("$arm_filter") ;;
+  esac
+
+  # Setup a temp dir for run receipts
+  local bench_run_home; bench_run_home="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$bench_run_home'" EXIT
+
+  # -------------------------------------------------------------------------
+  # Accumulators
+  # Key: arm  (model is fixed per invocation, printed once in header)
+  # -------------------------------------------------------------------------
+  declare -A _b_sv_count _b_fm_count _b_runs _b_durations _b_tout_vals _b_recall_sum
+
+  for arm in "${arms[@]}"; do
+    _b_sv_count[$arm]=0
+    _b_fm_count[$arm]=0
+    _b_runs[$arm]=0
+    _b_recall_sum[$arm]=0
+    _b_durations[$arm]=""
+    _b_tout_vals[$arm]=""
+  done
+
+  # Count expected items once (used in per-run recall display and for max recall value)
+  local _b_expected_count
+  _b_expected_count="$(jq '.action_items | length' "$expected_json" 2>/dev/null || echo 3)"
+
+  # -------------------------------------------------------------------------
+  # Banner
+  # -------------------------------------------------------------------------
+  local meeting_notes; meeting_notes="$(cat "$fixture_notes")"
+
+  if [[ "$OUTPUT_MODE" != "json" ]]; then
+    printf '\n'
+    printf '=== opensop bench ===\n'
+    printf '  Model    : %s\n' "$model"
+    printf '  N per arm: %d\n' "$n_runs"
+    printf '  Arms     : %s\n' "$arm_filter"
+    printf '  Task dir : %s\n' "$task_dir"
+    if $stub_mode; then
+      printf '  Mode     : STUB (no API calls — offline self-test)\n'
+    fi
+    printf '\n'
+    printf '  METHODOLOGY: reliability = schema_valid AND field_match against\n'
+    printf '  fixtures/expected.json. Field match is case-insensitive (owner,task)\n'
+    printf '  set equality via jq sort. output_chars ≈ output tokens (chars/3.7).\n'
+    printf '  N=%d is a demo sample, not a statistical claim.\n' "$n_runs"
+    printf '\n'
+    printf '  Exact prompts: %s/prompts/\n' "$task_dir"
+    printf '  Process file : %s\n' "$proc_file"
+    printf '\n'
+  fi
+
+  # -------------------------------------------------------------------------
+  # Arm: skill
+  # Naive prose prompt — no scope rule, no JSON demand.
+  # -------------------------------------------------------------------------
+  _bench_run_skill() {
+    local arm="skill" run_idx="$1"
+    local prompt_tmpl; prompt_tmpl="$(cat "$prompt_skill")"
+    # Substitute {{MEETING_NOTES}} or {{meeting_notes}} placeholder
+    local prompt; prompt="$(awk -v notes="$meeting_notes" \
+      '{ gsub(/\{\{[Mm][Ee][Ee][Tt][Ii][Nn][Gg]_[Nn][Oo][Tt][Ee][Ss]\}\}/, notes); print }' \
+      "$prompt_skill")"
+
+    local start_ms; start_ms="$(_bench_now_ms)"
+    local raw_text="" schema_valid="false" field_match="false" detail="skipped" tout=0
+
+    if $stub_mode; then
+      # Stub: return a realistic "scope-creep" response (like the real model would, minus scope rule)
+      # This simulates what the spike saw: valid JSON but extra phantom items
+      raw_text='{
+  "action_items": [
+    {"owner": "Bob Navarro", "task": "Fix the CSV export race condition"},
+    {"owner": "Carol Singh", "task": "Complete the WCAG 2.1 AA accessibility audit"},
+    {"owner": "Dave Wu", "task": "Write integration tests for payments-flow edge cases"},
+    {"owner": "Alice Chen", "task": "Raise staging reliability as a P1"}
+  ]
+}'
+      tout="${#raw_text}"
+    else
+      local body; body="$(jq -nc --arg model "$model" --arg user "$prompt" \
+        '{model:$model, max_tokens:1024, messages:[{role:"user",content:$user}]}')"
+      local http_out rc=0
+      # [FIX1] Bounded timeouts: --connect-timeout 10 --max-time 120 so a stalled
+      # request cannot block the whole bench run indefinitely.  rc is captured with
+      # || rc=$? so set -e does not abort the loop on a network failure.
+      http_out="$(curl -sS --connect-timeout 10 --max-time 120 \
+        -X POST "https://api.anthropic.com/v1/messages" \
+        -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+        -H "anthropic-version: 2023-06-01" \
+        -H "content-type: application/json" \
+        -d "$body" 2>/dev/null)" || rc=$?
+      if [[ $rc -ne 0 ]]; then
+        detail="curl error (rc=$rc)"
+      else
+        raw_text="$(jq -r '.content[0].text // ""' <<<"$http_out" 2>/dev/null || true)"
+        raw_text="$(_bench_strip_fences "$raw_text")"
+        tout="$(jq -r '.usage.output_tokens // 0' <<<"$http_out" 2>/dev/null || echo 0)"
+      fi
+    fi
+
+    local dur_ms; dur_ms=$(( $(_bench_now_ms) - start_ms ))
+
+    local recall=0
+    if [[ -n "$raw_text" && "$detail" != curl* ]]; then
+      local chk; chk="$(_bench_check_output "$raw_text" "$expected_json")"
+      schema_valid="$(jq -r '.schema_valid' <<<"$chk")"
+      field_match="$(jq -r '.field_match' <<<"$chk")"
+      detail="$(jq -r '.detail' <<<"$chk")"
+      recall="$(jq -r '.recall' <<<"$chk")"
+    fi
+
+    # Accumulate
+    _b_runs[$arm]=$(( _b_runs[$arm] + 1 ))
+    [[ "$schema_valid" == "true" ]] && _b_sv_count[$arm]=$(( _b_sv_count[$arm] + 1 ))
+    [[ "$field_match"  == "true" ]] && _b_fm_count[$arm]=$(( _b_fm_count[$arm] + 1 ))
+    _b_recall_sum[$arm]=$(( _b_recall_sum[$arm] + recall ))
+    _b_durations[$arm]+="${dur_ms}"$'\n'
+    _b_tout_vals[$arm]+="${tout}"$'\n'
+
+    if [[ "$OUTPUT_MODE" != "json" ]]; then
+      printf '    [skill]     run %d: schema=%s match=%s recall=%s/%s tout=%s %dms — %s\n' \
+        "$run_idx" "$schema_valid" "$field_match" "$recall" "$_b_expected_count" "$tout" "$dur_ms" "$detail"
+    fi
+  }
+
+  # -------------------------------------------------------------------------
+  # Arm: json_only
+  # Same task + JSON demand, no scope rule. Isolates format from scope.
+  # -------------------------------------------------------------------------
+  _bench_run_json_only() {
+    local arm="json_only" run_idx="$1"
+    local prompt; prompt="$(awk -v notes="$meeting_notes" \
+      '{ gsub(/\{\{[Mm][Ee][Ee][Tt][Ii][Nn][Gg]_[Nn][Oo][Tt][Ee][Ss]\}\}/, notes); print }' \
+      "$prompt_json_only")"
+
+    local start_ms; start_ms="$(_bench_now_ms)"
+    local raw_text="" schema_valid="false" field_match="false" detail="skipped" tout=0
+
+    if $stub_mode; then
+      # Stub: valid JSON schema, but phantom extra item (mirrors spike's json_only arm)
+      raw_text='{"action_items":[
+  {"owner":"Bob Navarro","task":"Fix the CSV export race condition"},
+  {"owner":"Carol Singh","task":"Complete the WCAG 2.1 AA accessibility audit"},
+  {"owner":"Dave Wu","task":"Write integration tests for payments-flow edge cases"},
+  {"owner":"Alice Chen","task":"File a planning ticket for the data-grid upgrade"}
+]}'
+      tout="${#raw_text}"
+    else
+      local body; body="$(jq -nc --arg model "$model" --arg user "$prompt" \
+        '{model:$model, max_tokens:1024, temperature:0, messages:[{role:"user",content:$user}]}')"
+      local http_out rc=0
+      # [FIX1] Bounded timeouts: --connect-timeout 10 --max-time 120 so a stalled
+      # request cannot block the whole bench run indefinitely.  rc is captured with
+      # || rc=$? so set -e does not abort the loop on a network failure.
+      http_out="$(curl -sS --connect-timeout 10 --max-time 120 \
+        -X POST "https://api.anthropic.com/v1/messages" \
+        -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+        -H "anthropic-version: 2023-06-01" \
+        -H "content-type: application/json" \
+        -d "$body" 2>/dev/null)" || rc=$?
+      if [[ $rc -ne 0 ]]; then
+        detail="curl error (rc=$rc)"
+      else
+        raw_text="$(jq -r '.content[0].text // ""' <<<"$http_out" 2>/dev/null || true)"
+        raw_text="$(_bench_strip_fences "$raw_text")"
+        tout="$(jq -r '.usage.output_tokens // 0' <<<"$http_out" 2>/dev/null || echo 0)"
+      fi
+    fi
+
+    local dur_ms; dur_ms=$(( $(_bench_now_ms) - start_ms ))
+
+    local recall=0
+    if [[ -n "$raw_text" && "$detail" != curl* ]]; then
+      local chk; chk="$(_bench_check_output "$raw_text" "$expected_json")"
+      schema_valid="$(jq -r '.schema_valid' <<<"$chk")"
+      field_match="$(jq -r '.field_match' <<<"$chk")"
+      detail="$(jq -r '.detail' <<<"$chk")"
+      recall="$(jq -r '.recall' <<<"$chk")"
+    fi
+
+    _b_runs[$arm]=$(( _b_runs[$arm] + 1 ))
+    [[ "$schema_valid" == "true" ]] && _b_sv_count[$arm]=$(( _b_sv_count[$arm] + 1 ))
+    [[ "$field_match"  == "true" ]] && _b_fm_count[$arm]=$(( _b_fm_count[$arm] + 1 ))
+    _b_recall_sum[$arm]=$(( _b_recall_sum[$arm] + recall ))
+    _b_durations[$arm]+="${dur_ms}"$'\n'
+    _b_tout_vals[$arm]+="${tout}"$'\n'
+
+    if [[ "$OUTPUT_MODE" != "json" ]]; then
+      printf '    [json_only] run %d: schema=%s match=%s recall=%s/%s tout=%s %dms — %s\n' \
+        "$run_idx" "$schema_valid" "$field_match" "$recall" "$_b_expected_count" "$tout" "$dur_ms" "$detail"
+    fi
+  }
+
+  # -------------------------------------------------------------------------
+  # Arm: opensop
+  # Run via `opensop run` — gets schema-validation + retries.
+  # In stub mode, the CLI's built-in LLM stub is used (ANTHROPIC_API_KEY unset).
+  # -------------------------------------------------------------------------
+  _bench_run_opensop() {
+    local arm="opensop" run_idx="$1"
+
+    # Inject meeting_notes as the process input default (so opensop run picks it up).
+    #
+    # [FIX3] Write the per-run temp process file into bench_run_home (a mktemp -d
+    # scratch dir this invocation already owns and can always write to), NOT into
+    # the source asset directory (bench/processes/).  When the CLI + bench assets
+    # are installed read-only (e.g. /usr/local/share/opensop or a root-owned path),
+    # mktemp -p <read-only-dir> fails under set -euo pipefail and aborts the entire
+    # benchmark before producing a scoreboard.
+    #
+    # Because opensop resolves prompt_file relative to proc_dir (the directory of the
+    # process file), moving the temp process file breaks the relative path
+    # (../prompts/opensop.txt no longer resolves correctly).  Fix that by reading the
+    # prompt text NOW (while we still know its real location) and inlining it as the
+    # `prompt` field in the temp copy, removing `prompt_file`.  The temp process
+    # becomes self-contained with no file-path dependency.  The prompt asset itself
+    # may remain read-only; we only need to READ it here, not write to its directory.
+    local proc_dir_for_run; proc_dir_for_run="$(cd "$(dirname "$proc_file")" && pwd)"
+    local _inline_prompt=""
+    local _rel_pf; _rel_pf="$(jq -r '.steps[0].prompt_file // ""' "$proc_file")"
+    if [[ -n "$_rel_pf" ]]; then
+      local _abs_pf; _abs_pf="$proc_dir_for_run/$_rel_pf"
+      if [[ -f "$_abs_pf" ]]; then
+        _inline_prompt="$(cat "$_abs_pf")"
+      fi
+    fi
+    local proc_tmp; proc_tmp="$(mktemp -p "$bench_run_home" bench-run-XXXXXXXX.sop.json)"
+    if [[ -n "$_inline_prompt" ]]; then
+      # Inline the prompt text and drop prompt_file so the temp copy is self-contained.
+      jq --arg notes "$meeting_notes" --arg m "$model" --arg prompt_text "$_inline_prompt" \
+        '.inputs.meeting_notes = $notes | .steps[0].model = $m
+         | .steps[0].prompt = $prompt_text | del(.steps[0].prompt_file)' \
+        "$proc_file" > "$proc_tmp"
+    else
+      jq --arg notes "$meeting_notes" --arg m "$model" \
+        '.inputs.meeting_notes = $notes | .steps[0].model = $m' \
+        "$proc_file" > "$proc_tmp"
+    fi
+
+    local run_home_this; run_home_this="$bench_run_home/opensop-run-${run_idx}"
+    mkdir -p "$run_home_this"
+
+    # Stub mode: inject OSL_LLM_STUB — the opensop arm returns the correct 3-item
+    # result (the scope rule works), so we simulate a reliable response here.
+    local _opensop_stub_env=""
+    if $stub_mode; then
+      _opensop_stub_env='{"action_items":[{"owner":"Bob Navarro","task":"Fix the CSV export race condition"},{"owner":"Carol Singh","task":"Complete the WCAG 2.1 AA accessibility audit"},{"owner":"Dave Wu","task":"Write integration tests for payments-flow edge cases"}]}'
+    fi
+
+    local start_ms; start_ms="$(_bench_now_ms)"
+    local run_out rc=0
+    if $stub_mode; then
+      run_out="$(OPENSOP_LOCAL_HOME="$run_home_this" \
+        OSL_LLM_STUB="$_opensop_stub_env" \
+        "${BASH_SOURCE[0]}" run "$proc_tmp" --json 2>/dev/null)" || rc=$?
+    else
+      run_out="$(OPENSOP_LOCAL_HOME="$run_home_this" \
+        "${BASH_SOURCE[0]}" run "$proc_tmp" --json 2>/dev/null)" || rc=$?
+    fi
+    local dur_ms; dur_ms=$(( $(_bench_now_ms) - start_ms ))
+
+    rm -f "$proc_tmp"
+
+    # [FIX2] Initialize recall=0 unconditionally BEFORE the rc==0 branch so that
+    # a failed opensop run (network/timeout/validation error) leaves recall at 0
+    # and the accumulator below can reference it safely under set -u.  Without
+    # this, `local recall=0` was declared only inside the success branch, causing
+    # an "unbound variable" abort on any failed run under set -euo pipefail.
+    local schema_valid="false" field_match="false" detail="opensop run failed (rc=$rc)" tout=0
+    local recall=0
+
+    if [[ $rc -eq 0 && -n "$run_out" ]]; then
+      # Get run_id from the manifest output
+      local run_id; run_id="$(jq -r '.run_id // ""' <<<"$run_out" 2>/dev/null || true)"
+      local context_json=""
+      if [[ -n "$run_id" ]]; then
+        local ctx_path="$run_home_this/runs/$run_id/context.json"
+        [[ -f "$ctx_path" ]] && context_json="$(cat "$ctx_path")"
+      fi
+
+      # Read tokens_out from audit.jsonl if available (C1a metrics)
+      if [[ -n "$run_id" ]]; then
+        local audit_path="$run_home_this/runs/$run_id/audit.jsonl"
+        if [[ -f "$audit_path" ]]; then
+          tout="$(jq -s 'map(.tokens_out // 0) | add // 0' "$audit_path" 2>/dev/null || echo 0)"
+        fi
+      fi
+
+      # Extract the step output from context
+      local raw_text=""
+      if [[ -n "$context_json" ]]; then
+        raw_text="$(jq -c '.extract // empty' <<<"$context_json" 2>/dev/null || true)"
+      fi
+
+      if [[ -n "$raw_text" && "$raw_text" != "null" ]]; then
+        local chk; chk="$(_bench_check_output "$raw_text" "$expected_json")"
+        schema_valid="$(jq -r '.schema_valid' <<<"$chk")"
+        field_match="$(jq -r '.field_match' <<<"$chk")"
+        detail="$(jq -r '.detail' <<<"$chk")"
+        recall="$(jq -r '.recall' <<<"$chk")"
+      else
+        detail="no extract step output in context.json"
+      fi
+    fi
+
+    _b_runs[$arm]=$(( _b_runs[$arm] + 1 ))
+    [[ "$schema_valid" == "true" ]] && _b_sv_count[$arm]=$(( _b_sv_count[$arm] + 1 ))
+    [[ "$field_match"  == "true" ]] && _b_fm_count[$arm]=$(( _b_fm_count[$arm] + 1 ))
+    _b_recall_sum[$arm]=$(( _b_recall_sum[$arm] + recall ))
+    _b_durations[$arm]+="${dur_ms}"$'\n'
+    _b_tout_vals[$arm]+="${tout}"$'\n'
+
+    if [[ "$OUTPUT_MODE" != "json" ]]; then
+      printf '    [opensop]   run %d: schema=%s match=%s recall=%s/%s tout=%s %dms — %s\n' \
+        "$run_idx" "$schema_valid" "$field_match" "$recall" "$_b_expected_count" "$tout" "$dur_ms" "$detail"
+    fi
+  }
+
+  # -------------------------------------------------------------------------
+  # Main loop
+  # -------------------------------------------------------------------------
+  for arm in "${arms[@]}"; do
+    if [[ "$OUTPUT_MODE" != "json" ]]; then printf '%s\n' "--- arm: $arm (N=$n_runs, model: $model) ---"; fi
+    local i
+    for i in $(seq 1 "$n_runs"); do
+      case "$arm" in
+        skill)     _bench_run_skill     "$i" ;;
+        json_only) _bench_run_json_only "$i" ;;
+        opensop)   _bench_run_opensop   "$i" ;;
+      esac
+    done
+    if [[ "$OUTPUT_MODE" != "json" ]]; then printf '\n'; fi
+  done
+
+  # -------------------------------------------------------------------------
+  # Scoreboard
+  # -------------------------------------------------------------------------
+  local est_cost_note=""
+  if ! $stub_mode; then
+    # Rough cost estimate: haiku=$0.80/$4.00 per 1M, sonnet=$3.00/$15.00 per 1M
+    local price_in price_out
+    case "$model" in
+      *haiku*)  price_in="0.80";  price_out="4.00" ;;
+      *sonnet*) price_in="3.00";  price_out="15.00" ;;
+      *)        price_in="3.00";  price_out="15.00" ;;
+    esac
+    # Sum all output tokens across all arms as a rough estimate (input tokens not measured in direct calls)
+    local total_tout=0
+    for arm in "${arms[@]}"; do
+      local arm_tout=0
+      arm_tout="$(printf '%s' "${_b_tout_vals[$arm]}" | jq -s 'add // 0' 2>/dev/null || echo 0)"
+      total_tout=$(( total_tout + arm_tout ))
+    done
+    est_cost_note="$(jq -rn --argjson to "$total_tout" --arg po "$price_out" \
+      '($to / 1000000 * ($po|tonumber)) | . * 10000 | round | . / 10000 | "est. output cost: $\(.)"' \
+      2>/dev/null || true)"
+  fi
+
+  # Build JSON result
+  local json_arms="[]"
+  for arm in "${arms[@]}"; do
+    local n="${_b_runs[$arm]:-0}"
+    [[ "$n" -eq 0 ]] && continue
+    local sv="${_b_sv_count[$arm]:-0}"
+    local fm="${_b_fm_count[$arm]:-0}"
+    local rs="${_b_recall_sum[$arm]:-0}"
+    local med_dur med_tout
+    med_dur="$(printf '%s' "${_b_durations[$arm]}" | grep -v '^$' | _bench_median 2>/dev/null || echo null)"
+    med_tout="$(printf '%s' "${_b_tout_vals[$arm]}" | grep -v '^$' | _bench_median 2>/dev/null || echo null)"
+    # [FIX2] Include recall: sum of per-run recalled items and total possible
+    json_arms="$(jq -n \
+      --argjson prev "$json_arms" \
+      --arg arm "$arm" --arg model "$model" \
+      --argjson n "$n" --argjson sv "$sv" --argjson fm "$fm" \
+      --argjson rs "$rs" --argjson ec "$_b_expected_count" \
+      --argjson med_dur "$med_dur" --argjson med_tout "$med_tout" \
+      '$prev + [{arm:$arm,model:$model,runs:$n,
+                  schema_valid:$sv,field_match:$fm,
+                  recall_sum:$rs,recall_max:($n*$ec),
+                  recall:($rs|tostring)+"/"+($n*$ec|tostring),
+                  reliability:($fm|tostring)+"/"+($n|tostring),
+                  median_duration_ms:$med_dur,
+                  median_output_tokens:$med_tout}]')"
+  done
+
+  if [[ "$OUTPUT_MODE" == "json" ]]; then
+    jq -n --argjson arms "$json_arms" \
+      --arg model "$model" --argjson n "$n_runs" --arg stub "$stub_mode" \
+      --argjson ec "$_b_expected_count" \
+      '{model:$model,n_per_arm:$n,stub:($stub=="true"),expected_items:$ec,arms:$arms,
+        methodology:"reliability=schema_valid AND field_match; recall=expected items found (order/extras irrelevant); field match is case-insensitive (owner,task) set equality"}' \
+      | emit_pretty_or_json
+    return 0
+  fi
+
+  # Pretty scoreboard
+  # [FIX2] Added Recall column
+  printf '%-12s  %8s  %10s  %11s  %8s  %10s  %12s\n' \
+    "Arm" "Reliable" "Sch-valid" "Fld-match" "Recall" "med ms" "med out-tok"
+  printf '%s\n' "$(printf '%.0s-' {1..80})"
+
+  for arm in "${arms[@]}"; do
+    local n="${_b_runs[$arm]:-0}"
+    [[ "$n" -eq 0 ]] && continue
+    local sv="${_b_sv_count[$arm]:-0}"
+    local fm="${_b_fm_count[$arm]:-0}"
+    local rs="${_b_recall_sum[$arm]:-0}"
+    local recall_max=$(( n * _b_expected_count ))
+    local med_dur med_tout
+    med_dur="$(printf '%s' "${_b_durations[$arm]}" | grep -v '^$' | _bench_median 2>/dev/null || echo '?')"
+    med_tout="$(printf '%s' "${_b_tout_vals[$arm]}" | grep -v '^$' | _bench_median 2>/dev/null || echo '?')"
+    printf '%-12s  %8s  %10s  %11s  %8s  %10s  %12s\n' \
+      "$arm" "${fm}/${n}" "${sv}/${n}" "${fm}/${n}" "${rs}/${recall_max}" "$med_dur" "$med_tout"
+  done
+
+  printf '\n'
+  printf 'Model: %s  |  N=%d per arm  |  Expected items: %d\n' "$model" "$n_runs" "$_b_expected_count"
+  [[ -n "$est_cost_note" ]] && printf '%s\n' "$est_cost_note"
+  printf '\n'
+  printf 'METHODOLOGY:\n'
+  printf '  - skill:     naive prose prompt (prompts/skill.txt); default temperature\n'
+  printf '  - json_only: JSON demand + schema in prompt (prompts/json_only.txt); temperature=0\n'
+  printf '  - opensop:   opensop run + schema-validation + up-to-3 retries (prompts/opensop.txt)\n'
+  printf '  - Reliable   = schema_valid AND field_match to fixtures/expected.json\n'
+  printf '  - Recall     = expected items found regardless of extras (honesty axis)\n'
+  printf '  - Field match: case-insensitive (owner,task) set equality (jq sort)\n'
+  printf '  - med out-tok ≈ output chars/3.7 (direct API), or from C1a audit.jsonl (opensop arm)\n'
+  if $stub_mode; then
+    printf '  - STUB MODE: no API calls made; responses are hardcoded fixtures\n'
+  fi
+  printf '  - Exact prompts: %s/prompts/\n' "$task_dir"
+  printf '\n'
+}
+
 main() {
   require_jq
 
@@ -5196,6 +5800,7 @@ main() {
     lineage)    cmd_lineage "$@" ;;
     fork)       cmd_fork "$@" ;;
     heal)       local_heal "$@" ;;
+    bench)      cmd_bench "$@" ;;
     # 'help' is handled by the local-only short-circuit above (before remote init).
     *)          die "unknown command '$cmd' — run 'opensop help' for usage" "unknown_command" "run opensop help" ;;
   esac

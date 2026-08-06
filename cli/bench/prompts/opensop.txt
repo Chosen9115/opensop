@@ -1,0 +1,12 @@
+Extract the action items from the following meeting notes into structured data.
+
+Scope rule: include ONLY the items explicitly enumerated under the "ACTION ITEMS" heading. Do NOT include commitments, decisions, or follow-ups mentioned elsewhere in the notes.
+Field rules: owner = the person's full name exactly as written before the em-dash. task = a concise description of the action WITHOUT any dates or deadlines.
+
+Meeting notes:
+---
+{{meeting_notes}}
+---
+
+Respond with ONLY a JSON object matching this schema, and nothing else (no prose, no markdown fences, no code block):
+{"action_items": [{"owner": "<full name>", "task": "<concise task without dates>"}]}

@@ -1,0 +1,10 @@
+Read the following meeting notes and extract all action items.
+
+For each action item, identify the person responsible (owner) and what they need to do (task).
+
+Meeting notes:
+---
+{{MEETING_NOTES}}
+---
+
+List the action items you found.

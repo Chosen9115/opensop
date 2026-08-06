@@ -1,0 +1,7 @@
+# Never commit live results or secrets.
+results/
+.env.local
+*.log
+
+# opensop local run receipts (generated during bench runs)
+.opensop-local/
