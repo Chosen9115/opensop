@@ -461,7 +461,7 @@ Commands marked **[remote]** require `--remote` or `--server <url>`. All others 
 | **Bench** | |
 | `opensop bench [<task-dir>] [--n N] [--model MODEL] [--arm ARMNAME] [--stub]` | 3-arm reliability comparison: skill vs json_only vs opensop over N runs. Built-in default task: extract-action-items. `--stub` runs offline (no API key). |
 | **Onboarding** | |
-| `opensop onboard [<process.sop.json>] [--task <dir>] [--stub] [--n N]` | First-run experience: scaffold a starter `.sop.json` if none given, validate it via dry-run, run the 3-arm bench comparison to prove the reliability gain, and print next steps. Side-effect-safe: never executes your process against production. `--stub` runs offline. |
+| `opensop onboard [<process.sop.json>] [--stub] [--n N]` | First-run experience: scaffold a starter `.sop.json` if none given, validate it via dry-run, run the 3-arm bench comparison (built-in task only) to prove the reliability gain, and print next steps. Side-effect-safe: never executes your process against production. `--stub` runs offline. To benchmark a custom task use `opensop bench <task>` directly. |
 
 ## Demo
 

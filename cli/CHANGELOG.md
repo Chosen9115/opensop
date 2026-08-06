@@ -34,8 +34,8 @@ This project follows [Semantic Versioning](https://semver.org/) and the
     Exits non-zero with a clear message if validation fails — onboarding does not proceed on an
     invalid process.
 
-  - **Step 3 (Compare):** invokes `opensop bench` (built-in extract-action-items task or
-    `--task <dir>`) inside a subshell so bench's `die()`/`exit 1` never terminates onboard.
+  - **Step 3 (Compare):** invokes `opensop bench` (built-in extract-action-items task only)
+    inside a subshell so bench's `die()`/`exit 1` never terminates onboard.
     `--stub` is forwarded for offline testing. When no API key is present, bench exits non-zero;
     onboard surfaces the key-missing message and continues gracefully (the comparison step is
     skipped, not fatal). `--json` embeds the full bench scoreboard in the summary.
@@ -61,12 +61,23 @@ This project follows [Semantic Versioning](https://semver.org/) and the
   - **Registry:** `onboard` registered in `_registry_raw` (category `onboarding`, backend `local`);
     wired in `main()` dispatch; help examples added; README subcommand table updated.
 
-  - **Tests (17 new assertions in `test/test.sh`):** no-arg scaffold produces valid `.sop.json` +
+  - **Tests (18 new assertions in `test/test.sh`):** no-arg scaffold produces valid `.sop.json` +
     dry-run passes; invalid JSON exits non-zero with clear error; valid + `--stub --n 1 --json`
     produces parseable summary with `bench_result.arms`; no-key path exits 0 with
-    `bench_result_or_skipped=skipped` (graceful, no hang).
+    `bench_result_or_skipped=skipped` (graceful, no hang); `--task <dir>` is rejected with
+    `unknown_flag` (trust-boundary regression test).
 
 ### Security
+
+- **E1 trust-boundary fix: removed `--task <dir>` from `opensop onboard`.**
+  `onboard --task <dir>` forwarded an untrusted directory into `cmd_bench`, which sources
+  `.env.local` and executes `shell`/`automated` steps from processes in that directory —
+  arbitrary code execution on the host. This directly contradicted onboard's advertised
+  side-effect-safety guarantee. Fix: `--task` is no longer accepted by `onboard`; the
+  comparison step always runs against the built-in, immutable bench fixture
+  (`cli/bench/`). Users who need to benchmark a custom task use `opensop bench <task>`
+  directly — that command carries its own explicit trust posture. The `unknown_flag` error
+  code is returned for any remaining `--task` usage.
 
 - **Committed `bin/opensop.sha256`** so the default `curl … | bash` installer and
   `opensop upgrade` can verify downloads without `--allow-unverified`. The file

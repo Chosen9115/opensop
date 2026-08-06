@@ -5785,6 +5785,42 @@ printf '%s\n' "$onboard_minimal_out" | jq -e '.validated == true' >/dev/null 2>&
   || { echo "FAIL: E1 structural (minimal valid) — expected validated=true: ${onboard_minimal_out:0:300}"; exit 1; }
 echo "PASS: E1 structural (minimal valid) — validated=true (passes structural + dry-run gate)"
 
+# --------------------------------------------------------------------------- #
+# E1 trust-boundary regression: onboard must NOT accept --task <dir>
+#
+# Allowing --task would let an untrusted directory's .env.local be sourced and
+# its shell/automated steps executed — arbitrary code execution contradicting
+# onboard's side-effect-safety guarantee.  The flag must be rejected with a
+# non-zero exit and the unknown_flag error code.
+# --------------------------------------------------------------------------- #
+onboard_task_dir="$OPENSOP_LOCAL_HOME/untrusted-task"
+mkdir -p "$onboard_task_dir"
+
+set +e
+onboard_task_out="$("$cli" onboard "$onboard_minimal_proc" --task "$onboard_task_dir" --json 2>&1)"
+onboard_task_rc=$?
+set -e
+
+[ "$onboard_task_rc" -ne 0 ] \
+  || { echo "FAIL: E1 trust-boundary — onboard --task should exit non-zero; got 0 (output: ${onboard_task_out:0:300})"; exit 1; }
+echo "PASS: E1 trust-boundary — onboard --task exits non-zero (flag rejected)"
+
+# The error code must be unknown_flag (agents parse this)
+printf '%s\n' "$onboard_task_out" | jq -e '.error == "unknown_flag"' >/dev/null 2>&1 \
+  || {
+    # --json may not reach the flag parser if OUTPUT_MODE isn't set; also check prose stderr
+    printf '%s\n' "$onboard_task_out" | grep -q "unknown.flag\|unknown flag" \
+      || { echo "FAIL: E1 trust-boundary — expected unknown_flag error; got: ${onboard_task_out:0:300}"; exit 1; }
+  }
+echo "PASS: E1 trust-boundary — onboard --task produces unknown_flag error (not executed)"
+
+# Confirm the untrusted dir was not read/sourced: no .env.local should have been touched.
+[ ! -f "$onboard_task_dir/.env.local" ] \
+  || { echo "FAIL: E1 trust-boundary — .env.local should not exist in untrusted dir"; exit 1; }
+echo "PASS: E1 trust-boundary — untrusted task dir was not accessed"
+
+rm -rf "$onboard_task_dir"
+
 # Cleanup
 rm -rf "$onboard_tmp"
 
