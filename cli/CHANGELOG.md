@@ -20,6 +20,51 @@ This project follows [Semantic Versioning](https://semver.org/) and the
   offline viewing. Honesty label: all outputs are recorded from real measured runs —
   not simulated. Full methodology: `bench/NUMBERS.md`. Added a "Demo" section to
   `cli/README.md` linking `bench/demo/`.
+- **E1: `opensop onboard` — first-run experience.** Turns a process a user already runs into an
+  OpenSOP process and proves the reliability gain.
+
+  - **Step 1 (Orient + scaffold):** if no process file is given, writes a starter `my-process.sop.json`
+    in cwd with a valid `opensop 0.6` structure (one `llm` step with `expected_output_schema`).
+    Points the user at `docs/AGENTS.md §6` (openSOP-ize) for the *transformation* of an arbitrary
+    prose skill — the bash CLI does not attempt to auto-convert arbitrary prompts.
+
+  - **Step 2 (Validate):** runs `dry-run` on the process file (local_dry_run reuse; no new code
+    path). Injects placeholder values for required inputs so validation checks *structure* (schema,
+    step graph, format) rather than input presence. Reports inputs, step count, and step types.
+    Exits non-zero with a clear message if validation fails — onboarding does not proceed on an
+    invalid process.
+
+  - **Step 3 (Compare):** invokes `opensop bench` (built-in extract-action-items task or
+    `--task <dir>`) inside a subshell so bench's `die()`/`exit 1` never terminates onboard.
+    `--stub` is forwarded for offline testing. When no API key is present, bench exits non-zero;
+    onboard surfaces the key-missing message and continues gracefully (the comparison step is
+    skipped, not fatal). `--json` embeds the full bench scoreboard in the summary.
+
+  - **Step 4 (Next steps):** prints `run` / `show` / `fork` / `lineage` / `annotate` commands and
+    pointers to `docs/AGENTS.md §6` and `EVOLUTION.md`.
+
+  - **Side-effect safety:** onboard never executes the user's process. The comparison uses the
+    bench's controlled task only (`bench/fixtures/`).
+
+  - **`--json` summary shape:**
+    ```json
+    {
+      "scaffolded": true|false,
+      "process_file": "./path/to/file.sop.json",
+      "validated": true|false,
+      "bench_result_or_skipped": "completed"|"skipped",
+      "bench_result": { ...bench scoreboard JSON... } | null
+    }
+    ```
+    On validation failure: `{...,"validated":false,"bench_result_or_skipped":"skipped","error":"validation_failed"}`.
+
+  - **Registry:** `onboard` registered in `_registry_raw` (category `onboarding`, backend `local`);
+    wired in `main()` dispatch; help examples added; README subcommand table updated.
+
+  - **Tests (17 new assertions in `test/test.sh`):** no-arg scaffold produces valid `.sop.json` +
+    dry-run passes; invalid JSON exits non-zero with clear error; valid + `--stub --n 1 --json`
+    produces parseable summary with `bench_result.arms`; no-key path exits 0 with
+    `bench_result_or_skipped=skipped` (graceful, no hang).
 
 ### Security
 

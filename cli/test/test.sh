@@ -5548,5 +5548,145 @@ set -e
 [ "$iv_valid_rc" -eq 0 ] \
   || { echo "FAIL: watch --interval 3 --json --once should exit 0, got $iv_valid_rc"; exit 1; }
 echo "PASS: watch --interval 3 --json --once — accepts valid interval"
+# =========================================================================== #
+# E1: opensop onboard
+# =========================================================================== #
+# These tests must be non-interactive (no stdin, no TTY), scriptable, and cover
+# the four cases from the spec:
+#   (a) no-arg invocation: scaffolds a valid .sop.json that dry-run passes
+#   (b) invalid .sop.json: exits non-zero with a clear error
+#   (c) valid .sop.json + --stub --n 1 + --json: parseable summary
+#   (d) no-key path: bench is skipped gracefully without hanging
+# ---------------------------------------------------------------------------
+
+onboard_tmp="$(mktemp -d)"
+onboard_export_home="$OPENSOP_LOCAL_HOME"
+
+# --- (a) no-arg: scaffold a valid .sop.json in the tmp dir, then validate it --
+pushd "$onboard_tmp" >/dev/null
+
+set +e
+onboard_scaffold_out="$("$cli" onboard --json 2>&1)"
+onboard_scaffold_rc=$?
+set -e
+
+[ "$onboard_scaffold_rc" -eq 0 ] \
+  || { echo "FAIL: onboard (no args) should exit 0; got $onboard_scaffold_rc (output: ${onboard_scaffold_out:0:300})"; exit 1; }
+echo "PASS: E1 onboard (no-arg) — exits 0"
+
+# --json summary must be parseable
+echo "$onboard_scaffold_out" | jq -e . >/dev/null 2>&1 \
+  || { echo "FAIL: E1 onboard (no-arg) --json output not parseable JSON: ${onboard_scaffold_out:0:300}"; exit 1; }
+echo "PASS: E1 onboard (no-arg) — --json output is parseable"
+
+# scaffolded=true in summary
+onboard_scaffold_flag="$(echo "$onboard_scaffold_out" | jq -r '.scaffolded' 2>/dev/null || echo "")"
+[ "$onboard_scaffold_flag" = "true" ] \
+  || { echo "FAIL: E1 onboard (no-arg) — expected scaffolded=true, got '$onboard_scaffold_flag'"; exit 1; }
+echo "PASS: E1 onboard (no-arg) — scaffolded=true in JSON summary"
+
+# The scaffolded file must exist and be valid JSON
+[ -f "$onboard_tmp/my-process.sop.json" ] \
+  || { echo "FAIL: E1 onboard (no-arg) — my-process.sop.json not created"; exit 1; }
+echo "PASS: E1 onboard (no-arg) — my-process.sop.json created"
+
+jq -e . "$onboard_tmp/my-process.sop.json" >/dev/null 2>&1 \
+  || { echo "FAIL: E1 onboard (no-arg) — my-process.sop.json is not valid JSON"; exit 1; }
+echo "PASS: E1 onboard (no-arg) — my-process.sop.json is valid JSON"
+
+# dry-run on the scaffolded file must pass (validated=true)
+onboard_validated="$(echo "$onboard_scaffold_out" | jq -r '.validated' 2>/dev/null || echo "")"
+[ "$onboard_validated" = "true" ] \
+  || { echo "FAIL: E1 onboard (no-arg) — expected validated=true, got '$onboard_validated'"; exit 1; }
+echo "PASS: E1 onboard (no-arg) — validated=true (dry-run passed on scaffolded file)"
+
+# bench_result_or_skipped is a string (either "completed" or "skipped")
+onboard_bench_status="$(echo "$onboard_scaffold_out" | jq -r '.bench_result_or_skipped' 2>/dev/null || echo "")"
+[ -n "$onboard_bench_status" ] \
+  || { echo "FAIL: E1 onboard (no-arg) — bench_result_or_skipped missing from JSON summary"; exit 1; }
+echo "PASS: E1 onboard (no-arg) — bench_result_or_skipped present: '$onboard_bench_status'"
+
+popd >/dev/null
+
+# --- (b) invalid .sop.json: exits non-zero with clear error ---
+onboard_bad_json="$onboard_tmp/bad.sop.json"
+printf 'not-valid-json{{{' > "$onboard_bad_json"
+
+set +e
+onboard_bad_out="$("$cli" onboard "$onboard_bad_json" --json 2>&1)"
+onboard_bad_rc=$?
+set -e
+
+[ "$onboard_bad_rc" -ne 0 ] \
+  || { echo "FAIL: E1 onboard (invalid JSON) — should exit non-zero; got 0"; exit 1; }
+echo "PASS: E1 onboard (invalid JSON) — exits non-zero"
+
+# Output should contain an error field or non-empty message
+echo "$onboard_bad_out" | jq -e '.error // .message // .validation_errors' >/dev/null 2>&1 \
+  || {
+    # May be prose error from die(); just confirm non-empty output
+    [ -n "$onboard_bad_out" ] \
+      || { echo "FAIL: E1 onboard (invalid JSON) — no output on failure"; exit 1; }
+  }
+echo "PASS: E1 onboard (invalid JSON) — error output present"
+
+# --- (c) valid .sop.json + --stub --n 1 + --json: parseable summary with bench ---
+onboard_valid_json="$onboard_tmp/my-process.sop.json"  # scaffolded by (a)
+
+set +e
+onboard_valid_out="$("$cli" onboard "$onboard_valid_json" --stub --n 1 --json 2>&1)"
+onboard_valid_rc=$?
+set -e
+
+[ "$onboard_valid_rc" -eq 0 ] \
+  || { echo "FAIL: E1 onboard (valid+stub) — should exit 0; got $onboard_valid_rc (output: ${onboard_valid_out:0:400})"; exit 1; }
+echo "PASS: E1 onboard (valid+stub) — exits 0"
+
+echo "$onboard_valid_out" | jq -e . >/dev/null 2>&1 \
+  || { echo "FAIL: E1 onboard (valid+stub) — --json output not parseable: ${onboard_valid_out:0:400}"; exit 1; }
+echo "PASS: E1 onboard (valid+stub) — --json output parseable"
+
+onboard_valid_validated="$(echo "$onboard_valid_out" | jq -r '.validated' 2>/dev/null || echo "")"
+[ "$onboard_valid_validated" = "true" ] \
+  || { echo "FAIL: E1 onboard (valid+stub) — expected validated=true, got '$onboard_valid_validated'"; exit 1; }
+echo "PASS: E1 onboard (valid+stub) — validated=true"
+
+# bench ran (--stub means it should always succeed)
+onboard_valid_bench_status="$(echo "$onboard_valid_out" | jq -r '.bench_result_or_skipped' 2>/dev/null || echo "")"
+[ "$onboard_valid_bench_status" = "completed" ] \
+  || { echo "FAIL: E1 onboard (valid+stub) — bench_result_or_skipped should be 'completed' with --stub, got '$onboard_valid_bench_status'"; exit 1; }
+echo "PASS: E1 onboard (valid+stub) — bench_result_or_skipped=completed"
+
+# bench_result contains the arms scoreboard
+onboard_valid_arms="$(echo "$onboard_valid_out" | jq '.bench_result.arms | length' 2>/dev/null || echo "")"
+[ "${onboard_valid_arms:-0}" -gt 0 ] \
+  || { echo "FAIL: E1 onboard (valid+stub) — bench_result.arms should be non-empty, got '$onboard_valid_arms'"; exit 1; }
+echo "PASS: E1 onboard (valid+stub) — bench_result.arms present and non-empty"
+
+# --- (d) no-key path: bench skipped gracefully (no hang, no crash) ---
+# Unset ANTHROPIC_API_KEY and run without --stub; bench should skip gracefully.
+onboard_nokey_out=""
+onboard_nokey_rc=0
+set +e
+onboard_nokey_out="$(ANTHROPIC_API_KEY="" "$cli" onboard "$onboard_valid_json" --json 2>&1)"
+onboard_nokey_rc=$?
+set -e
+
+# onboard itself should exit 0 (bench failure is graceful, not fatal)
+[ "$onboard_nokey_rc" -eq 0 ] \
+  || { echo "FAIL: E1 onboard (no-key) — should exit 0 even when bench skips; got $onboard_nokey_rc (output: ${onboard_nokey_out:0:400})"; exit 1; }
+echo "PASS: E1 onboard (no-key) — exits 0 (bench skipped gracefully)"
+
+echo "$onboard_nokey_out" | jq -e . >/dev/null 2>&1 \
+  || { echo "FAIL: E1 onboard (no-key) — --json output not parseable: ${onboard_nokey_out:0:400}"; exit 1; }
+echo "PASS: E1 onboard (no-key) — --json output parseable even when bench skips"
+
+onboard_nokey_bench="$(echo "$onboard_nokey_out" | jq -r '.bench_result_or_skipped' 2>/dev/null || echo "")"
+[ "$onboard_nokey_bench" = "skipped" ] \
+  || { echo "FAIL: E1 onboard (no-key) — expected bench_result_or_skipped=skipped, got '$onboard_nokey_bench'"; exit 1; }
+echo "PASS: E1 onboard (no-key) — bench_result_or_skipped=skipped (graceful no-key path)"
+
+# Cleanup
+rm -rf "$onboard_tmp"
 
 echo "ALL PASS"
