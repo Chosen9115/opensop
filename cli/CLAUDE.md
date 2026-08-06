@@ -57,9 +57,10 @@ When you add or change a subcommand, treat it as not done until it clears this l
 Versions are tagged and mirrored to GitHub Releases (`v0.1.0` … current). To cut one:
 
 1. Bump `OPENSOP_CLI_VERSION` (`bin/opensop:19`).
-2. Promote `CHANGELOG.md`'s `[Unreleased]` to `## [X.Y.Z] — <date>` and add the compare link at the bottom (`[X.Y.Z]: .../compare/<prev>...vX.Y.Z`).
-3. Commit, then `git tag -a vX.Y.Z`, push the branch and the tag.
-4. `gh release create vX.Y.Z --latest --notes-file <changelog-section>`.
+2. Regenerate `bin/opensop.sha256` (`make checksum`) whenever `bin/opensop` changes; the installer and `opensop upgrade` both verify the download against it. A stale or missing checksum causes the default `curl … | bash` install to fail.
+3. Promote `CHANGELOG.md`'s `[Unreleased]` to `## [X.Y.Z] — <date>` and add the compare link at the bottom (`[X.Y.Z]: .../compare/<prev>...vX.Y.Z`).
+4. Commit (`bin/opensop` + `bin/opensop.sha256` in the same commit), then `git tag -a vX.Y.Z`, push the branch and the tag.
+5. `gh release create vX.Y.Z --latest --notes-file <changelog-section>`.
 
 Follow [Semantic Versioning](https://semver.org/) and [Keep a Changelog](https://keepachangelog.com/). A change to flag meaning (e.g. `--local`) is **breaking** — call it out.
 

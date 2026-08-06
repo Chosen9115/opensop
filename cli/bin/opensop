@@ -727,6 +727,7 @@ register|POST a .sop.yaml to /sop/processes/register|register <process.yaml>|aut
 schema validate|client-side YAML lint — no server round-trip|schema validate <file.yaml>|authoring|local
 instances|list runs — local by default, paginated server list with --remote|instances [--state X] [--process Y]|admin|dual
 config|show or set remote server config (url and token)|config [set url <URL>; set token <TOKEN>]|config|local
+upgrade|upgrade the installed opensop CLI to the latest (or a pinned) release|upgrade [--pin X.Y.Z]|config|local
 help|show help for a command or the full command reference|help [<command>] [--json]|config|local
 bench|3-arm reliability comparison: skill vs json_only vs opensop over N runs|bench [<task-dir>] [--n N] [--model MODEL] [--arm ARMNAME] [--stub]|bench|local
 REGISTRY
@@ -1092,6 +1093,16 @@ EX
   opensop config set token demo-public-token-resets-daily
 EX
       ;;
+    upgrade)
+      cat <<'EX'
+  opensop upgrade                              # upgrade to the latest release
+  opensop upgrade --pin 0.8.1                 # upgrade (or downgrade) to a specific version
+  opensop upgrade --pin 0.8.1 --dry-run       # print what would change without replacing the binary
+
+  Note: upgrade fetches from github.com/Chosen9115/opensop and requires curl.
+        Use 'install.sh' (cli/install.sh) for the initial install.
+EX
+      ;;
     help)
       cat <<'EX'
   opensop help                                 # full command reference
@@ -1156,6 +1167,249 @@ ${C_BOLD}FULL GUIDE${C_RESET}
 
 ${C_DIM}⚠  local steps execute arbitrary shell — only run process files you trust${C_RESET}
 EOF
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: upgrade
+#
+# Re-fetch the single-file binary from the GitHub release and replace the
+# installed copy in-place.  Requires curl (gate checked in main() before
+# dispatch).  A pinned version is supported via --pin X.Y.Z.
+#
+# Release URL pattern (raw binary, not a tarball):
+#   https://raw.githubusercontent.com/Chosen9115/opensop/<tag-or-main>/cli/bin/opensop
+#   https://raw.githubusercontent.com/Chosen9115/opensop/<tag-or-main>/cli/bin/opensop.sha256
+#
+# For tagged releases we fetch via the tag; "latest" fetches from `main`.
+# This matches how install.sh places the binary and how `--pin` works:
+# the tag must exist in the remote repo.
+#
+# Security:
+#   - Target path is resolved from BASH_SOURCE[0] (the running script), not
+#     PATH lookup.  Invoking /opt/x/bin/opensop upgrade while a decoy opensop
+#     is on PATH upgrades the correct file.
+#   - A companion .sha256 file is fetched and the download verified before
+#     any file is touched.  If the checksum file is absent, --allow-unverified
+#     must be passed explicitly or the upgrade aborts.
+#   - Temp file is created INSIDE the destination directory (same filesystem)
+#     so mv is always atomic.  No cp fallback with a truncation window.
+#   - Destination file mode is preserved (or defaulted to 0755) before rename.
+#   - --pin mismatch: if the downloaded binary embeds a different version than
+#     the requested pin, the upgrade aborts before touching anything.
+# --------------------------------------------------------------------------- #
+
+# _portable_sha256 FILE — echo the lowercase hex SHA-256 of FILE, or return 1.
+_portable_sha256() {
+  local f="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$f" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$f" | awk '{print $NF}'
+  else
+    return 1
+  fi
+}
+
+cmd_upgrade() {
+  require_curl
+
+  # Note: --version/-v is a global flag intercepted by main() (prints version
+  # and exits).  Use --pin X.Y.Z to pin to a specific release version.
+  local pin_version="" dry_run=false allow_unverified=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --pin)
+        [[ $# -ge 2 ]] || die "--pin requires a version argument (e.g. --pin 0.8.1)" "usage_error" "opensop upgrade [--pin X.Y.Z]"
+        pin_version="$2"; shift
+        ;;
+      --dry-run) dry_run=true ;;
+      --allow-unverified) allow_unverified=true ;;
+      --help|-h)
+        _cmd_help_command "upgrade"; return 0 ;;
+      -*) die "unknown flag '$1'" "unknown_flag" "opensop upgrade [--pin X.Y.Z] [--dry-run]" ;;
+      *)  die "unexpected argument '$1'" "usage_error" "opensop upgrade [--pin X.Y.Z] [--dry-run]" ;;
+    esac
+    shift
+  done
+
+  # ---- Fix 2: resolve the RUNNING script, not a PATH lookup ----
+  # BASH_SOURCE[0] is the path to the executing script file, regardless of
+  # what 'command -v opensop' would return.  Canonicalize to the real file
+  # (resolve symlinks).
+  #
+  # Portability: macOS ships readlink(1) WITHOUT -f (BSD coreutils); GNU
+  # readlink does support -f.  The guard `command -v readlink` only tests
+  # for the binary's presence, not -f support, so on macOS `readlink -f`
+  # fails silently and we would fall back to the raw (un-resolved) path.
+  # Fix: try `readlink -f` and check the output; on failure (empty result
+  # OR non-zero exit) fall back to python3 os.path.realpath; if that also
+  # fails, abort — we cannot safely identify the real target file.
+  local self_path="${BASH_SOURCE[0]}"
+  local real_path=""
+  # Try GNU readlink -f (Linux, GNU coreutils on macOS via brew).
+  real_path="$(readlink -f "$self_path" 2>/dev/null || true)"
+  # Fall back to python3 if readlink -f produced nothing (BSD macOS readlink).
+  if [[ -z "$real_path" ]] && command -v python3 >/dev/null 2>&1; then
+    real_path="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$self_path" 2>/dev/null || true)"
+  fi
+  # If neither resolved to a non-empty path, use self_path as last resort.
+  [[ -n "$real_path" ]] || real_path="$self_path"
+  # Guard: must be a regular file (not a directory, device, symlink, etc.)
+  if [[ ! -f "$real_path" ]]; then
+    die "resolved path is not a regular file: $real_path" \
+        "cli_error" "reinstall opensop with install.sh to a regular file path"
+  fi
+  local install_dir
+  install_dir="$(dirname "$real_path")"
+
+  # Determine the target ref (git tag or main).
+  local target_ref
+  if [[ -n "$pin_version" ]]; then
+    target_ref="v${pin_version#v}"  # normalise: "0.8.1" → "v0.8.1"
+  else
+    target_ref="main"
+  fi
+
+  local raw_base="https://raw.githubusercontent.com/Chosen9115/opensop/${target_ref}/cli/bin"
+  local fetch_url="${raw_base}/opensop"
+  local checksum_url="${raw_base}/opensop.sha256"
+
+  # ---- Fix 3: temp file INSIDE destination directory (guaranteed same fs) ----
+  # This makes mv(1) an atomic rename — no cross-filesystem copy window.
+  local tmp_bin
+  tmp_bin="$(mktemp "${install_dir}/.opensop-upgrade.XXXXXX")" || \
+    die "could not create temp file in ${install_dir}" "cli_error" \
+        "check write permissions; try: sudo opensop upgrade"
+  # Trap ensures the temp file is cleaned up on any exit (including set -e abort).
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmp_bin'" EXIT
+
+  info "fetching ${fetch_url} …"
+  local curl_rc=0
+  curl -fsSL "$fetch_url" -o "$tmp_bin" 2>/dev/null || curl_rc=$?
+  if [[ $curl_rc -ne 0 ]]; then
+    die "download failed (curl exit $curl_rc) — check the version tag and your network" \
+        "network_error" "opensop upgrade --pin X.Y.Z"
+  fi
+
+  # Sanity-check: the downloaded file must look like the opensop script.
+  if ! grep -q "OPENSOP_CLI_VERSION" "$tmp_bin" 2>/dev/null; then
+    die "downloaded file does not look like an opensop binary (missing OPENSOP_CLI_VERSION)" \
+        "cli_error" "check the version tag: ${target_ref}"
+  fi
+
+  # Extract the new version string from the downloaded binary.
+  local new_version
+  new_version="$(grep -m1 'OPENSOP_CLI_VERSION=' "$tmp_bin" | sed 's/.*OPENSOP_CLI_VERSION="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/')"
+
+  # ---- Fix 1a: --pin version must match the embedded version in the binary ----
+  if [[ -n "$pin_version" ]]; then
+    local normalized_pin="v${pin_version#v}"
+    local embedded_tag="v${new_version#v}"
+    if [[ "$normalized_pin" != "$embedded_tag" ]]; then
+      die "--pin ${pin_version} requested but downloaded binary embeds version ${new_version} — aborting" \
+          "cli_error" "verify the tag exists in github.com/Chosen9115/opensop and retry"
+    fi
+  fi
+
+  # ---- Fix 1b: checksum verification ----
+  # Attempt to fetch the companion .sha256 file.  If present, verify before
+  # touching anything.  If absent, require --allow-unverified to proceed.
+  local tmp_sum
+  tmp_sum="$(mktemp "${install_dir}/.opensop-upgrade-sum.XXXXXX")" || \
+    die "could not create temp file in ${install_dir}" "cli_error" \
+        "check write permissions"
+  # Add tmp_sum to the exit trap (extend the existing one).
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmp_bin' '$tmp_sum'" EXIT
+
+  local sum_available=false
+  local sum_curl_rc=0
+  curl -fsSL "$checksum_url" -o "$tmp_sum" 2>/dev/null || sum_curl_rc=$?
+  if [[ $sum_curl_rc -eq 0 && -s "$tmp_sum" ]]; then
+    sum_available=true
+  fi
+
+  if $sum_available; then
+    # Verify the download's SHA-256 against the published checksum file.
+    # The .sha256 file must contain the hex digest (optionally followed by
+    # whitespace + filename, which is the sha256sum / shasum standard format).
+    local expected_sum
+    expected_sum="$(awk '{print $1}' "$tmp_sum" | tr '[:upper:]' '[:lower:]')"
+    local actual_sum
+    actual_sum="$(_portable_sha256 "$tmp_bin")" || \
+      die "no SHA-256 tool found (need sha256sum, shasum, or openssl)" \
+          "missing_dependency" "install one of: sha256sum (coreutils), shasum, openssl"
+    actual_sum="$(printf '%s' "$actual_sum" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$actual_sum" != "$expected_sum" ]]; then
+      die "checksum mismatch — download may be corrupt or tampered with (expected: ${expected_sum}; got: ${actual_sum})" \
+          "cli_error" "retry or report at github.com/Chosen9115/opensop"
+    fi
+    info "checksum verified (${actual_sum:0:16}…)"
+  else
+    # No checksum file published yet.  Require explicit opt-in.
+    if ! $allow_unverified; then
+      die "no checksum file found at ${checksum_url} — cannot verify download integrity" \
+          "cli_error" \
+          "pass --allow-unverified to skip verification (not recommended); GPG signing is planned"
+    fi
+    warn "no checksum file found — proceeding unverified (--allow-unverified passed)"
+  fi
+
+  if $dry_run; then
+    printf '%s → %s  (dry run — no changes written)\n' "$OPENSOP_CLI_VERSION" "${new_version:-?}"
+    return 0
+  fi
+
+  if [[ "$OPENSOP_CLI_VERSION" == "$new_version" ]]; then
+    ok "already at ${new_version} — nothing to do"
+    return 0
+  fi
+
+  # Check write permission before attempting the replace.
+  if [[ ! -w "$real_path" ]]; then
+    die "cannot write to $real_path — try: sudo opensop upgrade" \
+        "cli_error" "or re-install to a user-writable path with: install.sh --prefix \$HOME/.local"
+  fi
+
+  # ---- Fix 4: preserve the existing binary's permissions ----
+  # mktemp creates files with mode 0600; replacing a world-executable binary
+  # (e.g. /usr/local/bin/opensop with 0755) would strip execute bits for group
+  # and other.  Match the existing mode, or default to 0755.
+  #
+  # Portability: GNU stat uses -c '%a'; BSD stat (macOS) uses -f '%Lp' for
+  # the low permission bits only.  The old format string '%OLp' (capital O)
+  # on BSD includes file-type bits in the output (e.g. 100755 instead of 755),
+  # which is an invalid argument to chmod(1).  Use '%Lp' (lowercase L) instead.
+  # Validate the extracted string matches ^[0-7]{3,4}$ before using it.
+  local target_mode="0755"
+  if [[ -f "$real_path" ]]; then
+    local existing_mode
+    existing_mode="$(stat -c '%a' "$real_path" 2>/dev/null \
+                  || stat -f '%Lp' "$real_path" 2>/dev/null \
+                  || echo "")"
+    # Accept only plain octal permission strings (3–4 digits); reject anything
+    # that contains file-type bits or other garbage (e.g. "100755").
+    if [[ "$existing_mode" =~ ^[0-7]{3,4}$ ]]; then
+      target_mode="$existing_mode"
+    fi
+  fi
+  chmod "$target_mode" "$tmp_bin"
+
+  # ---- Fix 3 (continued): atomic same-filesystem mv — no cp fallback ----
+  # tmp_bin was created inside install_dir, so this mv is always on the same
+  # filesystem and is therefore an atomic rename.  No truncation window.
+  mv "$tmp_bin" "$real_path"
+
+  ok "${OPENSOP_CLI_VERSION} → ${new_version}  (${real_path})"
+  jq -nc \
+    --arg old_version "$OPENSOP_CLI_VERSION" \
+    --arg new_version "$new_version" \
+    --arg path "$real_path" \
+    '{upgraded:true, old_version:$old_version, new_version:$new_version, path:$path}' \
+    | emit_pretty_or_json
 }
 
 cmd_version() {
@@ -5760,10 +6014,10 @@ main() {
     [[ -n "$_cell_for_runs" ]] && OPENSOP_LOCAL_HOME="$_cell_for_runs/.opensop"
   fi
 
-  # curl is only needed for the remote (server) backend.
+  # curl is only needed for the remote (server) backend AND for `upgrade`.
   # Local-default commands (runs, show, init, scope, annotate, lineage, fork,
   # and all dual commands in local mode) need no curl.
-  if [[ "$REMOTE_MODE" == true ]]; then
+  if [[ "$REMOTE_MODE" == true ]] || [[ "$cmd" == "upgrade" ]]; then
     require_curl
   fi
 
@@ -5794,6 +6048,7 @@ main() {
     register)   cmd_register "$@" ;;
     instances)  cmd_instances "$@" ;;
     config)     cmd_config "$@" ;;
+    upgrade)    cmd_upgrade "$@" ;;
     init)       cmd_init "$@" ;;
     scope)      cmd_scope "$@" ;;
     annotate)   cmd_annotate "$@" ;;

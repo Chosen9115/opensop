@@ -9,6 +9,15 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Security
+
+- **Committed `bin/opensop.sha256`** so the default `curl … | bash` installer and
+  `opensop upgrade` can verify downloads without `--allow-unverified`. The file
+  contains the SHA-256 digest of `bin/opensop` in `sha256sum` two-field format
+  (`<digest>  opensop`). Regenerate it with `make checksum` whenever `bin/opensop`
+  changes; commit both files together. GPG/cosign release signing is tracked as a
+  follow-up and is not yet implemented.
+
 ### Added
 
 - **A1: `opensop ps` — process status view (SPEC §9).** Surfaces the §9 process
@@ -120,6 +129,55 @@ This project follows [Semantic Versioning](https://semver.org/) and the
   - `diff` updated: compares `result_hash` instead of `duration_ms` per step (duration is
     inherently variable; the hash is the correct reproducibility signal). Backward-compatible
     — existing receipts without these fields still diff cleanly (`null` == `null`).
+- **Install/distribution (I1).**
+
+  - `cli/install.sh` — curl-pipe installer.  Detects bash version (warns with
+    `brew install bash` steps on macOS 3.2), verifies `jq` is present, and installs
+    the single-file binary to `~/.local/bin` by default (or any `--prefix`-given
+    directory).  Idempotent: re-running replaces the binary in-place.  A specific
+    release can be pinned with `--version X.Y.Z`.  Prints a `$PATH` hint when the
+    install directory is not yet on the user's path.
+    Platform matrix: **Linux** — full support; **macOS** — full support with bash 4+
+    (`brew install bash`; macOS ships bash 3.2 which is not supported); **Windows** — WSL only.
+
+  - `opensop upgrade` — new subcommand.  Re-fetches the latest release of the
+    single-file script from `github.com/Chosen9115/opensop` and replaces the
+    installed binary.  Prints old → new version on success.  Flags: `--pin X.Y.Z`
+    to target a specific tag; `--dry-run` to preview without writing.  Registered in
+    the command registry (category `config`, backend `local`; requires `curl`).
+
+### Security (install/upgrade hardening — adversarial review)
+
+- **[high] Checksum verification before install/replace.** Both `install.sh` and
+  `opensop upgrade` now fetch a companion `<binary>.sha256` file from the same
+  release location.  If present, the download's SHA-256 is verified (portable:
+  `sha256sum` → `shasum -a 256` → `openssl dgst`) before any file is touched.
+  A mismatch aborts immediately without modifying the installed binary.  If no
+  checksum file is published yet, the operation refuses with a clear error unless
+  `--allow-unverified` is passed explicitly.  GPG signing of releases is planned
+  as a follow-up; SHA-256 verification is the current security posture.
+
+- **[high] `--pin` version match enforced.** When `--pin X.Y.Z` is requested, the
+  embedded `OPENSOP_CLI_VERSION` of the downloaded binary is checked against the
+  requested pin.  A mismatch aborts before installing.
+
+- **[high] Upgrade targets the running script (`BASH_SOURCE[0]`), not PATH.**
+  `cmd_upgrade` now derives its target from `BASH_SOURCE[0]` (the actual executing
+  file), canonicalized through symlinks via `readlink -f` / Python fallback.
+  A decoy `opensop` earlier on PATH can no longer redirect the upgrade to the
+  wrong binary.  The resolved path must be a regular file; non-files are rejected.
+
+- **[high] Atomic same-filesystem replace; truncation window eliminated.**
+  Temp files are now created inside the destination directory (not `/tmp`), so
+  `mv` is always a same-filesystem atomic rename.  The `cp`-over-live-binary
+  fallback (which had a corruption window) is removed from both `cmd_upgrade`
+  and `install.sh`.
+
+- **[medium] Executable permissions preserved.**  The temp file (created with
+  mode `0600` by `mktemp`) is `chmod`-ed to match the existing target's mode
+  before the atomic rename.  System installs at `/usr/local/bin` (typically
+  `0755`) no longer lose group/other read+execute bits.  Default is `0755` when
+  no existing file is present.  Fixed in both `cmd_upgrade` and `install.sh`.
 
 - **Robust help engine (B1).** `cmd_help` is now driven by a single command registry
   (`_registry_raw`) that holds each subcommand's name, summary, usage, category, and

@@ -3975,6 +3975,93 @@ rm -rf "$fix3_home"
 echo "PASS: Fix3 — form waiting receipt carries duration_ms and result_hash='pending'"
 
 rm -rf "$c1a_home"
+# I1: opensop upgrade — command parsing and failure paths.
+#
+# The happy path (actual fetch+replace) requires network and a writable
+# install dir; we test only the error paths that are deterministic without
+# network access and without a real installed binary.
+# --------------------------------------------------------------------------- #
+
+# (1) Unknown flag must exit non-zero with unknown_flag error code.
+set +e
+upg_bad="$("$cli" upgrade --invalid-flag --json 2>&1)"; upg_bad_rc=$?
+set -e
+[ "$upg_bad_rc" -ne 0 ] || { echo "FAIL: upgrade --invalid-flag should exit non-zero"; exit 1; }
+echo "$upg_bad" | grep -q "unknown_flag" \
+  || { echo "FAIL: upgrade --invalid-flag should emit unknown_flag, got: $upg_bad"; exit 1; }
+echo "PASS: upgrade — unknown flag exits non-zero with unknown_flag code"
+
+# (2) Unexpected positional argument must exit non-zero with usage_error.
+set +e
+upg_pos="$("$cli" upgrade unexpected-arg --json 2>&1)"; upg_pos_rc=$?
+set -e
+[ "$upg_pos_rc" -ne 0 ] || { echo "FAIL: upgrade with positional arg should exit non-zero"; exit 1; }
+echo "$upg_pos" | grep -q "usage_error" \
+  || { echo "FAIL: upgrade with positional arg should emit usage_error, got: $upg_pos"; exit 1; }
+echo "PASS: upgrade — unexpected positional argument exits non-zero with usage_error"
+
+# (3) --pin without a value must exit non-zero with usage_error.
+# Passing --pin as the very last argument leaves no token for it to consume.
+set +e
+upg_noval="$("$cli" upgrade --pin 2>&1)"; upg_noval_rc=$?
+set -e
+[ "$upg_noval_rc" -ne 0 ] || { echo "FAIL: upgrade --pin (no value) should exit non-zero"; exit 1; }
+echo "PASS: upgrade -- --pin with no value exits non-zero"
+
+# (4) upgrade targets BASH_SOURCE[0], not PATH.
+#     Regression: the old impl used `command -v opensop` — if a decoy `opensop`
+#     is on PATH, the wrong binary would be "upgraded".  With BASH_SOURCE[0],
+#     the running script is always the upgrade target, independent of PATH.
+#
+#     We simulate the attack: place a decoy `opensop` wrapper earlier on PATH
+#     that writes a canary file if it's ever treated as the upgrade target.
+#     Then run upgrade (we'll abort at the checksum-missing stage, which is
+#     fine — we just need to confirm the decoy's install dir is NOT the target).
+upg_decoy_dir="$(mktemp -d)"
+# The decoy must be executable and write a canary when invoked.
+printf '#!/usr/bin/env bash\ntouch "%s/decoy-was-targeted"\necho decoy' "$upg_decoy_dir" \
+  > "${upg_decoy_dir}/opensop"
+chmod +x "${upg_decoy_dir}/opensop"
+
+# Run upgrade with the decoy first on PATH; expect it to fail (no checksum file
+# in the test environment / network unavailable is OK — we just need the
+# resolved path NOT to be the decoy dir's file).
+set +e
+upg_src_out="$(PATH="${upg_decoy_dir}:${PATH}" "$cli" upgrade --json 2>&1)"; upg_src_rc=$?
+set -e
+
+# The decoy must not have been treated as the upgrade target
+[ ! -f "${upg_decoy_dir}/decoy-was-targeted" ] \
+  || { echo "FAIL: upgrade targeted the PATH-decoy opensop instead of BASH_SOURCE[0]"; exit 1; }
+# The error should mention the real script's directory, not the decoy dir
+# (We can't predict the exact error, but the decoy path must NOT appear.)
+echo "$upg_src_out" | grep -q "${upg_decoy_dir}" \
+  && { echo "FAIL: upgrade error mentions decoy dir — wrong target resolved; output: $upg_src_out"; exit 1; }
+rm -rf "$upg_decoy_dir"
+echo "PASS: upgrade — targets BASH_SOURCE[0], not PATH (decoy opensop on PATH is ignored)"
+
+# (5) help output: `opensop help upgrade` must succeed and include the command name.
+set +e
+upg_help="$("$cli" help upgrade 2>&1)"; upg_help_rc=$?
+set -e
+[ "$upg_help_rc" -eq 0 ] || { echo "FAIL: 'help upgrade' should exit 0, got $upg_help_rc"; exit 1; }
+echo "$upg_help" | grep -q "upgrade" \
+  || { echo "FAIL: 'help upgrade' output should contain 'upgrade'"; exit 1; }
+echo "PASS: upgrade — 'opensop help upgrade' exits 0 and contains command name"
+
+# (6) `opensop help upgrade --json` must emit a valid registry record.
+set +e
+upg_hjson="$("$cli" help upgrade --json 2>&1)"; upg_hjson_rc=$?
+set -e
+[ "$upg_hjson_rc" -eq 0 ] || { echo "FAIL: 'help upgrade --json' should exit 0, got $upg_hjson_rc"; exit 1; }
+echo "$upg_hjson" | jq -e '.command == "upgrade"' >/dev/null \
+  || { echo "FAIL: 'help upgrade --json' must emit {command:\"upgrade\",...}, got: $upg_hjson"; exit 1; }
+echo "PASS: upgrade — 'opensop help upgrade --json' emits valid registry record"
+
+# (7) upgrade is included in the full registry (help --json lists it).
+"$cli" help --json | jq -e 'map(.command) | contains(["upgrade"])' >/dev/null \
+  || { echo "FAIL: upgrade must appear in help --json registry"; exit 1; }
+echo "PASS: upgrade — appears in full registry (help --json)"
 
 # --------------------------------------------------------------------------- #
 # AGENTS.md §6 fixture: extract-action-items example (docs/b2 fix #3)
@@ -4004,6 +4091,506 @@ eai_ctx_date="$(cat "$eai_home/runs/$eai_rid/context.json" | jq -r '.meeting_dat
   || { echo "FAIL: docs/b2-fix3 — meeting_date not in context (got: $eai_ctx_date)"; exit 1; }
 rm -rf "$eai_home"
 echo "PASS: docs/b2-fix3 — extract-action-items: tokens interpolate, schema validates, run completes"
+# Security regression tests (I1 adversarial review fixes)
+# --------------------------------------------------------------------------- #
+
+# (S1) --pin mismatch aborts before touching the installed binary.
+#      Simulate: craft a fake binary whose embedded OPENSOP_CLI_VERSION differs
+#      from the requested --pin.  Use a temp dir as a fake "install dir" and
+#      confirm no changes are made.
+upg_pin_dir="$(mktemp -d)"
+upg_pin_bin="${upg_pin_dir}/opensop"
+# Build a minimal fake CLI with a known version that disagrees with --pin
+cat > "$upg_pin_bin" <<'FAKECLI'
+#!/usr/bin/env bash
+set -euo pipefail
+readonly OPENSOP_CLI_VERSION="99.0.0"
+FAKECLI
+chmod +x "$upg_pin_bin"
+
+# We'll test the checksum path by injecting a fake server response.
+# Since we can't run a real server in tests, we test the pin validation
+# logic directly by constructing a fake binary and a matching checksum,
+# then using a mock scenario.
+#
+# More practical approach: verify that a downloaded binary whose embedded
+# version does NOT match --pin causes cmd_upgrade to abort with cli_error.
+# We do this by creating a tiny helper script that pretends to be opensop
+# but with the wrong version, then invoking upgrade in a way that exercises
+# the pin validation path without network access.
+#
+# Since upgrade fetches from the network, we can't fully mock it here without
+# a stub server.  Instead we verify the logic at the grep/sed extraction level:
+# If the downloaded binary embeds "99.0.0" and --pin requests "0.8.1",
+# the error must contain "cli_error".
+#
+# The realistic test: script a fake upgrade that exercises the pin check by
+# patching the env to point curl at a local file.
+upg_fake_dir="$(mktemp -d)"
+# Fake binary: looks like opensop (has OPENSOP_CLI_VERSION), but wrong version.
+cat > "${upg_fake_dir}/fake-binary" <<'FAKECLI'
+#!/usr/bin/env bash
+readonly OPENSOP_CLI_VERSION="99.0.0"
+FAKECLI
+# Fake checksum (sha256 of the fake binary)
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "${upg_fake_dir}/fake-binary" | awk '{print $1}' > "${upg_fake_dir}/fake-binary.sha256"
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 "${upg_fake_dir}/fake-binary" | awk '{print $1}' > "${upg_fake_dir}/fake-binary.sha256"
+elif command -v openssl >/dev/null 2>&1; then
+  openssl dgst -sha256 "${upg_fake_dir}/fake-binary" | awk '{print $NF}' > "${upg_fake_dir}/fake-binary.sha256"
+fi
+
+# Patch cmd_upgrade to use file:// URLs by wrapping curl.
+# Create a fake curl that redirects requests to our local files.
+upg_curl_stub="${upg_fake_dir}/curl"
+cat > "$upg_curl_stub" <<CURLSTUB
+#!/usr/bin/env bash
+# Minimal curl stub: captures -o <dest> and redirects the fetch to a local file.
+dest=""
+args=()
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) dest="\$2"; shift 2 ;;
+    *) args+=("\$1"); shift ;;
+  esac
+done
+# Last positional arg is the URL (or empty for non-flag args captured above).
+url=""
+for a in "\${args[@]:-}"; do url="\$a"; done
+# Map: opensop URL → fake binary; .sha256 URL → fake checksum
+if [[ "\$url" == *".sha256"* ]]; then
+  if [[ -f "${upg_fake_dir}/fake-binary.sha256" ]]; then
+    cp "${upg_fake_dir}/fake-binary.sha256" "\$dest"
+    exit 0
+  fi
+  exit 22
+fi
+# Not the checksum — assume binary request.
+cp "${upg_fake_dir}/fake-binary" "\$dest"
+exit 0
+CURLSTUB
+chmod +x "$upg_curl_stub"
+
+# Run upgrade with --pin 0.8.1 (fake binary says 99.0.0) using stubbed curl.
+# The install dir must be writable; create a fake "installed" binary there.
+upg_install_dir="$(mktemp -d)"
+upg_installed_bin="${upg_install_dir}/opensop"
+cp "$cli" "$upg_installed_bin"
+chmod +x "$upg_installed_bin"
+
+set +e
+# Set PATH so our curl stub is found first; run the copy of the CLI from install dir.
+upg_pin_out="$(PATH="${upg_fake_dir}:${PATH}" "$upg_installed_bin" upgrade --pin 0.8.1 --json 2>&1)"; upg_pin_rc=$?
+set -e
+[ "$upg_pin_rc" -ne 0 ] || { echo "FAIL: upgrade with --pin mismatch should exit non-zero; got: $upg_pin_out"; exit 1; }
+echo "$upg_pin_out" | grep -q "cli_error" \
+  || { echo "FAIL: upgrade --pin mismatch should emit cli_error, got: $upg_pin_out"; exit 1; }
+echo "$upg_pin_out" | grep -q "99.0.0" \
+  || { echo "FAIL: upgrade --pin mismatch error should mention the embedded version; got: $upg_pin_out"; exit 1; }
+# The installed binary must be UNCHANGED (download was never written).
+diff "$cli" "$upg_installed_bin" >/dev/null 2>&1 \
+  || { echo "FAIL: upgrade --pin mismatch modified the installed binary (should have aborted)"; exit 1; }
+echo "PASS: upgrade --pin — mismatch between requested pin and embedded version aborts without touching installed binary"
+
+# (S2) Unverified download (no .sha256 file) without --allow-unverified refuses.
+# Reuse the curl stub but make it fail on the .sha256 request.
+upg_nosum_dir="$(mktemp -d)"
+upg_nosum_bin="${upg_nosum_dir}/opensop"
+cp "$cli" "$upg_nosum_bin"
+chmod +x "$upg_nosum_bin"
+
+upg_curl_nosum="${upg_fake_dir}/curl"
+cat > "$upg_curl_nosum" <<CURLSTUB2
+#!/usr/bin/env bash
+dest=""
+args=()
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) dest="\$2"; shift 2 ;;
+    *) args+=("\$1"); shift ;;
+  esac
+done
+url=""
+for a in "\${args[@]:-}"; do url="\$a"; done
+if [[ "\$url" == *".sha256"* ]]; then
+  # Simulate: no checksum file (HTTP 404 → curl exit 22)
+  exit 22
+fi
+cp "${upg_fake_dir}/fake-binary" "\$dest"
+exit 0
+CURLSTUB2
+chmod +x "$upg_curl_nosum"
+
+set +e
+upg_nosumout="$(PATH="${upg_fake_dir}:${PATH}" "$upg_nosum_bin" upgrade --json 2>&1)"; upg_nosum_rc=$?
+set -e
+[ "$upg_nosum_rc" -ne 0 ] || { echo "FAIL: upgrade without checksum file (no --allow-unverified) should exit non-zero; got: $upg_nosumout"; exit 1; }
+echo "$upg_nosumout" | grep -q "cli_error" \
+  || { echo "FAIL: upgrade without checksum should emit cli_error, got: $upg_nosumout"; exit 1; }
+echo "$upg_nosumout" | grep -q "allow-unverified" \
+  || { echo "FAIL: upgrade without checksum should mention --allow-unverified, got: $upg_nosumout"; exit 1; }
+echo "PASS: upgrade — no checksum file without --allow-unverified is refused (cli_error)"
+
+# (S3) Checksum mismatch aborts without touching the installed binary.
+# Build a binary with a WRONG checksum (checksum is for something else).
+upg_mismatch_dir="$(mktemp -d)"
+upg_mismatch_bin="${upg_mismatch_dir}/opensop"
+cp "$cli" "$upg_mismatch_bin"
+chmod +x "$upg_mismatch_bin"
+
+# Write a checksum that will never match.
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n' \
+  > "${upg_fake_dir}/fake-binary.sha256"
+
+cat > "${upg_fake_dir}/curl" <<CURLSTUB3
+#!/usr/bin/env bash
+dest=""
+args=()
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) dest="\$2"; shift 2 ;;
+    *) args+=("\$1"); shift ;;
+  esac
+done
+url=""
+for a in "\${args[@]:-}"; do url="\$a"; done
+if [[ "\$url" == *".sha256"* ]]; then
+  cp "${upg_fake_dir}/fake-binary.sha256" "\$dest"
+  exit 0
+fi
+cp "${upg_fake_dir}/fake-binary" "\$dest"
+exit 0
+CURLSTUB3
+chmod +x "${upg_fake_dir}/curl"
+
+set +e
+upg_mmout="$(PATH="${upg_fake_dir}:${PATH}" "$upg_mismatch_bin" upgrade --json 2>&1)"; upg_mm_rc=$?
+set -e
+[ "$upg_mm_rc" -ne 0 ] || { echo "FAIL: upgrade with checksum mismatch should exit non-zero; got: $upg_mmout"; exit 1; }
+echo "$upg_mmout" | grep -q "cli_error" \
+  || { echo "FAIL: upgrade checksum mismatch should emit cli_error, got: $upg_mmout"; exit 1; }
+echo "$upg_mmout" | grep -q "mismatch" \
+  || { echo "FAIL: upgrade checksum mismatch error should mention 'mismatch', got: $upg_mmout"; exit 1; }
+diff "$cli" "$upg_mismatch_bin" >/dev/null 2>&1 \
+  || { echo "FAIL: upgrade checksum mismatch modified the installed binary (should have aborted)"; exit 1; }
+echo "PASS: upgrade — checksum mismatch aborts without touching the installed binary"
+
+# --------------------------------------------------------------------------- #
+# Portability fix 1: readlink -f via symlink — upgrade must operate on the
+# REAL file, not the symlink itself.
+#
+# Strategy: place the real binary in one temp dir (sym_real_dir) and the
+# symlink in a DIFFERENT dir (sym_link_dir).  Run upgrade via the symlink
+# with a stub curl that serves a known fake binary + matching checksum.
+# Key assertions:
+#   - the REAL file is replaced (its content changes after upgrade)
+#   - the symlink itself remains a symlink (was not replaced by a regular file)
+#   - no regular opensop file was left in the symlink dir (temp not beside link)
+# --------------------------------------------------------------------------- #
+sym_real_dir="$(mktemp -d)"
+sym_link_dir="$(mktemp -d)"
+sym_real_bin="${sym_real_dir}/opensop"   # the real file
+sym_link="${sym_link_dir}/opensop"       # symlink in a DIFFERENT dir
+cp "$cli" "$sym_real_bin"
+chmod +x "$sym_real_bin"
+ln -s "$sym_real_bin" "$sym_link"
+
+# Build a fake "newer" binary with a distinct version string.
+sym_fake_dir="$(mktemp -d)"
+cat > "${sym_fake_dir}/fake-binary" <<'FAKECLI2'
+#!/usr/bin/env bash
+readonly OPENSOP_CLI_VERSION="0.99.0-symlink-test"
+FAKECLI2
+
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "${sym_fake_dir}/fake-binary" | awk '{print $1}' > "${sym_fake_dir}/fake-binary.sha256"
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 "${sym_fake_dir}/fake-binary" | awk '{print $1}' > "${sym_fake_dir}/fake-binary.sha256"
+else
+  openssl dgst -sha256 "${sym_fake_dir}/fake-binary" | awk '{print $NF}' > "${sym_fake_dir}/fake-binary.sha256"
+fi
+
+cat > "${sym_fake_dir}/curl" <<CURLSTUB_SYM
+#!/usr/bin/env bash
+dest=""
+args=()
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) dest="\$2"; shift 2 ;;
+    *) args+=("\$1"); shift ;;
+  esac
+done
+url=""
+for a in "\${args[@]:-}"; do url="\$a"; done
+if [[ "\$url" == *".sha256"* ]]; then
+  cp "${sym_fake_dir}/fake-binary.sha256" "\$dest"
+  exit 0
+fi
+cp "${sym_fake_dir}/fake-binary" "\$dest"
+exit 0
+CURLSTUB_SYM
+chmod +x "${sym_fake_dir}/curl"
+
+sym_before="$(sha256sum "$sym_real_bin" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$sym_real_bin" | awk '{print $1}')"
+
+set +e
+sym_out="$(PATH="${sym_fake_dir}:${PATH}" "$sym_link" upgrade --json 2>&1)"; sym_rc=$?
+set -e
+
+[ "$sym_rc" -eq 0 ] || {
+  echo "FAIL: upgrade via symlink should exit 0 (upgrade completed); got $sym_rc: $sym_out"
+  rm -rf "$sym_real_dir" "$sym_link_dir" "$sym_fake_dir"
+  exit 1
+}
+
+# The real file must have been replaced (content changed).
+sym_after="$(sha256sum "$sym_real_bin" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$sym_real_bin" | awk '{print $1}')"
+if [[ "$sym_before" = "$sym_after" ]]; then
+  echo "FAIL: upgrade via symlink did not replace the real file (real binary unchanged)"
+  echo "  output: $sym_out"
+  rm -rf "$sym_real_dir" "$sym_link_dir" "$sym_fake_dir"
+  exit 1
+fi
+
+# The symlink itself must still be a symlink (not replaced by a regular file).
+if [[ ! -L "$sym_link" ]]; then
+  echo "FAIL: upgrade via symlink replaced the symlink with a regular file (should update real target)"
+  rm -rf "$sym_real_dir" "$sym_link_dir" "$sym_fake_dir"
+  exit 1
+fi
+
+# The symlink dir must NOT contain a new regular opensop file (no temp beside symlink).
+if find "$sym_link_dir" -maxdepth 1 -name "*.opensop-upgrade.*" | grep -q .; then
+  echo "FAIL: upgrade via symlink left temp files in the symlink dir (wrote beside symlink, not real file)"
+  rm -rf "$sym_real_dir" "$sym_link_dir" "$sym_fake_dir"
+  exit 1
+fi
+
+rm -rf "$sym_real_dir" "$sym_link_dir" "$sym_fake_dir"
+echo "PASS: upgrade via symlink — resolves to real file; real file updated, symlink preserved"
+
+# --------------------------------------------------------------------------- #
+# Portability fix 2: stat mode validation — %Lp returns "755", not "100755".
+# Test that chmod receives a valid 3-4 digit octal mode when upgrading a
+# binary with known permissions (0755 and 0711).
+# We exercise the stat + chmod path by using a binary we can set mode on,
+# then verifying the temp file gets that mode before the atomic mv.
+# We simulate the full upgrade flow (with fake curl) and check the installed
+# result's mode.
+# --------------------------------------------------------------------------- #
+for test_mode in 755 711; do
+  mode_dir="$(mktemp -d)"
+  mode_bin="${mode_dir}/opensop"
+  cp "$cli" "$mode_bin"
+  chmod "$test_mode" "$mode_bin"
+
+  mode_fake_dir="$(mktemp -d)"
+  cat > "${mode_fake_dir}/fake-binary" <<FAKECLI_MODE
+#!/usr/bin/env bash
+readonly OPENSOP_CLI_VERSION="0.99.0"
+FAKECLI_MODE
+
+  # Correct checksum for fake binary.
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${mode_fake_dir}/fake-binary" | awk '{print $1}' > "${mode_fake_dir}/fake-binary.sha256"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${mode_fake_dir}/fake-binary" | awk '{print $1}' > "${mode_fake_dir}/fake-binary.sha256"
+  else
+    openssl dgst -sha256 "${mode_fake_dir}/fake-binary" | awk '{print $NF}' > "${mode_fake_dir}/fake-binary.sha256"
+  fi
+
+  cat > "${mode_fake_dir}/curl" <<CURLSTUB_MODE
+#!/usr/bin/env bash
+dest=""
+args=()
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) dest="\$2"; shift 2 ;;
+    *) args+=("\$1"); shift ;;
+  esac
+done
+url=""
+for a in "\${args[@]:-}"; do url="\$a"; done
+if [[ "\$url" == *".sha256"* ]]; then
+  cp "${mode_fake_dir}/fake-binary.sha256" "\$dest"
+  exit 0
+fi
+cp "${mode_fake_dir}/fake-binary" "\$dest"
+exit 0
+CURLSTUB_MODE
+  chmod +x "${mode_fake_dir}/curl"
+
+  set +e
+  mode_out="$(PATH="${mode_fake_dir}:${PATH}" "$mode_bin" upgrade --allow-unverified --json 2>&1)"; mode_rc=$?
+  set -e
+  [ "$mode_rc" -eq 0 ] || {
+    echo "FAIL: upgrade (mode ${test_mode}) should exit 0 (upgrade completed); got $mode_rc: $mode_out"
+    rm -rf "$mode_dir" "$mode_fake_dir"
+    exit 1
+  }
+  # Verify the installed binary has the expected permission bits.
+  actual_mode="$(stat -c '%a' "$mode_bin" 2>/dev/null || stat -f '%Lp' "$mode_bin" 2>/dev/null || echo "unknown")"
+  if [[ "$actual_mode" != "$test_mode" ]]; then
+    echo "FAIL: upgrade mode preservation — expected ${test_mode}, got ${actual_mode}"
+    rm -rf "$mode_dir" "$mode_fake_dir"
+    exit 1
+  fi
+  rm -rf "$mode_dir" "$mode_fake_dir"
+  echo "PASS: upgrade — mode ${test_mode} preserved after upgrade (BSD stat %Lp fix)"
+done
+
+# --------------------------------------------------------------------------- #
+# Portability fix 3: install.sh --version pin verification.
+# Simulate: install.sh downloads a binary whose OPENSOP_CLI_VERSION does NOT
+# match the requested --version; verify the script aborts and the destination
+# file is left untouched (the existing install is unchanged).
+# --------------------------------------------------------------------------- #
+inst_pin_dir="$(mktemp -d)/bin"
+mkdir -p "$inst_pin_dir"
+# Sentinel: place a known file at the install destination so we can detect
+# whether install.sh touched it.
+inst_dest="${inst_pin_dir}/opensop"
+echo "SENTINEL-ORIGINAL" > "$inst_dest"
+chmod 755 "$inst_dest"
+
+inst_fake_dir="$(mktemp -d)"
+# Fake binary: embeds version 99.0.0, but we'll --version 0.8.1
+cat > "${inst_fake_dir}/fake-binary" <<'FAKECLI_INST'
+#!/usr/bin/env bash
+readonly OPENSOP_CLI_VERSION="99.0.0"
+FAKECLI_INST
+
+# Correct checksum for the fake binary.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "${inst_fake_dir}/fake-binary" | awk '{print $1}' > "${inst_fake_dir}/fake-binary.sha256"
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 "${inst_fake_dir}/fake-binary" | awk '{print $1}' > "${inst_fake_dir}/fake-binary.sha256"
+else
+  openssl dgst -sha256 "${inst_fake_dir}/fake-binary" | awk '{print $NF}' > "${inst_fake_dir}/fake-binary.sha256"
+fi
+
+# Fake curl stub for install.sh.
+cat > "${inst_fake_dir}/curl" <<CURLSTUB_INST
+#!/usr/bin/env bash
+dest=""
+args=()
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) dest="\$2"; shift 2 ;;
+    *) args+=("\$1"); shift ;;
+  esac
+done
+url=""
+for a in "\${args[@]:-}"; do url="\$a"; done
+if [[ "\$url" == *".sha256"* ]]; then
+  cp "${inst_fake_dir}/fake-binary.sha256" "\$dest"
+  exit 0
+fi
+cp "${inst_fake_dir}/fake-binary" "\$dest"
+exit 0
+CURLSTUB_INST
+chmod +x "${inst_fake_dir}/curl"
+
+set +e
+inst_pin_out="$(PATH="${inst_fake_dir}:${PATH}" \
+  bash "$here/install.sh" --version 0.8.1 --prefix "$(dirname "$inst_pin_dir")" 2>&1)"; inst_pin_rc=$?
+set -e
+[ "$inst_pin_rc" -ne 0 ] || {
+  echo "FAIL: install.sh --version mismatch should exit non-zero; got: $inst_pin_out"
+  rm -rf "$inst_pin_dir" "$inst_fake_dir"
+  exit 1
+}
+# install.sh must mention the embedded version so the user knows what was found.
+echo "$inst_pin_out" | grep -q "99.0.0" || {
+  echo "FAIL: install.sh --version mismatch error should mention embedded version; got: $inst_pin_out"
+  rm -rf "$inst_pin_dir" "$inst_fake_dir"
+  exit 1
+}
+# The sentinel destination file must be unchanged.
+if [[ "$(cat "$inst_dest" 2>/dev/null)" != "SENTINEL-ORIGINAL" ]]; then
+  echo "FAIL: install.sh --version mismatch replaced the destination file (should leave untouched)"
+  rm -rf "$inst_pin_dir" "$inst_fake_dir"
+  exit 1
+fi
+rm -rf "$inst_pin_dir" "$inst_fake_dir"
+echo "PASS: install.sh --version — pin mismatch aborts before writing destination (existing install untouched)"
+
+# --------------------------------------------------------------------------- #
+# Default install flow: install.sh with a valid .sha256 installs without
+# --allow-unverified (exit 0, binary written).
+#
+# Strategy: stub curl to serve the real bin/opensop + the committed
+# bin/opensop.sha256.  The install.sh checksum verification path must
+# succeed and the binary must land at the expected destination.
+# No network access; no real curl invoked.
+# --------------------------------------------------------------------------- #
+def_inst_prefix="$(mktemp -d)"
+def_inst_dir="${def_inst_prefix}/bin"
+mkdir -p "$def_inst_dir"
+
+def_inst_stub_dir="$(mktemp -d)"
+# The committed .sha256 lives alongside the binary.
+def_inst_sha256="${here}/bin/opensop.sha256"
+cat > "${def_inst_stub_dir}/curl" <<CURLSTUB_DEF
+#!/usr/bin/env bash
+dest=""
+args=()
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o) dest="\$2"; shift 2 ;;
+    *) args+=("\$1"); shift ;;
+  esac
+done
+url=""
+for a in "\${args[@]:-}"; do url="\$a"; done
+# Serve the committed .sha256 for checksum requests; serve the real binary otherwise.
+if [[ "\$url" == *".sha256"* ]]; then
+  cp "${def_inst_sha256}" "\$dest"
+  exit 0
+fi
+cp "${here}/bin/opensop" "\$dest"
+exit 0
+CURLSTUB_DEF
+chmod +x "${def_inst_stub_dir}/curl"
+
+set +e
+def_inst_out="$(PATH="${def_inst_stub_dir}:${PATH}" \
+  bash "$here/install.sh" --prefix "$def_inst_prefix" 2>&1)"; def_inst_rc=$?
+set -e
+
+[ "$def_inst_rc" -eq 0 ] || {
+  echo "FAIL: default install.sh (with committed .sha256) should exit 0; got $def_inst_rc"
+  echo "  output: $def_inst_out"
+  rm -rf "$def_inst_prefix" "$def_inst_stub_dir"
+  exit 1
+}
+
+# The binary must exist and be executable.
+[ -x "${def_inst_dir}/opensop" ] || {
+  echo "FAIL: default install.sh — binary not written or not executable at ${def_inst_dir}/opensop"
+  rm -rf "$def_inst_prefix" "$def_inst_stub_dir"
+  exit 1
+}
+
+# The output must confirm checksum verification, not warn about --allow-unverified.
+echo "$def_inst_out" | grep -q "checksum verified" || {
+  echo "FAIL: default install.sh — expected 'checksum verified' in output; got: $def_inst_out"
+  rm -rf "$def_inst_prefix" "$def_inst_stub_dir"
+  exit 1
+}
+
+echo "$def_inst_out" | grep -qi "allow-unverified" && {
+  echo "FAIL: default install.sh — output should not mention --allow-unverified when checksum is present; got: $def_inst_out"
+  rm -rf "$def_inst_prefix" "$def_inst_stub_dir"
+  exit 1
+}
+
+rm -rf "$def_inst_prefix" "$def_inst_stub_dir"
+echo "PASS: install.sh default flow — committed .sha256 enables verified install (exit 0, no --allow-unverified)"
+
+# Cleanup temp dirs from security tests.
+rm -rf "$upg_pin_dir" "$upg_fake_dir" "$upg_install_dir" "$upg_nosum_dir" "$upg_mismatch_dir"
 
 # --------------------------------------------------------------------------- #
 # A1: `opensop ps` — process status view (SPEC §9)
