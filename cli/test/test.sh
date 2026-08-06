@@ -4648,6 +4648,28 @@ chk_extra_item="$(check_output "$extra_item" "$expected_file_for_tests")"
   || { echo "FAIL: Fix3-2 checker must reject extra per-item key (schema_valid should be false), got: $chk_extra_item"; exit 1; }
 echo "PASS: Fix3-2 — checker rejects extra per-item key (additionalProperties:false on items enforced)"
 
+# ----- (Fix3-3) recall decoupled: all 3 items + extra TOP-LEVEL key → recall=3, schema_valid=false -----
+# The output is schema-invalid (extra top-level key) BUT all 3 expected items are present.
+# Recall must be 3 (items were found); schema_valid must be false (extra key present).
+recall_decouple_top='{"action_items":[{"owner":"Bob Navarro","task":"Fix the CSV export race condition"},{"owner":"Carol Singh","task":"Complete the WCAG 2.1 AA accessibility audit"},{"owner":"Dave Wu","task":"Write integration tests for payments-flow edge cases"}],"extra_top":"unexpected"}'
+chk_rdt="$(check_output "$recall_decouple_top" "$expected_file_for_tests")"
+[ "$(jq -r '.recall' <<<"$chk_rdt")" = "3" ] \
+  || { echo "FAIL: Fix3-3 recall should be 3 despite extra top-level key, got: $(jq -r '.recall' <<<"$chk_rdt") — full: $chk_rdt"; exit 1; }
+[ "$(jq -r '.schema_valid' <<<"$chk_rdt")" = "false" ] \
+  || { echo "FAIL: Fix3-3 schema_valid should be false (extra top-level key present), got: $(jq -r '.schema_valid' <<<"$chk_rdt")"; exit 1; }
+echo "PASS: Fix3-3 — recall=3 with extra top-level key: recall decoupled from schema_valid"
+
+# ----- (Fix3-4) recall decoupled: all 3 items + extra PER-ITEM key → recall=3, schema_valid=false -----
+# The output is schema-invalid (extra per-item key) BUT all 3 expected (owner,task) pairs are present.
+# Recall must be 3; schema_valid must be false.
+recall_decouple_item='{"action_items":[{"owner":"Bob Navarro","task":"Fix the CSV export race condition","priority":"high"},{"owner":"Carol Singh","task":"Complete the WCAG 2.1 AA accessibility audit"},{"owner":"Dave Wu","task":"Write integration tests for payments-flow edge cases"}]}'
+chk_rdi="$(check_output "$recall_decouple_item" "$expected_file_for_tests")"
+[ "$(jq -r '.recall' <<<"$chk_rdi")" = "3" ] \
+  || { echo "FAIL: Fix3-4 recall should be 3 despite extra per-item key, got: $(jq -r '.recall' <<<"$chk_rdi") — full: $chk_rdi"; exit 1; }
+[ "$(jq -r '.schema_valid' <<<"$chk_rdi")" = "false" ] \
+  || { echo "FAIL: Fix3-4 schema_valid should be false (extra per-item key present), got: $(jq -r '.schema_valid' <<<"$chk_rdi")"; exit 1; }
+echo "PASS: Fix3-4 — recall=3 with extra per-item key: recall decoupled from schema_valid"
+
 # ----- (Fix2-1) recall: all 3 found + extras → recall=3, field_match=false -----
 # Stub response: correct 3 items + 1 phantom. Recall should be 3 (all found),
 # but field_match must be false (phantom item present).

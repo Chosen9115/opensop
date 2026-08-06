@@ -19,6 +19,9 @@
 #
 # [FIX2] Recall: count of expected (owner,task) pairs found in the output,
 # regardless of extras. Reported as an integer (0..N where N = expected count).
+# Recall is computed from action_items whenever the array is parseable, BEFORE
+# applying additionalProperties checks — so schema-invalid outputs that still
+# contain all expected items report full recall.
 #
 # No external deps beyond bash + jq.
 
@@ -26,24 +29,43 @@ check_output() {
   local raw_text="$1"
   local expected_file="$2"
 
-  # --- Schema validity ---
-  local parsed schema_valid=false schema_detail=""
+  # --- Must be a JSON object ---
+  local parsed
   if ! parsed="$(jq -e 'type == "object"' <<<"$raw_text" >/dev/null 2>&1 && echo "$raw_text")"; then
-    schema_detail="output is not a JSON object"
-    jq -nc --arg d "$schema_detail" '{schema_valid:false,field_match:false,recall:0,detail:$d}'
+    jq -nc '{schema_valid:false,field_match:false,recall:0,detail:"output is not a JSON object"}'
     return 0
   fi
   parsed="$raw_text"
+
+  # --- Recall: compute FIRST, from action_items if it exists and is a valid array.
+  # [FIX2] Recall is independent of additionalProperties checks — an output with
+  # extra keys that still contains all expected (owner,task) pairs gets full recall.
+  local recall=0
+  local _items_type
+  _items_type="$(jq -r '.action_items | type' <<<"$parsed" 2>/dev/null || echo "null")"
+  if [[ "$_items_type" == "array" ]]; then
+    recall="$(jq -rn \
+      --argjson got "$(jq -c '[.action_items[] | {owner:(.owner|ascii_downcase|ltrimstr(" ")|rtrimstr(" ")), task:(.task|ascii_downcase|ltrimstr(" ")|rtrimstr(" "))}] // []' <<<"$parsed" 2>/dev/null || echo '[]')" \
+      --slurpfile exp "$expected_file" \
+      '($exp[0].action_items |
+        map({owner:(.owner|ascii_downcase|ltrimstr(" ")|rtrimstr(" ")),
+             task:(.task|ascii_downcase|ltrimstr(" ")|rtrimstr(" "))}) |
+        map(. as $e | if ($got | any(.owner == $e.owner and .task == $e.task)) then 1 else 0 end) |
+        add // 0)' 2>/dev/null || echo 0)"
+  fi
+
+  # --- Schema validity checks (do NOT zero recall on failure) ---
 
   # [FIX3] Check top-level additionalProperties:false — only "action_items" is allowed.
   local extra_top_keys
   extra_top_keys="$(jq -r '[ keys[] | select(. != "action_items") ] | if length == 0 then "" else "extra top-level keys: " + join(", ") end' <<<"$parsed" 2>/dev/null || echo "schema check failed")"
   if [[ -n "$extra_top_keys" ]]; then
-    jq -nc --arg d "$extra_top_keys" '{schema_valid:false,field_match:false,recall:0,detail:$d}'
+    jq -nc --arg d "$extra_top_keys" --argjson recall "$recall" \
+      '{schema_valid:false,field_match:false,recall:$recall,detail:$d}'
     return 0
   fi
 
-  # Check top-level "action_items" key exists and is an array.
+  # Check top-level "action_items" key exists and is an array with valid items.
   local items_check
   items_check="$(jq -r '
     if .action_items == null then "missing action_items key"
@@ -59,8 +81,9 @@ check_output() {
   ' <<<"$parsed" 2>/dev/null)"
 
   if [[ "$items_check" != "ok" ]]; then
-    schema_detail="${items_check:-schema check failed}"
-    jq -nc --arg d "$schema_detail" '{schema_valid:false,field_match:false,recall:0,detail:$d}'
+    local schema_detail="${items_check:-schema check failed}"
+    jq -nc --arg d "$schema_detail" --argjson recall "$recall" \
+      '{schema_valid:false,field_match:false,recall:$recall,detail:$d}'
     return 0
   fi
 
@@ -73,27 +96,12 @@ check_output() {
     ] | if length == 0 then "" else .[0] end
   ' <<<"$parsed" 2>/dev/null || echo "schema check failed")"
   if [[ -n "$extra_item_keys" ]]; then
-    jq -nc --arg d "$extra_item_keys" '{schema_valid:false,field_match:false,recall:0,detail:$d}'
+    jq -nc --arg d "$extra_item_keys" --argjson recall "$recall" \
+      '{schema_valid:false,field_match:false,recall:$recall,detail:$d}'
     return 0
   fi
 
-  schema_valid=true
-
-  # --- Recall: count expected (owner,task) pairs found in output ---
-  # [FIX2] Recall is the honesty axis: how many of the N true items were found,
-  # regardless of extras in the output. Case-insensitive match on owner+task.
-  local recall
-  recall="$(jq -rn \
-    --argjson got "$(jq -c '[.action_items[] | {owner:(.owner|ascii_downcase|ltrimstr(" ")|rtrimstr(" ")), task:(.task|ascii_downcase|ltrimstr(" ")|rtrimstr(" "))}]' <<<"$parsed" 2>/dev/null || echo '[]')" \
-    --slurpfile exp "$expected_file" \
-    '($exp[0].action_items |
-      map({owner:(.owner|ascii_downcase|ltrimstr(" ")|rtrimstr(" ")),
-           task:(.task|ascii_downcase|ltrimstr(" ")|rtrimstr(" "))}) |
-      map(. as $e | if ($got | any(.owner == $e.owner and .task == $e.task)) then 1 else 0 end) |
-      add // 0)' 2>/dev/null || echo 0)"
-
-  # --- Field-level match ---
-  # Normalise: lowercase owner+task, sort the set, compare canonical JSON.
+  # Schema is valid. Compute field-level match.
   local got_set expected_set
   got_set="$(jq -c '
     [ .action_items[] | {owner:(.owner|ascii_downcase|ltrimstr(" ")|rtrimstr(" ")),
