@@ -1708,11 +1708,14 @@ SHA-256 digest of the submitted output using the same byte contract as §10.5).
 The `"pending"` value on the waiting event is permanent — no event is edited or
 back-patched. Any reader that wants the final digest reads the completed event.
 
-**`duration_ms` on the resumed-completion event** measures the active processing
-time from when `local_submit` begins executing to when the receipt is written —
-the system's work on behalf of the submission. This is complementary to the
-pre-pause `duration_ms` already in the waiting event; analysis tools may sum
-both segments for total active time across a pause.
+**`duration_ms` on the resumed-completion event** is the wall-clock milliseconds
+to process the submission — from `local_submit` entry (immediately after the
+mandatory usage/argument guard) through argument parsing, payload construction,
+schema validation, process-file and context loading, output normalisation, context
+merge, and receipt write. The timer starts before any of this work begins and the
+value is computed immediately before the receipt is appended to `audit.jsonl`.
+This is complementary to the pre-pause `duration_ms` already in the waiting
+event; analysis tools may sum both segments for total active time across a pause.
 
 **Note:** this is a CLI-local receipt contract. The Rails server (`opensop-rails`)
 tracks step timing separately in `sop_llm_calls` and step records; the exact
@@ -1730,13 +1733,21 @@ The run-level `manifest.json` (§5.5) carries a top-level `duration_ms` for
 completed, failed, and waiting runs. For a run that finishes without pausing
 this is total wall time. For a run that **pauses and resumes**, `local_submit`
 recomputes `duration_ms` when the run reaches a terminal state (`completed` or
-`failed`) as total wall time from `manifest.started_at` to the moment
-`local_submit` finalizes the run — full end-to-end elapsed time regardless of
-how long the run was paused:
+`failed`) as total wall time from run start to the moment `local_submit`
+finalizes the run — full end-to-end elapsed time regardless of how long the
+run was paused.
+
+**Precision:** `local_run` writes a `started_at_ms` field (millisecond-epoch
+integer) into `manifest.json` alongside the second-granular ISO `started_at`
+string. `local_submit` uses `started_at_ms` when present to avoid the 0–999 ms
+rounding error that `fromdateiso8601` introduces. For manifests written by older
+CLI versions that lack `started_at_ms`, `local_submit` falls back to parsing
+`started_at`. If both fields are absent or unparsable, `duration_ms` is written
+as `null` rather than an absurd epoch-0–derived value.
 
 ```json
 { "run_id": "...", "process": "lead-qualification", "status": "completed",
-  "started_at": "...", "ended_at": "...", "duration_ms": 4210 }
+  "started_at": "...", "started_at_ms": 1754352000123, "ended_at": "...", "duration_ms": 4210 }
 ```
 
 **Reserved for v0.7.x (not yet implemented):** an aggregated `metrics` block —
