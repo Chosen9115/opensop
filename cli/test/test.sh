@@ -5821,6 +5821,18 @@ echo "PASS: E1 trust-boundary — untrusted task dir was not accessed"
 
 rm -rf "$onboard_task_dir"
 
+# E1 set-u guard: 'onboard --n' with no value must not abort on unbound $2 — clean usage_error.
+set +e
+onboard_nval="$( env -u OPENSOP_LOCAL_HOME "$cli" onboard --n --json 2>&1 )"; onboard_nval_rc=$?
+set -e
+[ "$onboard_nval_rc" -ne 0 ] \
+  || { echo "FAIL: onboard --n (missing value) should exit non-zero, got 0"; exit 1; }
+echo "$onboard_nval" | grep -q 'usage_error' \
+  || { echo "FAIL: onboard --n (missing value) should emit usage_error, got: ${onboard_nval:0:200}"; exit 1; }
+echo "$onboard_nval" | grep -qiE 'unbound|value too great' \
+  && { echo "FAIL: onboard --n leaked a set-u/bash diagnostic: ${onboard_nval:0:200}"; exit 1; }
+echo "PASS: onboard --n (missing value) — clean usage_error, no set-u abort"
+
 # Cleanup
 rm -rf "$onboard_tmp"
 

@@ -5544,7 +5544,7 @@ cmd_bench() {
   # read it from OUTPUT_MODE which is set globally for the whole invocation)
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --n)        n_runs="$2"; shift 2 ;;
+      --n)        [[ $# -ge 2 ]] || die "--n requires a value" "usage_error" "opensop bench [--n N]"; n_runs="$2"; shift 2 ;;
       --n=*)      n_runs="${1#--n=}"; shift ;;
       --model)    model="$2"; shift 2 ;;
       --model=*)  model="${1#--model=}"; shift ;;
@@ -6131,7 +6131,7 @@ cmd_onboard() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --stub)       stub_mode=true; shift ;;
-      --n)          n_runs="$2"; shift 2 ;;
+      --n)          [[ $# -ge 2 ]] || die "--n requires a value" "usage_error" "opensop onboard [--n N]"; n_runs="$2"; shift 2 ;;
       --n=*)        n_runs="${1#--n=}"; shift ;;
       --json)       OUTPUT_MODE="json"; shift ;;
       --help|-h)
