@@ -5507,6 +5507,16 @@ set -e
   || { echo "FAIL: watch --interval abc should exit non-zero"; exit 1; }
 echo "PASS: watch --interval abc — rejected (not numeric)"
 
+# (4b) leading-zero interval (e.g. 08) must be accepted as base-10, not parsed as octal
+set +e
+iv08="$( cd "$watch_dir" && env -u OPENSOP_LOCAL_HOME "$cli" watch --interval 08 --json --once 2>&1 )"; iv08_rc=$?
+set -e
+[ "$iv08_rc" -eq 0 ] \
+  || { echo "FAIL: watch --interval 08 should be accepted (base-10), got rc=$iv08_rc: $iv08"; exit 1; }
+echo "$iv08" | grep -qiE 'value too great|base' \
+  && { echo "FAIL: watch --interval 08 leaked an octal-parse diagnostic: $iv08"; exit 1; }
+echo "PASS: watch --interval 08 — accepted as base-10 (no octal leak)"
+
 # (5) Unknown flag --bogus → unknown_flag error
 set +e
 ( cd "$watch_dir" && env -u OPENSOP_LOCAL_HOME "$cli" watch --bogus --json >/dev/null 2>&1 ); bogus_rc=$?

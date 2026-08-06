@@ -2296,7 +2296,7 @@ cmd_watch() {
           "opensop watch [--interval N] [--remote] [--json]"
         interval="$1"; shift
         # Validate: must be a positive integer.
-        [[ "$interval" =~ ^[0-9]+$ ]] && (( interval >= 1 )) \
+        [[ "$interval" =~ ^[0-9]+$ ]] && (( 10#$interval >= 1 )) \
           || die "--interval must be a positive integer" "usage_error" \
                "opensop watch [--interval N] [--remote] [--json]"
         ;;
