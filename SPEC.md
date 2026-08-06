@@ -1711,9 +1711,11 @@ back-patched. Any reader that wants the final digest reads the completed event.
 **`duration_ms` on the resumed-completion event** is the wall-clock milliseconds
 to process the submission — from `local_submit` entry (immediately after the
 mandatory usage/argument guard) through argument parsing, payload construction,
-schema validation, process-file and context loading, output normalisation, context
-merge, and receipt write. The timer starts before any of this work begins and the
-value is computed immediately before the receipt is appended to `audit.jsonl`.
+schema validation, process-file and context loading, output normalisation, and
+context merge — up to (but not including) the receipt's own serialisation and
+append. The timer starts before any of this work begins; the value is computed
+immediately before the completed receipt is constructed, so it necessarily cannot
+include the write of the receipt that carries it (`audit.jsonl` append).
 This is complementary to the pre-pause `duration_ms` already in the waiting
 event; analysis tools may sum both segments for total active time across a pause.
 
