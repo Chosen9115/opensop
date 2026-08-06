@@ -9,6 +9,18 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Added
+
+- **C2: `bench/demo/` — reproducible comparison video.** Graduates the C2 terminal
+  recording from the `spike/c0-bench` branch onto main. The demo replays verified
+  outputs from the 60-run benchmark (3 arms × 2 models × 10 runs) without making
+  API calls. `bench/demo/demo.sh` is the driver; `make demo` re-renders the GIF and
+  MP4 from scratch (requires `asciinema`, `agg`, `ffmpeg`). The pre-rendered
+  `comparison.gif` (~406 KB) and `comparison.mp4` (~783 KB) are committed for
+  offline viewing. Honesty label: all outputs are recorded from real measured runs —
+  not simulated. Full methodology: `bench/NUMBERS.md`. Added a "Demo" section to
+  `cli/README.md` linking `bench/demo/`.
+
 ### Security
 
 - **Committed `bin/opensop.sha256`** so the default `curl … | bash` installer and

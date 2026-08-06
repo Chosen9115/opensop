@@ -461,6 +461,24 @@ Commands marked **[remote]** require `--remote` or `--server <url>`. All others 
 | **Bench** | |
 | `opensop bench [<task-dir>] [--n N] [--model MODEL] [--arm ARMNAME] [--stub]` | 3-arm reliability comparison: skill vs json_only vs opensop over N runs. Built-in default task: extract-action-items. `--stub` runs offline (no API key). |
 
+## Demo
+
+A reproducible ~55-second terminal recording of the `opensop bench` comparison
+(skill vs json_only vs openSOP, 3 arms, Claude Haiku) lives at
+[`bench/demo/`](bench/demo/). It replays outputs from the verified 60-run benchmark;
+see [`bench/NUMBERS.md`](bench/NUMBERS.md) for full methodology and results.
+
+```sh
+# Re-render the GIF/MP4 from scratch (requires asciinema + agg + ffmpeg):
+cd bench/demo && make demo
+
+# Or just watch the pre-rendered GIF:
+# bench/demo/comparison.gif
+```
+
+Headline: same model, same notes — naive prompt invents 3–5 phantom tasks on every
+run; openSOP returns exactly the 3 real ones, byte-identical, ~2× faster.
+
 ## Local cache
 
 The CLI caches `id → process name` mappings in `~/.opensop/instances.tsv` — a plain TSV of `id`, `name`, `created_at`, `url`. This is used by the remote backend so `opensop --remote status <id>` doesn't require re-typing the process name. Safe to delete at any time; the CLI rebuilds it from `/sop/instances` on the next cache miss.
