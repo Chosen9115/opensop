@@ -5249,15 +5249,20 @@ cmd_bench() {
   # Accumulators
   # Key: arm  (model is fixed per invocation, printed once in header)
   # -------------------------------------------------------------------------
-  declare -A _b_sv_count _b_fm_count _b_runs _b_durations _b_tout_vals
+  declare -A _b_sv_count _b_fm_count _b_runs _b_durations _b_tout_vals _b_recall_sum
 
   for arm in "${arms[@]}"; do
     _b_sv_count[$arm]=0
     _b_fm_count[$arm]=0
     _b_runs[$arm]=0
+    _b_recall_sum[$arm]=0
     _b_durations[$arm]=""
     _b_tout_vals[$arm]=""
   done
+
+  # Count expected items once (used in per-run recall display and for max recall value)
+  local _b_expected_count
+  _b_expected_count="$(jq '.action_items | length' "$expected_json" 2>/dev/null || echo 3)"
 
   # -------------------------------------------------------------------------
   # Banner
@@ -5316,7 +5321,11 @@ cmd_bench() {
       local body; body="$(jq -nc --arg model "$model" --arg user "$prompt" \
         '{model:$model, max_tokens:1024, messages:[{role:"user",content:$user}]}')"
       local http_out rc=0
-      http_out="$(curl -sS -X POST "https://api.anthropic.com/v1/messages" \
+      # [FIX1] Bounded timeouts: --connect-timeout 10 --max-time 120 so a stalled
+      # request cannot block the whole bench run indefinitely.  rc is captured with
+      # || rc=$? so set -e does not abort the loop on a network failure.
+      http_out="$(curl -sS --connect-timeout 10 --max-time 120 \
+        -X POST "https://api.anthropic.com/v1/messages" \
         -H "x-api-key: ${ANTHROPIC_API_KEY}" \
         -H "anthropic-version: 2023-06-01" \
         -H "content-type: application/json" \
@@ -5332,23 +5341,26 @@ cmd_bench() {
 
     local dur_ms; dur_ms=$(( $(_bench_now_ms) - start_ms ))
 
+    local recall=0
     if [[ -n "$raw_text" && "$detail" != curl* ]]; then
       local chk; chk="$(_bench_check_output "$raw_text" "$expected_json")"
       schema_valid="$(jq -r '.schema_valid' <<<"$chk")"
       field_match="$(jq -r '.field_match' <<<"$chk")"
       detail="$(jq -r '.detail' <<<"$chk")"
+      recall="$(jq -r '.recall' <<<"$chk")"
     fi
 
     # Accumulate
     _b_runs[$arm]=$(( _b_runs[$arm] + 1 ))
     [[ "$schema_valid" == "true" ]] && _b_sv_count[$arm]=$(( _b_sv_count[$arm] + 1 ))
     [[ "$field_match"  == "true" ]] && _b_fm_count[$arm]=$(( _b_fm_count[$arm] + 1 ))
+    _b_recall_sum[$arm]=$(( _b_recall_sum[$arm] + recall ))
     _b_durations[$arm]+="${dur_ms}"$'\n'
     _b_tout_vals[$arm]+="${tout}"$'\n'
 
     if [[ "$OUTPUT_MODE" != "json" ]]; then
-      printf '    [skill]     run %d: schema=%s match=%s tout=%s %dms — %s\n' \
-        "$run_idx" "$schema_valid" "$field_match" "$tout" "$dur_ms" "$detail"
+      printf '    [skill]     run %d: schema=%s match=%s recall=%s/%s tout=%s %dms — %s\n' \
+        "$run_idx" "$schema_valid" "$field_match" "$recall" "$_b_expected_count" "$tout" "$dur_ms" "$detail"
     fi
   }
 
@@ -5378,7 +5390,11 @@ cmd_bench() {
       local body; body="$(jq -nc --arg model "$model" --arg user "$prompt" \
         '{model:$model, max_tokens:1024, temperature:0, messages:[{role:"user",content:$user}]}')"
       local http_out rc=0
-      http_out="$(curl -sS -X POST "https://api.anthropic.com/v1/messages" \
+      # [FIX1] Bounded timeouts: --connect-timeout 10 --max-time 120 so a stalled
+      # request cannot block the whole bench run indefinitely.  rc is captured with
+      # || rc=$? so set -e does not abort the loop on a network failure.
+      http_out="$(curl -sS --connect-timeout 10 --max-time 120 \
+        -X POST "https://api.anthropic.com/v1/messages" \
         -H "x-api-key: ${ANTHROPIC_API_KEY}" \
         -H "anthropic-version: 2023-06-01" \
         -H "content-type: application/json" \
@@ -5394,22 +5410,25 @@ cmd_bench() {
 
     local dur_ms; dur_ms=$(( $(_bench_now_ms) - start_ms ))
 
+    local recall=0
     if [[ -n "$raw_text" && "$detail" != curl* ]]; then
       local chk; chk="$(_bench_check_output "$raw_text" "$expected_json")"
       schema_valid="$(jq -r '.schema_valid' <<<"$chk")"
       field_match="$(jq -r '.field_match' <<<"$chk")"
       detail="$(jq -r '.detail' <<<"$chk")"
+      recall="$(jq -r '.recall' <<<"$chk")"
     fi
 
     _b_runs[$arm]=$(( _b_runs[$arm] + 1 ))
     [[ "$schema_valid" == "true" ]] && _b_sv_count[$arm]=$(( _b_sv_count[$arm] + 1 ))
     [[ "$field_match"  == "true" ]] && _b_fm_count[$arm]=$(( _b_fm_count[$arm] + 1 ))
+    _b_recall_sum[$arm]=$(( _b_recall_sum[$arm] + recall ))
     _b_durations[$arm]+="${dur_ms}"$'\n'
     _b_tout_vals[$arm]+="${tout}"$'\n'
 
     if [[ "$OUTPUT_MODE" != "json" ]]; then
-      printf '    [json_only] run %d: schema=%s match=%s tout=%s %dms — %s\n' \
-        "$run_idx" "$schema_valid" "$field_match" "$tout" "$dur_ms" "$detail"
+      printf '    [json_only] run %d: schema=%s match=%s recall=%s/%s tout=%s %dms — %s\n' \
+        "$run_idx" "$schema_valid" "$field_match" "$recall" "$_b_expected_count" "$tout" "$dur_ms" "$detail"
     fi
   }
 
@@ -5480,11 +5499,13 @@ cmd_bench() {
         raw_text="$(jq -c '.extract // empty' <<<"$context_json" 2>/dev/null || true)"
       fi
 
+      local recall=0
       if [[ -n "$raw_text" && "$raw_text" != "null" ]]; then
         local chk; chk="$(_bench_check_output "$raw_text" "$expected_json")"
         schema_valid="$(jq -r '.schema_valid' <<<"$chk")"
         field_match="$(jq -r '.field_match' <<<"$chk")"
         detail="$(jq -r '.detail' <<<"$chk")"
+        recall="$(jq -r '.recall' <<<"$chk")"
       else
         detail="no extract step output in context.json"
       fi
@@ -5493,12 +5514,13 @@ cmd_bench() {
     _b_runs[$arm]=$(( _b_runs[$arm] + 1 ))
     [[ "$schema_valid" == "true" ]] && _b_sv_count[$arm]=$(( _b_sv_count[$arm] + 1 ))
     [[ "$field_match"  == "true" ]] && _b_fm_count[$arm]=$(( _b_fm_count[$arm] + 1 ))
+    _b_recall_sum[$arm]=$(( _b_recall_sum[$arm] + recall ))
     _b_durations[$arm]+="${dur_ms}"$'\n'
     _b_tout_vals[$arm]+="${tout}"$'\n'
 
     if [[ "$OUTPUT_MODE" != "json" ]]; then
-      printf '    [opensop]   run %d: schema=%s match=%s tout=%s %dms — %s\n' \
-        "$run_idx" "$schema_valid" "$field_match" "$tout" "$dur_ms" "$detail"
+      printf '    [opensop]   run %d: schema=%s match=%s recall=%s/%s tout=%s %dms — %s\n' \
+        "$run_idx" "$schema_valid" "$field_match" "$recall" "$_b_expected_count" "$tout" "$dur_ms" "$detail"
     fi
   }
 
@@ -5549,16 +5571,21 @@ cmd_bench() {
     [[ "$n" -eq 0 ]] && continue
     local sv="${_b_sv_count[$arm]:-0}"
     local fm="${_b_fm_count[$arm]:-0}"
+    local rs="${_b_recall_sum[$arm]:-0}"
     local med_dur med_tout
     med_dur="$(printf '%s' "${_b_durations[$arm]}" | grep -v '^$' | _bench_median 2>/dev/null || echo null)"
     med_tout="$(printf '%s' "${_b_tout_vals[$arm]}" | grep -v '^$' | _bench_median 2>/dev/null || echo null)"
+    # [FIX2] Include recall: sum of per-run recalled items and total possible
     json_arms="$(jq -n \
       --argjson prev "$json_arms" \
       --arg arm "$arm" --arg model "$model" \
       --argjson n "$n" --argjson sv "$sv" --argjson fm "$fm" \
+      --argjson rs "$rs" --argjson ec "$_b_expected_count" \
       --argjson med_dur "$med_dur" --argjson med_tout "$med_tout" \
       '$prev + [{arm:$arm,model:$model,runs:$n,
                   schema_valid:$sv,field_match:$fm,
+                  recall_sum:$rs,recall_max:($n*$ec),
+                  recall:($rs|tostring)+"/"+($n*$ec|tostring),
                   reliability:($fm|tostring)+"/"+($n|tostring),
                   median_duration_ms:$med_dur,
                   median_output_tokens:$med_tout}]')"
@@ -5567,31 +5594,35 @@ cmd_bench() {
   if [[ "$OUTPUT_MODE" == "json" ]]; then
     jq -n --argjson arms "$json_arms" \
       --arg model "$model" --argjson n "$n_runs" --arg stub "$stub_mode" \
-      '{model:$model,n_per_arm:$n,stub:($stub=="true"),arms:$arms,
-        methodology:"reliability=schema_valid AND field_match; field match is case-insensitive (owner,task) set equality"}' \
+      --argjson ec "$_b_expected_count" \
+      '{model:$model,n_per_arm:$n,stub:($stub=="true"),expected_items:$ec,arms:$arms,
+        methodology:"reliability=schema_valid AND field_match; recall=expected items found (order/extras irrelevant); field match is case-insensitive (owner,task) set equality"}' \
       | emit_pretty_or_json
     return 0
   fi
 
   # Pretty scoreboard
-  printf '%-12s  %8s  %10s  %11s  %10s  %12s\n' \
-    "Arm" "Reliable" "Sch-valid" "Fld-match" "med ms" "med out-tok"
-  printf '%s\n' "$(printf '%.0s-' {1..70})"
+  # [FIX2] Added Recall column
+  printf '%-12s  %8s  %10s  %11s  %8s  %10s  %12s\n' \
+    "Arm" "Reliable" "Sch-valid" "Fld-match" "Recall" "med ms" "med out-tok"
+  printf '%s\n' "$(printf '%.0s-' {1..80})"
 
   for arm in "${arms[@]}"; do
     local n="${_b_runs[$arm]:-0}"
     [[ "$n" -eq 0 ]] && continue
     local sv="${_b_sv_count[$arm]:-0}"
     local fm="${_b_fm_count[$arm]:-0}"
+    local rs="${_b_recall_sum[$arm]:-0}"
+    local recall_max=$(( n * _b_expected_count ))
     local med_dur med_tout
     med_dur="$(printf '%s' "${_b_durations[$arm]}" | grep -v '^$' | _bench_median 2>/dev/null || echo '?')"
     med_tout="$(printf '%s' "${_b_tout_vals[$arm]}" | grep -v '^$' | _bench_median 2>/dev/null || echo '?')"
-    printf '%-12s  %8s  %10s  %11s  %10s  %12s\n' \
-      "$arm" "${fm}/${n}" "${sv}/${n}" "${fm}/${n}" "$med_dur" "$med_tout"
+    printf '%-12s  %8s  %10s  %11s  %8s  %10s  %12s\n' \
+      "$arm" "${fm}/${n}" "${sv}/${n}" "${fm}/${n}" "${rs}/${recall_max}" "$med_dur" "$med_tout"
   done
 
   printf '\n'
-  printf 'Model: %s  |  N=%d per arm\n' "$model" "$n_runs"
+  printf 'Model: %s  |  N=%d per arm  |  Expected items: %d\n' "$model" "$n_runs" "$_b_expected_count"
   [[ -n "$est_cost_note" ]] && printf '%s\n' "$est_cost_note"
   printf '\n'
   printf 'METHODOLOGY:\n'
@@ -5599,6 +5630,7 @@ cmd_bench() {
   printf '  - json_only: JSON demand + schema in prompt (prompts/json_only.txt); temperature=0\n'
   printf '  - opensop:   opensop run + schema-validation + up-to-3 retries (prompts/opensop.txt)\n'
   printf '  - Reliable   = schema_valid AND field_match to fixtures/expected.json\n'
+  printf '  - Recall     = expected items found regardless of extras (honesty axis)\n'
   printf '  - Field match: case-insensitive (owner,task) set equality (jq sort)\n'
   printf '  - med out-tok ≈ output chars/3.7 (direct API), or from C1a audit.jsonl (opensop arm)\n'
   if $stub_mode; then
