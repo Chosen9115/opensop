@@ -5446,14 +5446,42 @@ cmd_bench() {
     local arm="opensop" run_idx="$1"
 
     # Inject meeting_notes as the process input default (so opensop run picks it up).
-    # IMPORTANT: the temp file must live in the SAME directory as the original
-    # process file so that relative prompt_file paths (e.g. ../prompts/opensop.txt)
-    # resolve correctly — opensop resolves prompt_file relative to proc_dir.
+    #
+    # [FIX3] Write the per-run temp process file into bench_run_home (a mktemp -d
+    # scratch dir this invocation already owns and can always write to), NOT into
+    # the source asset directory (bench/processes/).  When the CLI + bench assets
+    # are installed read-only (e.g. /usr/local/share/opensop or a root-owned path),
+    # mktemp -p <read-only-dir> fails under set -euo pipefail and aborts the entire
+    # benchmark before producing a scoreboard.
+    #
+    # Because opensop resolves prompt_file relative to proc_dir (the directory of the
+    # process file), moving the temp process file breaks the relative path
+    # (../prompts/opensop.txt no longer resolves correctly).  Fix that by reading the
+    # prompt text NOW (while we still know its real location) and inlining it as the
+    # `prompt` field in the temp copy, removing `prompt_file`.  The temp process
+    # becomes self-contained with no file-path dependency.  The prompt asset itself
+    # may remain read-only; we only need to READ it here, not write to its directory.
     local proc_dir_for_run; proc_dir_for_run="$(cd "$(dirname "$proc_file")" && pwd)"
-    local proc_tmp; proc_tmp="$(mktemp -p "$proc_dir_for_run" bench-run-XXXXXXXX.sop.json)"
-    jq --arg notes "$meeting_notes" --arg m "$model" \
-      '.inputs.meeting_notes = $notes | .steps[0].model = $m' \
-      "$proc_file" > "$proc_tmp"
+    local _inline_prompt=""
+    local _rel_pf; _rel_pf="$(jq -r '.steps[0].prompt_file // ""' "$proc_file")"
+    if [[ -n "$_rel_pf" ]]; then
+      local _abs_pf; _abs_pf="$proc_dir_for_run/$_rel_pf"
+      if [[ -f "$_abs_pf" ]]; then
+        _inline_prompt="$(cat "$_abs_pf")"
+      fi
+    fi
+    local proc_tmp; proc_tmp="$(mktemp -p "$bench_run_home" bench-run-XXXXXXXX.sop.json)"
+    if [[ -n "$_inline_prompt" ]]; then
+      # Inline the prompt text and drop prompt_file so the temp copy is self-contained.
+      jq --arg notes "$meeting_notes" --arg m "$model" --arg prompt_text "$_inline_prompt" \
+        '.inputs.meeting_notes = $notes | .steps[0].model = $m
+         | .steps[0].prompt = $prompt_text | del(.steps[0].prompt_file)' \
+        "$proc_file" > "$proc_tmp"
+    else
+      jq --arg notes "$meeting_notes" --arg m "$model" \
+        '.inputs.meeting_notes = $notes | .steps[0].model = $m' \
+        "$proc_file" > "$proc_tmp"
+    fi
 
     local run_home_this; run_home_this="$bench_run_home/opensop-run-${run_idx}"
     mkdir -p "$run_home_this"

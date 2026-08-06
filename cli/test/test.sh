@@ -4793,4 +4793,38 @@ fail_opensop_recall_sum="$(jq -r '.arms[] | select(.arm=="opensop") | .recall_su
   || { echo "FAIL: Fix2-bench-fail opensop arm recall_sum should be 0 (failed runs → recall=0), got '$fail_opensop_recall_sum'"; exit 1; }
 echo "PASS: Fix2-bench-fail — failed runs contribute recall=0 to accumulator (not unbound variable)"
 
+# ----- (Fix3-readonly) bench opensop arm: read-only task dir does not abort bench -----
+# Regression for: mktemp -p <proc_dir> failing when the bench asset directory is
+# installed read-only (e.g. /usr/local/share/opensop or a root-owned path).
+# Under set -euo pipefail the mktemp failure previously aborted the entire bench
+# before any scoreboard was produced.
+#
+# Strategy:
+#   1. Copy the built-in bench task tree to a temp dir.
+#   2. Make the COPY read-only (chmod -R a-w).
+#   3. Run opensop bench --stub --arm opensop --n 1 <readonly-dir> --json.
+#   4. Assert exit 0 and a scoreboard (.arms[] with .arm=="opensop") is produced.
+#   5. Restore write permissions and clean up.
+ro_task_src="$bench_dir_for_tests"
+ro_task_dir="$OPENSOP_LOCAL_HOME/ro-bench-task"
+cp -r "$ro_task_src" "$ro_task_dir"
+chmod -R a-w "$ro_task_dir"
+
+set +e
+ro_bench_out="$("$cli" bench --stub --arm opensop --n 1 "$ro_task_dir" --json 2>&1)"
+ro_bench_rc=$?
+set -e
+
+# Restore write perms so OPENSOP_LOCAL_HOME cleanup (trap) can remove the dir
+chmod -R u+w "$ro_task_dir"
+
+[ "$ro_bench_rc" -eq 0 ] \
+  || { echo "FAIL: Fix3-readonly bench should exit 0 even with a read-only task dir, got $ro_bench_rc (output: ${ro_bench_out:0:400})"; exit 1; }
+echo "PASS: Fix3-readonly — bench exits 0 with read-only task dir (no mktemp abort)"
+
+ro_opensop_runs="$(jq -r '.arms[] | select(.arm=="opensop") | .runs' <<<"$ro_bench_out" 2>/dev/null || echo "")"
+[ "$ro_opensop_runs" = "1" ] \
+  || { echo "FAIL: Fix3-readonly opensop arm should have 1 run, got '$ro_opensop_runs' — output: ${ro_bench_out:0:400}"; exit 1; }
+echo "PASS: Fix3-readonly — opensop arm completed 1 run against read-only task dir (scoreboard produced)"
+
 echo "ALL PASS"
