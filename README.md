@@ -4,7 +4,7 @@
 
 # OpenSOP
 
-> ### The model is nondeterministic. Your process shouldn't be.
+> ### Make your agents reliable.
 
 OpenSOP packages an agent's process as a **file in your repo** — same steps, same output contract, a receipt for every run. Version it, fork it, run it anywhere. One bash file, no server, no account.
 
