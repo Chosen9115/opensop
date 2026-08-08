@@ -6446,6 +6446,22 @@ do
     echo "FAIL: ${surface#$repo_root/} annotates 'opensop dry-run' as the recipe review step"; exit 1
   fi
 done
+# (c) ORDERING: wherever a surface shows a concrete recipe dry-run
+#     ('opensop dry-run ./...'), a direct jq inspection MUST appear BEFORE it, so
+#     a reader following the workflow top-to-bottom reads the shell before the
+#     flow-only preview.
+_skill_tmp="$(mktemp)"; "$cli" skill show 2>/dev/null > "$_skill_tmp"
+for f in "$repo_root/cli/README.md" "$_skill_tmp"; do
+  dr=$(grep -nE 'opensop dry-run +\./' "$f" | head -1 | cut -d: -f1)
+  [ -n "$dr" ] || continue   # no concrete recipe dry-run on this surface
+  jqln=$(grep -nE '\{id, ?type, ?run\}' "$f" | awk -F: -v d="$dr" '$1 < d {print $1; exit}')
+  [ -n "$jqln" ] \
+    || { label=$([ "$f" = "$_skill_tmp" ] && echo "embedded SKILL.md" || echo "${f#$repo_root/}"); \
+         echo "FAIL: $label shows 'opensop dry-run <recipe>' (line $dr) with no jq inspection before it"; rm -f "$_skill_tmp"; exit 1; }
+done
+rm -f "$_skill_tmp"
+echo "PASS: recipe-review ordering — jq inspection precedes any concrete dry-run on every workflow surface"
+
 echo "PASS: recipe-review guidance is consistent — reads run commands, dry-run never labeled the review — across recipes README, AGENTS.md, CLI README, embedded SKILL.md, and pull/import output"
 
 # --- skill install: <dir> and --runtime are mutually exclusive ---

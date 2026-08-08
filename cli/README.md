@@ -551,9 +551,13 @@ For runtimes without a SKILL.md slot (`cline`, `cursor`, `continue`, `aider`), a
 
 ```bash
 opensop pull opensop/daily-standup-notes       # download to ./daily-standup-notes.sop.json
-opensop pull opensop/triage-bug-report         # download to ./triage-bug-report.sop.json
-opensop info ./daily-standup-notes.sop.json    # inspect recipe metadata before running
-opensop dry-run ./daily-standup-notes.sop.json # preview steps without executing
+opensop info ./daily-standup-notes.sop.json    # metadata: name, version, tags, source
+
+# A pulled recipe is UNTRUSTED code — READ its run commands before running it:
+jq '(.process.steps // .steps)[] | {id, type, run}' ./daily-standup-notes.sop.json
+
+opensop dry-run ./daily-standup-notes.sop.json # THEN validate inputs + preview the flow (not command bodies)
+opensop run ./daily-standup-notes.sop.json     # only after reading the steps and confirming
 ```
 
 `opensop pull` and `opensop import` only write the file — they never execute it. A pulled recipe is untrusted code: **read its `run` commands directly** (`jq '(.process.steps // .steps)[] | {id,type,run}' <file>`) before running it. `opensop dry-run <file>` previews the step flow but does **not** print command bodies, so it is not a substitute for reading the steps.
