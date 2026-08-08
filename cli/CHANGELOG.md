@@ -11,6 +11,55 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Added
 
+- **Slice 3 — `opensop pull`, `opensop import`, `opensop info`: recipe sharing.**
+  Anyone can now share and pull reusable `.sop.json` processes from the new
+  in-repo recipe library (`recipes/`).
+
+  - `opensop pull <author>/<slug>[@<ref>]` — download a recipe from the
+    `recipes/<author>/<slug>.sop.json` path in the opensop GitHub repo.
+    Defaults to `main`; accepts a branch name or immutable commit SHA for
+    pinning (`opensop pull opensop/daily-standup-notes@a1b2c3d`). Writes to
+    `./<slug>.sop.json` by default; `--output <path>` overrides. No-clobber
+    without `--force`. Prints a summary (name, version, step count + types,
+    source, sha256) and a "review before running" note. **Never executes the
+    file.** `--verify <sha256>` enforces a hash the user supplies out-of-band
+    for real integrity checking. Requires curl (gated in main()).
+    Set `OPENSOP_RECIPES_BASE` to override the base URL (supports `file://`
+    for offline testing).
+
+  - `opensop import [<file>|-]` — read a recipe from a local file or stdin
+    (`-`). Validates it parses as a process, writes to `./<name>.sop.json`
+    (from the process name, sanitised) or `--output <path>`, no-clobber
+    without `--force`. Prints the same summary; **never executes the file.**
+    Fully local — no curl required.
+
+  - `opensop info <file.sop.json>` — print a recipe's `recipe.*` metadata
+    (source, install hint, tags) plus the process summary. Thin read-only
+    wrapper; no curl, no writes.
+
+  - Three seed recipes added under `recipes/opensop/`:
+    - `daily-standup-notes` — form + shell: collect standup answers and
+      format a Markdown summary.
+    - `triage-bug-report` — form + judgment + shell: structured bug intake
+      and prioritised triage summary.
+    - `release-checklist` — approval + noop + shell: gated release checklist
+      requiring explicit approval of each item before proceeding.
+
+  All seed recipes are valid `.sop.json` files that pass `opensop dry-run`.
+  They use only safe step types (form, judgment, approval, noop, shell with
+  only echo/jq). They include the `recipe` object (`source`, `install`,
+  `tags`) per SPEC §2.8.
+
+  Safety contract (non-negotiable): both `pull` and `import` **write only**.
+  Neither ever executes the recipe. The sha256 printed is for
+  pinning/identification (file and hash share one GitHub origin — they
+  confirm transfer integrity, not third-party authenticity).
+
+  `OPENSOP_RECIPES_BASE` env var (new): overrides the base URL used by
+  `opensop pull`. Default: `https://raw.githubusercontent.com/Chosen9115/opensop`.
+  Set to a `file://` URL pointing at a local directory tree with the same
+  `<ref>/recipes/<author>/<slug>.sop.json` layout for offline testing.
+
 - **Slice 2 — `opensop skill` and `opensop doctor`: agent runtime skill integration.**
   Any agent runtime that adopts OpenSOP as a SKILL.md skill (the cross-vendor Agent
   Skills standard) can now install and inspect the embedded skill in one command:

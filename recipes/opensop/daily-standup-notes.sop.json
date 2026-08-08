@@ -1,0 +1,45 @@
+{
+  "name": "daily-standup-notes",
+  "version": "1.0.0",
+  "description": "Collect standup answers (yesterday / today / blockers) via form steps, then format a concise Markdown summary.",
+  "inputs": {
+    "team_name": "Engineering"
+  },
+  "steps": [
+    {
+      "id": "collect-yesterday",
+      "type": "form",
+      "description": "What did you complete yesterday?",
+      "fields": [
+        { "name": "yesterday", "type": "string", "required": true, "description": "Work completed yesterday" }
+      ]
+    },
+    {
+      "id": "collect-today",
+      "type": "form",
+      "description": "What will you work on today?",
+      "fields": [
+        { "name": "today", "type": "string", "required": true, "description": "Planned work for today" }
+      ]
+    },
+    {
+      "id": "collect-blockers",
+      "type": "form",
+      "description": "Any blockers or help needed?",
+      "fields": [
+        { "name": "blockers", "type": "string", "required": false, "description": "Blockers or impediments (leave blank if none)" }
+      ]
+    },
+    {
+      "id": "format-summary",
+      "type": "shell",
+      "description": "Format the collected answers into a Markdown standup note.",
+      "run": "jq -r '\n  \"## Standup — \" + (.inputs.team_name // \"Team\") + \"\\n\" +\n  \"**Yesterday:** \" + (.\"collect-yesterday\".yesterday // \"\") + \"\\n\" +\n  \"**Today:** \" + (.\"collect-today\".today // \"\") + \"\\n\" +\n  if (.\"collect-blockers\".blockers // \"\") != \"\" then\n    \"**Blockers:** \" + .\"collect-blockers\".blockers\n  else\n    \"**Blockers:** None\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{summary: .}'"
+    }
+  ],
+  "recipe": {
+    "source": "opensop/daily-standup-notes",
+    "install": "opensop pull opensop/daily-standup-notes",
+    "tags": ["standup", "meetings", "notes", "productivity", "team"]
+  }
+}

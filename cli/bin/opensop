@@ -734,6 +734,9 @@ bench|3-arm reliability comparison: skill vs json_only vs opensop over N runs|be
 onboard|first-run experience: scaffold, validate, bench, and show next steps|onboard [<process.sop.json>] [--stub] [--n N]|onboarding|local
 skill|install the embedded OpenSOP SKILL.md into an agent runtime or directory|skill <install/paths/show> [--runtime FLAVOUR] [--scope user/project] [--force] [--json]|agent-skills|local
 doctor|self-check: version, jq, bash, and skill installation status|doctor [--json]|agent-skills|local
+pull|download a recipe from the opensop recipe library and write it locally|pull <author>/<slug>[@<ref>] [--output <path>] [--force] [--verify <sha256>]|recipes|local
+import|read a recipe from a file or stdin, validate, and write locally|import [<file> or -] [--output <path>] [--force]|recipes|local
+info|print a recipe metadata summary (recipe.* + name/version/steps)|info <file.sop.json>|recipes|local
 REGISTRY
 }
 
@@ -871,6 +874,8 @@ ${C_BOLD}ENVIRONMENT${C_RESET}
   OPENSOP_TOKEN                 override config token for one call
   OPENSOP_HOME                  config + cache dir (default: ~/.opensop)
   OPENSOP_LOCAL_HOME            local-mode receipts dir (default: active cell's .opensop/ or ~/.opensop-local)
+  OPENSOP_RECIPES_BASE          base URL for opensop pull (default: https://raw.githubusercontent.com/Chosen9115/opensop)
+                                  override with a file:// path or local dir for offline testing
   NO_COLOR                      disable ANSI color output
 
 ${C_BOLD}LOCAL STEP TYPES (v0.7 — full SPEC parity)${C_RESET}
@@ -7015,18 +7020,16 @@ RULES_GUIDANCE
       die "'$skill_file' is a symlink — refusing to install through it" \
           "cli_error" "remove the symlink or pass --force"
     fi
-    # Prefer GNU 'ln -T' (never treats an existing symlink-to-dir as a target
-    # directory); fall back to plain ln on BSD/macOS userlands.
-    local _ln_no_deref=""
-    ln --help 2>&1 | grep -q -- '-T' && _ln_no_deref="-T"
-    if ! ln $_ln_no_deref "$tmp_file" "$skill_file" 2>/dev/null; then
+    # Atomic no-clobber hard-link that never dereferences a symlink dest
+    # (GNU 'ln -T' / BSD 'ln -h'; fails closed if neither is available).
+    if ! _hardlink_noclobber "$tmp_file" "$skill_file"; then
       rm -f "$tmp_file"
       if [[ -e "$skill_file" ]]; then
         die "'$skill_file' already exists — pass --force to overwrite" \
             "cli_error" "opensop skill install ... --force"
       fi
       die "failed to install skill to '$skill_file'" "cli_error" \
-          "check directory permissions / filesystem hard-link support"
+          "check directory permissions / platform hard-link support (use --force)"
     fi
     # Post-verify: destination must be a regular, non-symlink file.
     if [[ -L "$skill_file" || ! -f "$skill_file" ]]; then
@@ -7243,6 +7246,515 @@ cmd_doctor() {
   fi
 }
 
+# --------------------------------------------------------------------------- #
+# Subcommand: pull
+#
+# Download a recipe from the OpenSOP recipe library (recipes/<author>/<slug>.sop.json
+# in the Chosen9115/opensop repo on GitHub).
+#
+# Usage:
+#   opensop pull <author>/<slug>[@<ref>] [--output <path>] [--force] [--verify <sha256>]
+#
+# Resolution:
+#   Fetches: $OPENSOP_RECIPES_BASE/<ref>/recipes/<author>/<slug>.sop.json
+#   Default ref: main. May be a branch name or an immutable commit SHA for pinning.
+#   Default OPENSOP_RECIPES_BASE: https://raw.githubusercontent.com/Chosen9115/opensop
+#   Override OPENSOP_RECIPES_BASE in tests to point at a local fixture dir (file://).
+#
+# Safety contract:
+#   Writes the file ONLY — never executes it. Prints a summary + sha256 for
+#   identification/pinning. Supply --verify <sha256> for integrity enforcement.
+#
+# Requires curl (gated in main() curl-gate case).
+# --------------------------------------------------------------------------- #
+
+# True when output should be machine-readable JSON (explicit --json, or auto mode
+# piped to a non-tty). Used by pull/import/info so agents get JSON on success.
+_output_is_json() {
+  case "$OUTPUT_MODE" in
+    json) return 0 ;;
+    auto) [[ -t 1 ]] && return 1 || return 0 ;;
+    *)    return 1 ;;
+  esac
+}
+
+# Safe temp cleanup for recipe write commands. The path is read from a variable
+# and NEVER interpolated into trap source, so a filename containing shell
+# metacharacters (e.g. a single quote in --output) cannot inject commands via
+# the EXIT trap. cmd_pull/cmd_import run with no pre-existing EXIT trap in this
+# dispatch path, so set-then-clear is safe.
+_RECIPE_TMP=""
+_recipe_cleanup() { [[ -n "${_RECIPE_TMP:-}" ]] && rm -f "$_RECIPE_TMP"; _RECIPE_TMP=""; return 0; }
+
+# _hardlink_noclobber <src> <dest>
+# Atomically hard-link src -> dest WITHOUT dereferencing a symlink at dest, so a
+# raced symlink-to-directory cannot redirect the link inside it. Uses GNU
+# `ln -T` or BSD/macOS `ln -h`; FAILS CLOSED (returns non-zero) if neither is
+# available rather than falling back to an unsafe plain `ln`. Returns 0 on
+# success; non-zero if dest exists, the link failed, or no safe flag exists.
+_hardlink_noclobber() {
+  local src="$1" dest="$2"
+  if ln --help 2>&1 | grep -q -- '-T'; then
+    ln -T "$src" "$dest" 2>/dev/null
+    return $?
+  fi
+  # BSD/macOS: -h prevents following a symlink dest.
+  if ln -h "$src" "$dest" 2>/dev/null; then
+    return 0
+  fi
+  # Neither GNU -T nor BSD -h worked → fail closed (never unsafe plain ln).
+  return 1
+}
+
+# _recipe_commit <tmp_in_dest_dir> <dest> <force:true|false>
+# Atomically place tmp (which MUST already live in dest's directory) at dest.
+# No-clobber via an atomic hard-link unless force; refuses a symlink dest. Dies
+# with a structured error on failure and always cleans up the temp.
+_recipe_commit() {
+  local tmp="$1" dest="$2" force="$3"
+  chmod 0644 "$tmp" 2>/dev/null || true
+  if [[ "$force" == true ]]; then
+    mv -f "$tmp" "$dest" || { rm -f "$tmp"; die "could not write to $dest" "cli_error" "check write permissions"; }
+    return 0
+  fi
+  if [[ -L "$dest" ]]; then
+    rm -f "$tmp"; die "$dest is a symlink — refusing to write through it" "cli_error" "remove it or use --force"
+  fi
+  if ! _hardlink_noclobber "$tmp" "$dest"; then
+    rm -f "$tmp"
+    if [[ -e "$dest" ]]; then die "file already exists: $dest (use --force to overwrite)" "cli_error" "re-run with --force"; fi
+    die "could not write to $dest" "cli_error" "check permissions / platform hard-link support (use --force)"
+  fi
+  if [[ -L "$dest" || ! -f "$dest" ]]; then die "write verification failed for $dest" "cli_error" "unexpected destination type"; fi
+  rm -f "$tmp"
+  return 0
+}
+
+# _recipe_write <src_file> <dest> <force>
+# Stage src into dest's own directory (so the final link/rename is same-fs and
+# atomic — never a cross-filesystem cp onto the live destination), then commit.
+_recipe_write() {
+  local src="$1" dest="$2" force="$3"
+  local dd; dd="$(dirname "$dest")"
+  [[ -d "$dd" ]] || mkdir -p "$dd" || die "could not create destination directory: $dd" "cli_error"
+  local dt
+  dt="$(mktemp "$dd/.opensop-recipe.XXXXXX")" || die "could not stage a temp file in $dd" "cli_error" "check write permissions on: $dd"
+  cp "$src" "$dt" || { rm -f "$dt"; die "could not stage recipe in $dd" "cli_error"; }
+  _recipe_commit "$dt" "$dest" "$force"
+}
+
+# _recipe_json <file> <source> <sha256> [<install>] [<tags-csv>]
+# Emit a stable machine-readable summary. `executed:false` is an explicit safety
+# signal — these commands never run the recipe.
+_recipe_json() {
+  local file="$1" source_url="$2" sha256="$3" install="${4:-}" tags_csv="${5:-}"
+  local p
+  p=$(jq -c '(if has("process") then .process else . end)' "$file")
+  jq -nc \
+    --argjson p "$p" \
+    --arg file "$file" --arg src "$source_url" --arg sha "$sha256" \
+    --arg install "$install" --arg tags "$tags_csv" \
+    '{
+       ok: true,
+       name: ($p.name // "unnamed"),
+       version: ($p.version // "unversioned"),
+       steps: (($p.steps // []) | length),
+       types: (($p.steps // []) | [.[].type] | unique | sort),
+       source: (if ($p.recipe.source // "") != "" then $p.recipe.source elif $src != "" then $src else null end),
+       sha256: (if $sha != "" then $sha else null end),
+       output_path: $file,
+       install: (if $install != "" then $install else ($p.recipe.install // null) end),
+       tags: ($p.recipe.tags // (if $tags != "" then ($tags | split(", ")) else [] end)),
+       executed: false
+     }'
+}
+
+cmd_pull() {
+  require_curl
+
+  local spec="" output_path="" force=false verify_hash=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output)
+        [[ $# -ge 2 ]] || die "--output requires a path argument" "usage_error" "opensop pull <author>/<slug> --output <path>"
+        output_path="$2"; shift
+        ;;
+      --force) force=true ;;
+      --verify)
+        [[ $# -ge 2 ]] || die "--verify requires a sha256 hex argument" "usage_error" "opensop pull <author>/<slug> --verify <sha256>"
+        verify_hash="$2"; shift
+        ;;
+      --help|-h) _cmd_help_command "pull"; return 0 ;;
+      -*) die "unknown flag '$1' for pull" "unknown_flag" "opensop pull <author>/<slug>[@<ref>] [--output <path>] [--force] [--verify <sha256>]" ;;
+      *)
+        if [[ -z "$spec" ]]; then
+          spec="$1"
+        else
+          die "unexpected argument '$1' — usage: opensop pull <author>/<slug>[@<ref>]" "usage_error" \
+              "opensop pull <author>/<slug>[@<ref>] [--output <path>] [--force] [--verify <sha256>]"
+        fi
+        ;;
+    esac
+    shift
+  done
+
+  [[ -z "$spec" ]] && die "usage: opensop pull <author>/<slug>[@<ref>]" "usage_error" \
+      "opensop pull opensop/daily-standup-notes"
+
+  # Parse author/slug[@ref] from spec.
+  local ref="main"
+  local slug_part="$spec"
+  if [[ "$spec" == *@* ]]; then
+    ref="${spec##*@}"
+    slug_part="${spec%@*}"
+  fi
+
+  # slug_part must be author/slug (exactly one slash).
+  if [[ "$slug_part" != */* ]]; then
+    die "recipe spec must be <author>/<slug>, got: '$slug_part'" "usage_error" \
+        "opensop pull opensop/daily-standup-notes"
+  fi
+  local author slug
+  author="${slug_part%%/*}"
+  slug="${slug_part#*/}"
+  # Disallow extra slashes (e.g. a/b/c).
+  if [[ "$slug" == */* ]]; then
+    die "recipe spec must be <author>/<slug> (no nested paths), got: '$slug_part'" "usage_error" \
+        "opensop pull opensop/daily-standup-notes"
+  fi
+  # Basic slug sanity: only allow alphanumeric, hyphens, underscores, dots.
+  if [[ ! "$author" =~ ^[A-Za-z0-9_.-]+$ ]] || [[ ! "$slug" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    die "author and slug may only contain letters, digits, hyphens, underscores, and dots" \
+        "usage_error" "opensop pull opensop/daily-standup-notes"
+  fi
+
+  # Resolve output path (default: ./<slug>.sop.json).
+  if [[ -z "$output_path" ]]; then
+    output_path="./${slug}.sop.json"
+  fi
+
+  # Refuse to overwrite without --force.
+  if [[ -e "$output_path" ]] && ! $force; then
+    die "file already exists: $output_path (use --force to overwrite)" \
+        "cli_error" "opensop pull $spec --force"
+  fi
+
+  # Resolve the base URL (env override for offline testing).
+  local recipes_base="${OPENSOP_RECIPES_BASE:-https://raw.githubusercontent.com/Chosen9115/opensop}"
+  local fetch_url="${recipes_base}/${ref}/recipes/${author}/${slug}.sop.json"
+
+  # Progress goes to stderr so stdout stays clean for JSON consumers.
+  info "fetching ${fetch_url} …" >&2
+
+  # Download to a temp file in the destination directory for atomic rename.
+  local dest_dir
+  dest_dir="$(dirname "$output_path")"
+  # Ensure the destination directory exists.
+  if [[ ! -d "$dest_dir" ]]; then
+    mkdir -p "$dest_dir" || die "could not create destination directory: $dest_dir" "cli_error"
+  fi
+
+  local tmp_file
+  tmp_file="$(mktemp "${dest_dir}/.opensop-pull.XXXXXX")" || \
+    die "could not create temp file in ${dest_dir}" "cli_error" \
+        "check write permissions on: $dest_dir"
+  _RECIPE_TMP="$tmp_file"
+  trap _recipe_cleanup EXIT
+
+  # Support both http(s) and file:// URLs (the latter for offline testing).
+  local curl_rc=0
+  if [[ "$fetch_url" == file://* ]]; then
+    # Strip file:// prefix and copy the local file.
+    local local_path="${fetch_url#file://}"
+    if [[ ! -f "$local_path" ]]; then
+      rm -f "$tmp_file"
+      die "recipe not found at ${fetch_url}" "file_not_found" \
+          "check the author/slug — valid slugs live in recipes/ in the opensop repo"
+    fi
+    cp "$local_path" "$tmp_file" || { rm -f "$tmp_file"; die "could not copy from $local_path" "cli_error"; }
+  else
+    curl -fsSL "$fetch_url" -o "$tmp_file" 2>/dev/null || curl_rc=$?
+    if [[ $curl_rc -ne 0 ]]; then
+      rm -f "$tmp_file"
+      die "could not download recipe (curl exit $curl_rc): ${fetch_url}" \
+          "network_error" \
+          "check the author/slug and your network — valid slugs live in recipes/ in the opensop repo"
+    fi
+  fi
+
+  # Validate: must be valid JSON.
+  jq -e . "$tmp_file" >/dev/null 2>&1 || {
+    rm -f "$tmp_file"
+    die "downloaded file is not valid JSON: $fetch_url" "invalid_json" \
+        "the recipe may be corrupt or the slug may be wrong"
+  }
+
+  # Validate: must parse as a process (must have .name and .steps).
+  local parse_ok=false
+  parse_ok=$(jq -r 'if ((has("name") or (has("process") and (.process | has("name")))) and
+                        (has("steps") or (has("process") and (.process | has("steps"))))) then "true" else "false" end' "$tmp_file")
+  if [[ "$parse_ok" != "true" ]]; then
+    rm -f "$tmp_file"
+    die "downloaded file does not look like a valid OpenSOP process (missing .name or .steps): $fetch_url" \
+        "parse_error" "inspect the URL manually: $fetch_url"
+  fi
+
+  # Compute sha256 of the downloaded file.
+  local file_hash=""
+  file_hash=$(_portable_sha256 "$tmp_file" 2>/dev/null || true)
+
+  # --verify: fail if hash doesn't match the user-supplied value.
+  if [[ -n "$verify_hash" ]]; then
+    if [[ -z "$file_hash" ]]; then
+      rm -f "$tmp_file"
+      die "sha256 tool not available — cannot verify" "cli_error" \
+          "install sha256sum, shasum, or openssl to use --verify"
+    fi
+    if [[ "$file_hash" != "$verify_hash" ]]; then
+      rm -f "$tmp_file"
+      die "sha256 mismatch — file may have changed (got: $file_hash, expected: $verify_hash)" \
+          "cli_error" "re-fetch without --verify or supply the correct hash"
+    fi
+  fi
+
+  # Atomic no-clobber commit (tmp_file already lives in the destination dir).
+  _recipe_commit "$tmp_file" "$output_path" "$force"
+  _RECIPE_TMP=""; trap - EXIT
+
+  if _output_is_json; then
+    _recipe_json "$output_path" "$fetch_url" "$file_hash"
+  else
+    _recipe_print_summary "$output_path" "$fetch_url" "$file_hash"
+    printf '\n'
+    printf '%sreview the steps before running:%s  opensop dry-run %s\n' \
+           "$C_YELLOW" "$C_RESET" "$output_path"
+    printf '%snote:%s sha256 shown for pinning/identification. File and hash share the same GitHub origin — this confirms transfer integrity, not third-party authenticity. Supply --verify <sha256> to enforce a hash obtained out-of-band.\n' \
+           "$C_DIM" "$C_RESET"
+  fi
+}
+
+# _recipe_print_summary <file> <source_url> <sha256>
+#   Print a human summary of a recipe file (name, version, step count + types,
+#   source, sha256). Used by both cmd_pull and cmd_import.
+_recipe_print_summary() {
+  local file="$1" source_url="$2" sha256="$3"
+  local meta
+  meta=$(jq -c '
+    (if has("process") then .process else . end) as $p |
+    {
+      name:    ($p.name // "unnamed"),
+      version: ($p.version // "unversioned"),
+      steps:   ($p.steps | length),
+      types:   ($p.steps | [.[].type] | unique | sort),
+      recipe:  ($p.recipe // {})
+    }
+  ' "$file")
+
+  local name version steps types recipe_source
+  name=$(jq -r '.name'    <<< "$meta")
+  version=$(jq -r '.version' <<< "$meta")
+  steps=$(jq -r '.steps'   <<< "$meta")
+  types=$(jq -r '.types | join(", ")' <<< "$meta")
+  recipe_source=$(jq -r '.recipe.source // ""' <<< "$meta")
+
+  printf '%s--- recipe summary ---%s\n' "$C_BOLD" "$C_RESET"
+  printf '  %-16s %s\n' "name:"    "$name"
+  printf '  %-16s %s\n' "version:" "$version"
+  printf '  %-16s %s\n' "steps:"   "$steps"
+  printf '  %-16s %s\n' "types:"   "$types"
+  if [[ -n "$recipe_source" ]]; then
+    printf '  %-16s %s\n' "source:"  "$recipe_source"
+  elif [[ -n "$source_url" ]]; then
+    printf '  %-16s %s\n' "source:"  "$source_url"
+  fi
+  if [[ -n "$sha256" ]]; then
+    printf '  %-16s %s\n' "sha256:"  "$sha256"
+  fi
+  printf '  %-16s %s\n' "written to:" "$file"
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: import
+#
+# Read a recipe from a local file or stdin, validate it as a process, write it
+# to disk, and print a summary. Never executes the file.
+#
+# Usage:
+#   opensop import [<file>|-] [--output <path>] [--force]
+#
+# - <file> or - (stdin): source to read from.
+# - Default output: ./<name>.sop.json (from the process name, sanitised).
+# - --output <path>: override the destination.
+# - --force: overwrite an existing file.
+#
+# Local-only; no curl.
+# --------------------------------------------------------------------------- #
+
+cmd_import() {
+  local source_arg="" output_path="" force=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output)
+        [[ $# -ge 2 ]] || die "--output requires a path argument" "usage_error" "opensop import [<file>|-] --output <path>"
+        output_path="$2"; shift
+        ;;
+      --force) force=true ;;
+      --help|-h) _cmd_help_command "import"; return 0 ;;
+      -)
+        # '-' is the stdin sentinel — treat as a positional argument, not a flag.
+        if [[ -z "$source_arg" ]]; then
+          source_arg="-"
+        else
+          die "unexpected '-' — stdin source already set" "usage_error" \
+              "opensop import [<file>|-] [--output <path>] [--force]"
+        fi
+        ;;
+      -*) die "unknown flag '$1' for import" "unknown_flag" "opensop import [<file>|-] [--output <path>] [--force]" ;;
+      *)
+        if [[ -z "$source_arg" ]]; then
+          source_arg="$1"
+        else
+          die "unexpected argument '$1' — usage: opensop import [<file>|-]" "usage_error" \
+              "opensop import [<file>|-] [--output <path>] [--force]"
+        fi
+        ;;
+    esac
+    shift
+  done
+
+  # Default source: stdin if no arg, or arg may be '-' for explicit stdin.
+  if [[ -z "$source_arg" ]]; then
+    source_arg="-"
+  fi
+
+  # Read the recipe content into a temp file.
+  local tmp_file
+  tmp_file="$(mktemp)" || die "could not create temp file" "cli_error"
+  _RECIPE_TMP="$tmp_file"
+  trap _recipe_cleanup EXIT
+
+  if [[ "$source_arg" == "-" ]]; then
+    # Read from stdin.
+    cat > "$tmp_file" || die "could not read from stdin" "cli_error"
+  else
+    [[ -f "$source_arg" ]] || die "file not found: $source_arg" "file_not_found" \
+        "opensop import <file.sop.json>"
+    cp "$source_arg" "$tmp_file" || die "could not read $source_arg" "cli_error"
+  fi
+
+  # Validate: must be valid JSON.
+  jq -e . "$tmp_file" >/dev/null 2>&1 || \
+    die "input is not valid JSON" "invalid_json" \
+        "opensop import requires a valid JSON .sop.json file"
+
+  # Validate: must parse as a process.
+  local parse_ok
+  parse_ok=$(jq -r 'if ((has("name") or (has("process") and (.process | has("name")))) and
+                        (has("steps") or (has("process") and (.process | has("steps"))))) then "true" else "false" end' "$tmp_file")
+  if [[ "$parse_ok" != "true" ]]; then
+    die "input does not look like a valid OpenSOP process (missing .name or .steps)" \
+        "parse_error" "inspect the file and ensure it has .name and .steps fields"
+  fi
+
+  # Derive the process name for the default output path.
+  local proc_name
+  proc_name=$(jq -r '(if has("process") then .process else . end).name // "unnamed"' "$tmp_file")
+
+  # Sanitize name for use as a filename: keep alphanumeric, hyphens, underscores, dots.
+  local safe_name
+  safe_name="${proc_name//[^A-Za-z0-9._-]/-}"
+  # Trim leading/trailing dashes.
+  safe_name="${safe_name##-}"
+  safe_name="${safe_name%%-}"
+  [[ -z "$safe_name" ]] && safe_name="recipe"
+
+  # Resolve output path.
+  if [[ -z "$output_path" ]]; then
+    output_path="./${safe_name}.sop.json"
+  fi
+
+  # Refuse to overwrite without --force.
+  if [[ -e "$output_path" ]] && ! $force; then
+    die "file already exists: $output_path (use --force to overwrite)" \
+        "cli_error" "opensop import $source_arg --force"
+  fi
+
+  # Compute sha256.
+  local file_hash=""
+  file_hash=$(_portable_sha256 "$tmp_file" 2>/dev/null || true)
+
+  # Atomic no-clobber write: stage into the destination's own directory (never a
+  # cross-filesystem cp onto the live path) then commit atomically.
+  _recipe_write "$tmp_file" "$output_path" "$force"
+  _recipe_cleanup; trap - EXIT
+
+  local source_label=""
+  [[ "$source_arg" == "-" ]] && source_label="stdin" || source_label="$source_arg"
+  if _output_is_json; then
+    _recipe_json "$output_path" "$source_label" "$file_hash"
+  else
+    _recipe_print_summary "$output_path" "$source_label" "$file_hash"
+    printf '\n'
+    printf '%sreview the steps before running:%s  opensop dry-run %s\n' \
+           "$C_YELLOW" "$C_RESET" "$output_path"
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: info
+#
+# Print a recipe file's metadata summary (recipe.* + process name/version/steps).
+# Thin wrapper around _recipe_print_summary — no curl, no writes.
+#
+# Usage:
+#   opensop info <file.sop.json>
+# --------------------------------------------------------------------------- #
+
+cmd_info() {
+  local file=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help|-h) _cmd_help_command "info"; return 0 ;;
+      -*) die "unknown flag '$1' for info" "unknown_flag" "opensop info <file.sop.json>" ;;
+      *)
+        if [[ -z "$file" ]]; then
+          file="$1"
+        else
+          die "unexpected argument '$1' — usage: opensop info <file.sop.json>" "usage_error" \
+              "opensop info <file.sop.json>"
+        fi
+        ;;
+    esac
+    shift
+  done
+
+  [[ -z "$file" ]] && die "usage: opensop info <file.sop.json>" "usage_error" \
+      "opensop info ./my-recipe.sop.json"
+  [[ -f "$file" ]] || die "file not found: $file" "file_not_found" \
+      "opensop info <file.sop.json>"
+  jq -e . "$file" >/dev/null 2>&1 || die "file is not valid JSON: $file" "invalid_json"
+
+  local file_hash=""
+  file_hash=$(_portable_sha256 "$file" 2>/dev/null || true)
+
+  local recipe_source recipe_install recipe_tags
+  recipe_source=$(jq -r '(if has("process") then .process else . end).recipe.source // ""' "$file")
+  recipe_install=$(jq -r '(if has("process") then .process else . end).recipe.install // ""' "$file")
+  recipe_tags=$(jq -r '(if has("process") then .process else . end).recipe.tags // [] | join(", ")' "$file")
+
+  if _output_is_json; then
+    _recipe_json "$file" "$recipe_source" "$file_hash" "$recipe_install" "$recipe_tags"
+  else
+    _recipe_print_summary "$file" "$recipe_source" "$file_hash"
+    if [[ -n "$recipe_install" ]]; then
+      printf '  %-16s %s\n' "install:" "$recipe_install"
+    fi
+    if [[ -n "$recipe_tags" ]]; then
+      printf '  %-16s %s\n' "tags:" "$recipe_tags"
+    fi
+  fi
+}
+
 main() {
   # Strip global flags anywhere in the argument list.
   # v0.8: default backend is LOCAL. --remote uses the configured server URL;
@@ -7328,10 +7840,11 @@ main() {
     [[ -n "$_cell_for_runs" ]] && OPENSOP_LOCAL_HOME="$_cell_for_runs/.opensop"
   fi
 
-  # curl is only needed for the remote (server) backend AND for `upgrade`.
+  # curl is only needed for the remote (server) backend, `upgrade`, and `pull`.
   # Local-default commands (runs, show, init, scope, annotate, lineage, fork,
   # watch in local mode, and all dual commands in local mode) need no curl.
-  if [[ "$REMOTE_MODE" == true ]] || [[ "$cmd" == "upgrade" ]]; then
+  # `import` and `info` are fully local and never need curl.
+  if [[ "$REMOTE_MODE" == true ]] || [[ "$cmd" == "upgrade" ]] || [[ "$cmd" == "pull" ]]; then
     require_curl
   fi
 
@@ -7374,6 +7887,9 @@ main() {
     onboard)    cmd_onboard "$@" ;;
     skill)      cmd_skill "$@" ;;
     doctor)     cmd_doctor "$@" ;;
+    pull)       cmd_pull "$@" ;;
+    import)     cmd_import "$@" ;;
+    info)       cmd_info "$@" ;;
     # 'help' is handled by the local-only short-circuit above (before remote init).
     *)          die "unknown command '$cmd' — run 'opensop help' for usage" "unknown_command" "run opensop help" ;;
   esac
