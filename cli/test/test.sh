@@ -6412,6 +6412,17 @@ set -e
 rm -rf "$goose_home"
 echo "PASS: skill install — single-scope runtime (goose) installs with the default scope"
 
+# --- consistency: every recipe-review surface must direct readers to READ the
+#     run commands directly (dry-run only previews the flow, not command bodies) ---
+repo_root="$(cd "$here/.." && pwd)"
+for surface in "$repo_root/recipes/README.md" "$repo_root/docs/AGENTS.md"; do
+  grep -qE '\{id, ?type, ?run\}' "$surface" \
+    || { echo "FAIL: $(basename "$surface") lost the direct 'read the run commands' review guidance"; exit 1; }
+done
+"$cli" skill show 2>/dev/null | grep -qE '\{id, ?type, ?run\}' \
+  || { echo "FAIL: embedded SKILL.md lost the direct 'read the run commands' review guidance"; exit 1; }
+echo "PASS: recipe-review guidance is consistent (read run commands; dry-run is flow-only) across README, AGENTS.md, SKILL.md"
+
 # --- skill install: <dir> and --runtime are mutually exclusive ---
 set +e
 "$cli" skill install /tmp/opensop-test-xyz --runtime claude >/dev/null 2>&1; both_rc=$?

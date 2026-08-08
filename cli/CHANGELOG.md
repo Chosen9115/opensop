@@ -17,7 +17,8 @@ This project follows [Semantic Versioning](https://semver.org/) and the
     the full command surface including `pull`, `import`, and `info` (added in Slice 3).
     Added a "Recipes / the library" section that explains how to discover, pull, and import
     shareable recipes, with a CRITICAL SAFETY note: pulled/imported recipes are untrusted
-    code — always review via `opensop dry-run` and get user confirmation before running.
+    code — read the `run` commands directly (dry-run previews the flow only, not command
+    bodies) and get user confirmation before running.
     Updated `description` frontmatter to mention recipe pulling. Length kept near existing
     level (no bloat).
 

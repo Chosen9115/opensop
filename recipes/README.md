@@ -49,7 +49,13 @@ curl -fsSL <url> | opensop import -
 
 ## Safety note
 
-**A recipe's shell/automated steps execute arbitrary commands on your machine** — the same trust boundary as a `Makefile` or `npm postinstall`. Always inspect the file with `opensop dry-run` before running it.
+**A recipe's shell/automated steps execute arbitrary commands on your machine** — the same trust boundary as a `Makefile` or `npm postinstall`. Before running a recipe, **read its `run` commands directly** — they are plain JSON:
+
+```bash
+jq '(.process.steps // .steps)[] | {id, type, run}' <file>   # or just open the file
+```
+
+`opensop dry-run <file>` validates inputs and previews the step *flow*, but it does **not** print command bodies — so it is not a substitute for reading the steps above.
 
 The `sha256` printed after every pull is for pinning and identification (both the file and the hash come from the same GitHub origin — they confirm transfer integrity and help you reproduce exact versions, not authenticate against a third party). Supply `--verify <sha256>` to enforce a hash you obtained out-of-band.
 
