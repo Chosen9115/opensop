@@ -6412,16 +6412,41 @@ set -e
 rm -rf "$goose_home"
 echo "PASS: skill install — single-scope runtime (goose) installs with the default scope"
 
-# --- consistency: every recipe-review surface must direct readers to READ the
-#     run commands directly (dry-run only previews the flow, not command bodies) ---
+# --- consistency: EVERY recipe-review surface must (a) direct readers to READ
+#     the run commands directly, and (b) never present dry-run AS the command
+#     review (dry-run previews the flow only, not command bodies). ---
 repo_root="$(cd "$here/.." && pwd)"
-for surface in "$repo_root/recipes/README.md" "$repo_root/docs/AGENTS.md"; do
+
+# (a) POSITIVE: the direct-inspection idiom appears on every documentation
+#     surface, in the embedded skill, and in pull/import's own output.
+for surface in \
+  "$repo_root/recipes/README.md" \
+  "$repo_root/docs/AGENTS.md" \
+  "$repo_root/cli/README.md"
+do
   grep -qE '\{id, ?type, ?run\}' "$surface" \
-    || { echo "FAIL: $(basename "$surface") lost the direct 'read the run commands' review guidance"; exit 1; }
+    || { echo "FAIL: ${surface#$repo_root/} lacks the direct 'read the run commands' review idiom"; exit 1; }
 done
 "$cli" skill show 2>/dev/null | grep -qE '\{id, ?type, ?run\}' \
-  || { echo "FAIL: embedded SKILL.md lost the direct 'read the run commands' review guidance"; exit 1; }
-echo "PASS: recipe-review guidance is consistent (read run commands; dry-run is flow-only) across README, AGENTS.md, SKILL.md"
+  || { echo "FAIL: embedded SKILL.md lacks the direct 'read the run commands' review idiom"; exit 1; }
+grep -qE 'review before running.*run commands' "$cli" \
+  || { echo "FAIL: pull/import output no longer points at reading the run commands"; exit 1; }
+
+# (b) NEGATIVE: reject any surface that annotates an 'opensop dry-run' command as
+#     the review step (an inline '# ... review' comment on a dry-run line, or the
+#     'review steps' annotation). Disclaimers ("previews the flow ... NOT command
+#     bodies", "not a substitute", "not sufficient review") do not match.
+for surface in \
+  "$repo_root/recipes/README.md" \
+  "$repo_root/docs/AGENTS.md" \
+  "$repo_root/cli/README.md" \
+  "$cli"
+do
+  if grep -nE 'opensop dry-run[^#]*#[^#]*\breview\b' "$surface" >/dev/null 2>&1; then
+    echo "FAIL: ${surface#$repo_root/} annotates 'opensop dry-run' as the recipe review step"; exit 1
+  fi
+done
+echo "PASS: recipe-review guidance is consistent — reads run commands, dry-run never labeled the review — across recipes README, AGENTS.md, CLI README, embedded SKILL.md, and pull/import output"
 
 # --- skill install: <dir> and --runtime are mutually exclusive ---
 set +e

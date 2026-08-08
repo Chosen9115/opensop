@@ -29,10 +29,10 @@ opensop pull opensop/daily-standup-notes --output ~/processes/standup.sop.json
 opensop pull opensop/daily-standup-notes --verify <sha256-hex>
 ```
 
-The CLI writes the file and prints a summary (name, version, step count, step types, source, SHA-256). It never executes the file automatically. Always review before running:
+The CLI writes the file and prints a summary (name, version, step count, step types, source, SHA-256). It never executes the file automatically. **Read its `run` commands before running** — dry-run previews the step flow only, not the command bodies:
 
 ```bash
-opensop dry-run ./daily-standup-notes.sop.json
+jq '(.process.steps // .steps)[] | {id, type, run}' ./daily-standup-notes.sop.json
 ```
 
 ## How to import from a local file or stdin

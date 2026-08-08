@@ -6782,9 +6782,10 @@ opensop submit 20250101T120000Z-12345-6789 collect --output budget=5000 --output
 opensop heal 20250101T120000Z-12345-6789
 opensop heal 20250101T120000Z-12345-6789 --apply
 
-# Pull a recipe, review it, then run it
+# Pull a recipe, READ its run commands, then run it
 opensop pull opensop/daily-standup-notes
-opensop dry-run ./daily-standup-notes.sop.json   # review steps — no execution
+jq '(.process.steps // .steps)[] | {id,type,run}' ./daily-standup-notes.sop.json  # read the shell that will run
+opensop dry-run ./daily-standup-notes.sop.json   # previews the flow only — NOT command bodies
 # (confirm with user, then:)
 opensop run ./daily-standup-notes.sop.json
 
