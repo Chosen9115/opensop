@@ -149,6 +149,7 @@ versions continue to parse and run unchanged — this spec is additive.
 | `sla` | No | `{target: "72h", warning: "48h"}`. |
 | `on_error` | No | `{notify: {channel, target}, retry_policy}`. |
 | `access` | No | `{start: [], view: [], advance: [], admin: []}`. |
+| `recipe` | No | Distribution metadata: origin, install hint, discovery tags. See §2.8. Ignored by the execution engine. |
 
 ---
 
@@ -319,6 +320,81 @@ process:
 
 Running instances are pinned to the version they started on. `replaces` marks
 the prior version as deprecated.
+
+### 2.8 The `recipe` object — distribution metadata (additive, v0.7.x)
+
+The optional `recipe` object makes a `.sop.json` or `.sop.yaml` file
+self-describing as a distribution artifact. It carries metadata about where the
+file came from and how a consumer can install or reference it. These fields are
+**ignored by the execution engine** — they have no effect on how a process runs,
+what steps execute, or what outputs are produced. Their sole purpose is
+discovery and distribution tooling.
+
+All three fields are optional. Omitting the `recipe` object entirely is the
+normal case for private or in-repo processes; nothing breaks and nothing changes.
+
+| Field | Type | Description |
+|---|---|---|
+| `recipe.source` | string | Canonical location of this recipe file. A raw URL (e.g. `https://raw.githubusercontent.com/acme/sops/main/customer-onboarding.sop.json`) or a short owner/slug reference (e.g. `acme/customer-onboarding`) that tooling can resolve. Lets a consumer trace the file back to its authoritative origin. |
+| `recipe.install` | string | A one-line human- or agent-runnable install hint (e.g. `opensop pull acme/customer-onboarding`). Tooling (CLI, registry UIs) may display this as a copy-pasteable command. Not executed by the engine. |
+| `recipe.tags` | string[] | Array of strings for discovery and search (e.g. `["sales", "lead-qualification", "crm"]`). Distinct from the process-level `tags` field (§2.2), which is for runtime filtering and appears in `GET /sop/` responses. `recipe.tags` is for external registry or marketplace discovery. |
+
+**Rationale:** a shared process file is its own distribution vehicle. Without
+`recipe`, a consumer who receives a `.sop.json` has no machine-readable way to
+know where it came from or how to get updates. With `recipe`, the file carries
+that metadata alongside its execution definition, enabling a registry or agent to
+surface the install command and link back to the source without out-of-band
+documentation.
+
+**`.sop.json` example (flat form):**
+
+```json
+{
+  "name": "customer-onboarding",
+  "version": "2.1",
+  "description": "Onboard a new customer: collect info, verify, assign rep",
+  "recipe": {
+    "source": "acme/customer-onboarding",
+    "install": "opensop pull acme/customer-onboarding",
+    "tags": ["onboarding", "crm", "sales"]
+  },
+  "steps": [
+    { "id": "collect", "type": "form", "outputs": [{ "name": "company", "type": "string" }] }
+  ]
+}
+```
+
+**`.sop.yaml` example (wrapped envelope):**
+
+```yaml
+opensop: "0.7"
+
+recipe:
+  source: acme/customer-onboarding
+  install: opensop pull acme/customer-onboarding
+  tags: [onboarding, crm, sales]
+
+process:
+  name: customer-onboarding
+  version: "2.1"
+  description: "Onboard a new customer: collect info, verify, assign rep"
+  steps:
+    - id: collect
+      type: form
+      outputs:
+        - { name: company, type: string }
+```
+
+In the wrapped YAML envelope, `recipe` is a sibling of `opensop` and `process`
+— it sits at the top level of the document, outside `process:`, because it
+describes the file as a distribution artifact, not the process's execution model.
+In the flat JSON form, `recipe` is a top-level key alongside `name`, `steps`, etc.
+
+**Engine behavior:** conforming parsers MUST silently ignore `recipe` and all its
+sub-fields when loading a process for execution. A server parser that rejects an
+unknown top-level key on the wrapped envelope for any reason other than
+`opensop` version gating MUST be treated as a bug — unknown top-level keys at the
+envelope level are forward-compatible extensions in v0.7.x.
 
 ---
 
@@ -2028,6 +2104,7 @@ process:
 | 0.2 | `llm` step, `tools:`, collection outputs, `exit_when:`, `loop:` step, interval trigger (parser-only), `post_review:` hook (roadmapped), shared state (roadmapped), `validation:` on `automated` |
 | 0.6 | Local execution backend (genuine local execution, no server), `.sop.json` flat format, run-dir artifacts (manifest/audit/context), pause/resume state machine, cell substrate (init/scope/annotate/lineage/fork), `shell` and `noop` local-only step types, `executor` audit field, `--conflicts` for list |
 | 0.7 | Process status model (§9): canonical process states (`open`/`scheduled`/`running`) and rollup fields (`last_status`, `last_run_at`, `next_run_at`). Reliability metrics contract (§10): per-step `duration_ms`, `model`, `tokens_in`, `tokens_out`, `result_hash`, `token_source` in run receipts; top-level manifest `duration_ms`; resumed-completion `duration_ms` + `result_hash` on completed events written by `local_submit` (C1a follow-up); `duration_ms` + `result_hash:"pending"` on subprocess and webhook-callback waiting events (C1a follow-up); manifest total-duration-on-resume recomputed as full wall time from run start (C1a follow-up); the aggregated `metrics` block is reserved for v0.7.x. Security model (§11): no-telemetry statement, shell-step trust boundary, daemon secrets posture, fault-record redaction rules, stream auth requirement. Stream protocol, self-heal semantics, scheduler-trigger promotion, and server metrics API reserved for v0.7.x. `/sop/*` HTTP contract unchanged. |
+| 0.7.x (additive) | Optional `recipe` object (§2.8): `recipe.source` (canonical origin), `recipe.install` (one-line install hint), `recipe.tags` (discovery tags). Distribution metadata only — ignored by the execution engine, non-breaking, backward-compatible with all earlier parsers. No HTTP API change. No CLI parsing required for MVP (later slice). |
 
 ## Appendix B — Flat vs. wrapped envelope quick reference
 
