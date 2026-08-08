@@ -11,6 +11,34 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Added
 
+- **Slice 4 — agent-adoption docs + embedded skill update (content-only, no new commands).**
+
+  - **Embedded SKILL.md** (`_skill_embedded_content` in `bin/opensop`): updated to document
+    the full command surface including `pull`, `import`, and `info` (added in Slice 3).
+    Added a "Recipes / the library" section that explains how to discover, pull, and import
+    shareable recipes, with a CRITICAL SAFETY note: pulled/imported recipes are untrusted
+    code — read the `run` commands directly (dry-run previews the flow only, not command
+    bodies) and get user confirmation before running.
+    Updated `description` frontmatter to mention recipe pulling. Length kept near existing
+    level (no bloat).
+
+  - **`docs/AGENTS.md`**: added two new sections:
+    - §11 "Adopt OpenSOP in your agent — AGENTS.md block": a copy-pasteable markdown
+      snippet for users to drop into their project's `AGENTS.md` (or CLAUDE.md /
+      .cursorrules / etc.) so any AGENTS.md-honoring runtime knows where SOPs live,
+      how to discover/run/inspect/heal processes, how to author and onboard, how to
+      pull/import recipes safely, and how to self-check with `opensop doctor`.
+    - §12 "Runtime → skill path table": documents all supported runtimes and their
+      canonical SKILL.md install paths (mirrors `opensop skill paths`), the one-command
+      install (`opensop skill install --runtime <flavour>`), and a "Which mechanism?"
+      note explaining SKILL.md vs. the AGENTS.md block and when to use each.
+
+  - **`cli/README.md`**: updated the "Use with Claude Code" section to point to
+    `docs/AGENTS.md` as the canonical agent guide (replacing the stale
+    `docs/CLAUDE-INTEGRATION.md` pointer); added "Adopt OpenSOP in your agent runtime"
+    with the `skill install` one-liner per flavour; added a "Recipe library" subsection
+    with `pull` / `info` / `dry-run` examples and the never-auto-run safety note.
+
 - **Slice 3 — `opensop pull`, `opensop import`, `opensop info`: recipe sharing.**
   Anyone can now share and pull reusable `.sop.json` processes from the new
   in-repo recipe library (`recipes/`).

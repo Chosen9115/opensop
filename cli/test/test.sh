@@ -6399,6 +6399,87 @@ set -e
   || { echo "FAIL: skill install --runtime goose --scope project — should fail (user-only), not substitute"; exit 1; }
 echo "PASS: skill install — unsupported explicit scope fails instead of silently switching"
 
+# --- skill install: a single-scope runtime (goose = user-only) installs with the
+#     DEFAULT scope by auto-selecting the sole supported scope (no --scope needed) ---
+goose_home="$(mktemp -d)"
+set +e
+HOME="$goose_home" "$cli" skill install --runtime goose >/dev/null 2>&1; goose_def_rc=$?
+set -e
+[ "$goose_def_rc" -eq 0 ] \
+  || { echo "FAIL: skill install --runtime goose (default scope) should succeed by auto-selecting the sole scope"; exit 1; }
+[ -f "$goose_home/.config/goose/skills/opensop/SKILL.md" ] \
+  || { echo "FAIL: goose default install did not land at its user path"; exit 1; }
+rm -rf "$goose_home"
+echo "PASS: skill install — single-scope runtime (goose) installs with the default scope"
+
+# --- consistency: EVERY recipe-review surface must (a) direct readers to READ
+#     the run commands directly, and (b) never present dry-run AS the command
+#     review (dry-run previews the flow only, not command bodies). ---
+repo_root="$(cd "$here/.." && pwd)"
+
+# (a) POSITIVE: the direct-inspection idiom appears on every documentation
+#     surface, in the embedded skill, and in pull/import's own output.
+for surface in \
+  "$repo_root/recipes/README.md" \
+  "$repo_root/docs/AGENTS.md" \
+  "$repo_root/cli/README.md"
+do
+  grep -qE '\{id, ?type, ?run\}' "$surface" \
+    || { echo "FAIL: ${surface#$repo_root/} lacks the direct 'read the run commands' review idiom"; exit 1; }
+done
+"$cli" skill show 2>/dev/null | grep -qE '\{id, ?type, ?run\}' \
+  || { echo "FAIL: embedded SKILL.md lacks the direct 'read the run commands' review idiom"; exit 1; }
+# pull AND import each emit the read-the-run-commands guidance — checked
+# INDEPENDENTLY by invoking each against a fixture (pretty mode → human output),
+# so one regressing can't be masked by the other.
+_rev_fx="$(mktemp -d)"; mkdir -p "$_rev_fx/main/recipes/opensop"
+cp "$repo_root/recipes/opensop/daily-standup-notes.sop.json" "$_rev_fx/main/recipes/opensop/"
+_rev_out="$(mktemp -d)"
+pull_review="$(OPENSOP_RECIPES_BASE="file://$_rev_fx" "$cli" pull opensop/daily-standup-notes --output "$_rev_out/p.sop.json" --pretty 2>&1)"
+echo "$pull_review" | grep -qE '\{id, ?type, ?run\}|run commands' \
+  || { echo "FAIL: pull output does not point at reading the run commands: $pull_review"; rm -rf "$_rev_fx" "$_rev_out"; exit 1; }
+imp_review="$("$cli" import "$_rev_fx/main/recipes/opensop/daily-standup-notes.sop.json" --output "$_rev_out/i.sop.json" --pretty 2>&1)"
+echo "$imp_review" | grep -qE '\{id, ?type, ?run\}|run commands' \
+  || { echo "FAIL: import output does not point at reading the run commands: $imp_review"; rm -rf "$_rev_fx" "$_rev_out"; exit 1; }
+rm -rf "$_rev_fx" "$_rev_out"
+echo "PASS: pull and import each independently emit the read-the-run-commands guidance"
+
+# (b) NEGATIVE: reject any surface that annotates an 'opensop dry-run' command as
+#     the review step (an inline '# ... review' comment on a dry-run line, or the
+#     'review steps' annotation). Disclaimers ("previews the flow ... NOT command
+#     bodies", "not a substitute", "not sufficient review") do not match.
+for surface in \
+  "$repo_root/recipes/README.md" \
+  "$repo_root/docs/AGENTS.md" \
+  "$repo_root/cli/README.md" \
+  "$cli"
+do
+  if grep -nE 'opensop dry-run[^#]*#[^#]*\breview\b' "$surface" >/dev/null 2>&1; then
+    echo "FAIL: ${surface#$repo_root/} annotates 'opensop dry-run' as the recipe review step"; exit 1
+  fi
+done
+# (c) ORDERING: wherever a surface shows a concrete recipe dry-run
+#     ('opensop dry-run ./...'), a direct jq inspection MUST appear BEFORE it, so
+#     a reader following the workflow top-to-bottom reads the shell before the
+#     flow-only preview.
+# Applies to the recipe pull-then-review WORKFLOW surfaces. (docs/AGENTS.md's
+# `dry-run ./process` lines are general usage examples, not recipe-review
+# workflows, so they are covered by the presence/no-review-annotation checks
+# above rather than ordering.)
+_skill_tmp="$(mktemp)"; "$cli" skill show 2>/dev/null > "$_skill_tmp"
+for f in "$repo_root/cli/README.md" "$repo_root/recipes/README.md" "$_skill_tmp"; do
+  dr=$(grep -nE 'opensop dry-run +\./' "$f" | head -1 | cut -d: -f1) || dr=""
+  [ -n "$dr" ] || continue   # no concrete recipe dry-run on this surface
+  jqln=$(grep -nE '\{id, ?type, ?run\}' "$f" | awk -F: -v d="$dr" '$1 < d {print $1; exit}') || jqln=""
+  [ -n "$jqln" ] \
+    || { label=$([ "$f" = "$_skill_tmp" ] && echo "embedded SKILL.md" || echo "${f#$repo_root/}"); \
+         echo "FAIL: $label shows 'opensop dry-run <recipe>' (line $dr) with no jq inspection before it"; rm -f "$_skill_tmp"; exit 1; }
+done
+rm -f "$_skill_tmp"
+echo "PASS: recipe-review ordering — jq inspection precedes any concrete dry-run on every workflow surface"
+
+echo "PASS: recipe-review guidance is consistent — reads run commands, dry-run never labeled the review — across recipes README, AGENTS.md, CLI README, embedded SKILL.md, and pull/import output"
+
 # --- skill install: <dir> and --runtime are mutually exclusive ---
 set +e
 "$cli" skill install /tmp/opensop-test-xyz --runtime claude >/dev/null 2>&1; both_rc=$?

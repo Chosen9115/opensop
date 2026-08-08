@@ -29,10 +29,10 @@ opensop pull opensop/daily-standup-notes --output ~/processes/standup.sop.json
 opensop pull opensop/daily-standup-notes --verify <sha256-hex>
 ```
 
-The CLI writes the file and prints a summary (name, version, step count, step types, source, SHA-256). It never executes the file automatically. Always review before running:
+The CLI writes the file and prints a summary (name, version, step count, step types, source, SHA-256). It never executes the file automatically. **Read its `run` commands before running** — dry-run previews the step flow only, not the command bodies:
 
 ```bash
-opensop dry-run ./daily-standup-notes.sop.json
+jq '(.process.steps // .steps)[] | {id, type, run}' ./daily-standup-notes.sop.json
 ```
 
 ## How to import from a local file or stdin
@@ -49,7 +49,13 @@ curl -fsSL <url> | opensop import -
 
 ## Safety note
 
-**A recipe's shell/automated steps execute arbitrary commands on your machine** — the same trust boundary as a `Makefile` or `npm postinstall`. Always inspect the file with `opensop dry-run` before running it.
+**A recipe's shell/automated steps execute arbitrary commands on your machine** — the same trust boundary as a `Makefile` or `npm postinstall`. Before running a recipe, **read its `run` commands directly** — they are plain JSON:
+
+```bash
+jq '(.process.steps // .steps)[] | {id, type, run}' <file>   # or just open the file
+```
+
+`opensop dry-run <file>` validates inputs and previews the step *flow*, but it does **not** print command bodies — so it is not a substitute for reading the steps above.
 
 The `sha256` printed after every pull is for pinning and identification (both the file and the hash come from the same GitHub origin — they confirm transfer integrity and help you reproduce exact versions, not authenticate against a third party). Supply `--verify <sha256>` to enforce a hash you obtained out-of-band.
 

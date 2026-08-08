@@ -2574,6 +2574,8 @@ walk_steps_preview() {
       "  \($id)  form          → would request input for fields: \($fields)"
     elif $t == "automated" then
       "  \($id)  automated     → would run script: \($s.run // $s.script // $s.runs // "(unspecified)")\(if $s.timeout then " (timeout: \($s.timeout)s)" else "" end)"
+    elif $t == "shell" then
+      "  \($id)  shell         → runs a shell command on the host (open the recipe to read its `run` before executing)"
     elif $t == "webhook" then
       "  \($id)  webhook       → would \($s.method // "POST") \($s.url // "(unspecified)") (response_mode: \($s.response_mode // "sync"))"
     elif $t == "notification" then
@@ -6640,10 +6642,11 @@ description: |
   Use this skill when the user wants to run, list, search, inspect, or manage
   OpenSOP .sop.json processes locally; view or replay audit receipts; resume
   paused (waiting) runs; diagnose or re-run failed steps (heal); compare runs
-  with diff; watch live process status; or install the OpenSOP skill into an
-  agent runtime with `opensop skill install`. Trigger on any mention of
-  ".sop.json", "opensop run", audit receipts, step-level orchestration, or
-  "Process as Infrastructure". Do NOT run a process the user did not ask for.
+  with diff; watch live process status; pull or import shareable recipes; or
+  install the OpenSOP skill into an agent runtime with `opensop skill install`.
+  Trigger on any mention of ".sop.json", "opensop run", audit receipts,
+  step-level orchestration, "Process as Infrastructure", or recipe sharing.
+  Do NOT run a process the user did not ask for.
 license: Apache-2.0
 allowed-tools:
   - "Bash(opensop *)"
@@ -6679,6 +6682,9 @@ opensop search <keyword>                              ranked text search over pr
 opensop ps [--follow]                                 process status table
 opensop diff <run_id1> <run_id2>                      compare two runs
 opensop dry-run <name|file.sop.json>                  validate + preview, no run created
+opensop pull <author>/<slug>[@<ref>]                  download a recipe from the library (writes file, never runs it)
+opensop import [<file>|-]                             import a recipe from a local file or stdin (writes file, never runs it)
+opensop info <file.sop.json>                          print recipe metadata + process summary, no writes
 opensop skill install --runtime <flavour>             install this skill into agent runtime
 opensop skill paths [--json]                          show per-runtime install paths
 opensop skill show                                    print this SKILL.md to stdout
@@ -6708,6 +6714,35 @@ Errors emit `{error, message, hint?}` to stderr in JSON mode.
 5. **Always parse JSON.** Pipe any command with `--json` to `jq` for safe
    field access — do not screen-scrape TTY output.
 
+## Recipes / the library
+
+The `recipes/` library (in the opensop GitHub repo) contains shareable
+`.sop.json` processes.  Use `opensop pull` to fetch one and `opensop import`
+to bring in a local or piped file:
+
+```bash
+opensop pull opensop/daily-standup-notes          # fetch from library (main branch)
+opensop pull opensop/triage-bug-report@a1b2c3d    # pin to a specific commit SHA
+opensop import ./my-recipe.sop.json               # import from a local file
+opensop import -                                  # import from stdin
+opensop info ./daily-standup-notes.sop.json       # inspect recipe metadata
+```
+
+`pull` and `import` only **write** the file — they never execute it.
+
+**CRITICAL SAFETY — pulled and imported recipes are UNTRUSTED code.**
+A recipe's `shell`/`automated` steps run arbitrary shell on your machine,
+exactly like a Makefile.  Before running any pulled or imported recipe:
+
+1. READ its steps directly — the `run` commands are plain JSON and this is
+   what reveals the exact shell that will execute:
+   `jq '(.process.steps // .steps)[] | {id, type, run}' <file>` (or open it).
+2. `opensop dry-run <file>` validates inputs and previews the step FLOW, but it
+   does NOT print command bodies — it is not a substitute for step 1.
+3. Get explicit user confirmation, then call `opensop run <file>`.
+
+Never auto-run a recipe obtained from an external source.
+
 ## SAFETY
 
 - **Do not run a process the user did not explicitly ask for.**  OpenSOP
@@ -6718,8 +6753,9 @@ Errors emit `{error, message, hint?}` to stderr in JSON mode.
   arrives from an external source (URL, paste, unknown registry), show the
   user its steps and get explicit confirmation before calling `opensop run`.
 
-- **`opensop dry-run`** is safe: it validates and previews steps without
-  creating a run or executing any shell.  Prefer it when uncertain.
+- **`opensop dry-run`** is safe (validates + previews the step flow, no
+  execution), but it does NOT show `shell`/`automated` command bodies — read
+  the recipe's `run` fields directly to review what will actually run.
 
 - Errors and non-zero exits are informational — surface them to the user,
   then decide together whether to heal, retry, or abort.
@@ -6745,6 +6781,13 @@ opensop submit 20250101T120000Z-12345-6789 collect --output budget=5000 --output
 # Heal a failed step
 opensop heal 20250101T120000Z-12345-6789
 opensop heal 20250101T120000Z-12345-6789 --apply
+
+# Pull a recipe, READ its run commands, then run it
+opensop pull opensop/daily-standup-notes
+jq '(.process.steps // .steps)[] | {id,type,run}' ./daily-standup-notes.sop.json  # read the shell that will run
+opensop dry-run ./daily-standup-notes.sop.json   # previews the flow only — NOT command bodies
+# (confirm with user, then:)
+opensop run ./daily-standup-notes.sop.json
 
 # Install this skill
 opensop skill install --runtime claude          # → .claude/skills/opensop/SKILL.md
@@ -6885,7 +6928,7 @@ cmd_skill() {
 
   # ---------- skill install ----------
   # Parse install args: optional <dir> positional OR --runtime, plus --scope and --force.
-  local install_dir="" install_runtime=""
+  local install_dir="" install_runtime="" scope_explicit=false
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --runtime)
@@ -6895,7 +6938,7 @@ cmd_skill() {
       --scope)
         [[ $# -lt 2 ]] && die "--scope requires user or project" "usage_error" \
             "opensop skill install --scope <user|project>"
-        scope="$2"; shift 2
+        scope="$2"; scope_explicit=true; shift 2
         [[ "$scope" == "user" || "$scope" == "project" ]] \
           || die "unknown scope '$scope' — valid: user, project" "usage_error" \
                  "opensop skill install --scope <user|project>"
@@ -6963,17 +7006,24 @@ RULES_GUIDANCE
     # unsupported for this runtime, FAIL — never silently write to the other
     # scope. An agent asking for a project-local install must not have its
     # request redirected into persistent $HOME/user configuration.
-    local resolved_path alt_scope
+    local resolved_path alt_scope alt_path
     if resolved_path=$(_skill_resolve_path "$install_runtime" "$scope"); then
       target_dir="$resolved_path"
     else
       [[ "$scope" == "project" ]] && alt_scope="user" || alt_scope="project"
-      if _skill_resolve_path "$install_runtime" "$alt_scope" >/dev/null 2>&1; then
-        die "runtime '$install_runtime' does not support scope '$scope' (only '$alt_scope')" \
-            "usage_error" "opensop skill install --runtime $install_runtime --scope $alt_scope"
+      if alt_path=$(_skill_resolve_path "$install_runtime" "$alt_scope"); then
+        # The runtime supports only the OTHER scope. If the user explicitly asked
+        # for the unsupported scope, fail (never silently switch an explicit
+        # request). If they took the default, use the sole supported scope.
+        if [[ "$scope_explicit" == true ]]; then
+          die "runtime '$install_runtime' does not support scope '$scope' (only '$alt_scope')" \
+              "usage_error" "opensop skill install --runtime $install_runtime --scope $alt_scope"
+        fi
+        target_dir="$alt_path"
+      else
+        die "runtime '$install_runtime' has no path for scope '$scope'" \
+            "usage_error" "run 'opensop skill paths' to see available scopes"
       fi
-      die "runtime '$install_runtime' has no path for scope '$scope'" \
-          "usage_error" "run 'opensop skill paths' to see available scopes"
     fi
   elif [[ -n "$install_dir" ]]; then
     target_dir="$install_dir/opensop"
@@ -7526,8 +7576,7 @@ cmd_pull() {
   else
     _recipe_print_summary "$output_path" "$fetch_url" "$file_hash"
     printf '\n'
-    printf '%sreview the steps before running:%s  opensop dry-run %s\n' \
-           "$C_YELLOW" "$C_RESET" "$output_path"
+    printf '%sreview before running%s (dry-run previews the flow but NOT the shell): read its run commands — jq '\''(.process.steps // .steps)[] | {id,type,run}'\'' %s\n' "$C_YELLOW" "$C_RESET" "$output_path"
     printf '%snote:%s sha256 shown for pinning/identification. File and hash share the same GitHub origin — this confirms transfer integrity, not third-party authenticity. Supply --verify <sha256> to enforce a hash obtained out-of-band.\n' \
            "$C_DIM" "$C_RESET"
   fi
@@ -7695,8 +7744,7 @@ cmd_import() {
   else
     _recipe_print_summary "$output_path" "$source_label" "$file_hash"
     printf '\n'
-    printf '%sreview the steps before running:%s  opensop dry-run %s\n' \
-           "$C_YELLOW" "$C_RESET" "$output_path"
+    printf '%sreview before running%s (dry-run previews the flow but NOT the shell): read its run commands — jq '\''(.process.steps // .steps)[] | {id,type,run}'\'' %s\n' "$C_YELLOW" "$C_RESET" "$output_path"
   fi
 }
 

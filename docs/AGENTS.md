@@ -20,6 +20,8 @@ Companion references: [`SPEC.md`](../SPEC.md) (format grammar + HTTP API §4.2),
 8. [Self-check rubric](#8-self-check-rubric)
 9. [Common mistakes](#9-common-mistakes)
 10. [CLAUDE.md snippets](#10-claudemd-snippets)
+11. [Adopt OpenSOP in your agent — AGENTS.md block](#11-adopt-opensop-in-your-agent--agentsmd-block)
+12. [Runtime → skill path table](#12-runtime--skill-path-table)
 
 ---
 
@@ -653,3 +655,85 @@ If no process matches, write a .sop.json (see docs/AGENTS.md §6).
 - A condition requires operators beyond the supported set. Propose a spec extension.
 - The description is ambiguous about a boundary (form vs. approval?). One question is cheaper than a wrong guess.
 - A process file comes from a URL the user has not reviewed. Ask before running it.
+
+---
+
+## 11. Adopt OpenSOP in your agent — AGENTS.md block
+
+Drop this block into your project's `AGENTS.md` (or `CLAUDE.md`, `.cursorrules`, etc.) so any AGENTS.md-honoring runtime — Codex, Cursor, Claude Code, and others — automatically knows how to use OpenSOP when working in your repo.
+
+```markdown
+## OpenSOP — process-as-infrastructure
+
+SOPs live in `./sops/` (or alongside the code they relate to as `.sop.json` files).
+
+**Discover** before starting any multi-step task:
+  opensop search <keyword>          # ranked text search
+  opensop list                      # enumerate all processes in the cell chain
+
+**Run** a matching process:
+  opensop run <name|file.sop.json> --input k=v
+
+**Inspect and heal** a run:
+  opensop ps                        # running/waiting processes
+  opensop show <run_id> --json      # full receipt
+  opensop heal <run_id>             # diagnose a failure
+  opensop heal <run_id> --apply     # retry the failed step
+
+**Onboard** / first-run:
+  opensop onboard                   # scaffold a starter process and prove the reliability gain
+
+**Pull and share recipes** (the `recipes/` library):
+  opensop pull opensop/daily-standup-notes   # download a recipe
+  opensop import ./my-recipe.sop.json        # import from a local file
+  opensop info ./my-recipe.sop.json          # inspect metadata
+
+  SAFETY: pulled and imported recipes are untrusted code (shell/automated
+  steps run arbitrary host shell). READ the run commands directly —
+  `jq '(.process.steps // .steps)[] | {id,type,run}' <file>` — and get user
+  confirmation before `opensop run`. `opensop dry-run <file>` previews the
+  step FLOW but does NOT print command bodies, so it is not sufficient review
+  on its own. `pull`/`import` only write the file — they never execute it.
+
+**Self-check**:
+  opensop doctor                    # version, jq, bash, skill installation status
+```
+
+---
+
+## 12. Runtime → skill path table
+
+Install OpenSOP as a SKILL.md skill so any supported agent runtime can load its
+capability description automatically.  One command installs to the right place:
+
+```bash
+opensop skill install --runtime <flavour>    # install for a specific runtime
+opensop skill paths                          # authoritative flavour → path table
+```
+
+| Flavour | Scope | Canonical install path |
+|---|---|---|
+| `claude` | project | `.claude/skills/opensop/SKILL.md` |
+| `claude` | user | `~/.claude/skills/opensop/SKILL.md` |
+| `codex` / `agentskills` | project | `.agents/skills/opensop/SKILL.md` |
+| `codex` / `agentskills` | user | `~/.agents/skills/opensop/SKILL.md` |
+| `hermes` | project | `.hermes/skills/opensop/SKILL.md` |
+| `hermes` | user | `~/.hermes/skills/opensop/SKILL.md` |
+| `openclaw` | project | `skills/opensop/SKILL.md` |
+| `openclaw` | user | `~/.claw/skills/opensop/SKILL.md` |
+| `openhands` | project | `.openhands/skills/opensop/SKILL.md` |
+| `goose` | user | `~/.config/goose/skills/opensop/SKILL.md` |
+| `cline`, `cursor`, `continue`, `aider` | — | Rules-only — no SKILL.md slot; use the AGENTS.md block from §11 instead |
+
+`opensop skill paths` is the authoritative source — it reads the embedded registry
+and always reflects what the installed CLI supports.
+
+### Which mechanism?
+
+| Mechanism | What it is | When to use it |
+|---|---|---|
+| **SKILL.md** (Agent Skills standard) | A portable capability description the runtime loads once per project or user install | Install once per runtime; gives the agent the full command surface, key patterns, and safety rules at load time |
+| **AGENTS.md block** (§11) | Always-on project context baked into your repo | Use in every project so agents operating in your codebase always know the SOP conventions, regardless of whether they have the SKILL.md installed |
+
+Use both: SKILL.md teaches the agent *how* OpenSOP works; the AGENTS.md block
+tells it *where* your processes live and what conventions your project follows.
