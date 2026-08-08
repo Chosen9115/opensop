@@ -7023,7 +7023,7 @@ RULES_GUIDANCE
     # Prefer GNU 'ln -T' (never treats an existing symlink-to-dir as a target
     # directory); fall back to plain ln on BSD/macOS userlands.
     local _ln_no_deref=""
-    ln --help 2>&1 | grep -q -- '-T' && _ln_no_deref="-T"
+    if ln --help 2>&1 | grep -q -- '-T'; then _ln_no_deref="-T"; fi
     if ! ln $_ln_no_deref "$tmp_file" "$skill_file" 2>/dev/null; then
       rm -f "$tmp_file"
       if [[ -e "$skill_file" ]]; then
@@ -7270,6 +7270,89 @@ cmd_doctor() {
 # Requires curl (gated in main() curl-gate case).
 # --------------------------------------------------------------------------- #
 
+# True when output should be machine-readable JSON (explicit --json, or auto mode
+# piped to a non-tty). Used by pull/import/info so agents get JSON on success.
+_output_is_json() {
+  case "$OUTPUT_MODE" in
+    json) return 0 ;;
+    auto) [[ -t 1 ]] && return 1 || return 0 ;;
+    *)    return 1 ;;
+  esac
+}
+
+# Safe temp cleanup for recipe write commands. The path is read from a variable
+# and NEVER interpolated into trap source, so a filename containing shell
+# metacharacters (e.g. a single quote in --output) cannot inject commands via
+# the EXIT trap. cmd_pull/cmd_import run with no pre-existing EXIT trap in this
+# dispatch path, so set-then-clear is safe.
+_RECIPE_TMP=""
+_recipe_cleanup() { [[ -n "${_RECIPE_TMP:-}" ]] && rm -f "$_RECIPE_TMP"; _RECIPE_TMP=""; return 0; }
+
+# _recipe_commit <tmp_in_dest_dir> <dest> <force:true|false>
+# Atomically place tmp (which MUST already live in dest's directory) at dest.
+# No-clobber via an atomic hard-link unless force; refuses a symlink dest. Dies
+# with a structured error on failure and always cleans up the temp.
+_recipe_commit() {
+  local tmp="$1" dest="$2" force="$3"
+  chmod 0644 "$tmp" 2>/dev/null || true
+  if [[ "$force" == true ]]; then
+    mv -f "$tmp" "$dest" || { rm -f "$tmp"; die "could not write to $dest" "cli_error" "check write permissions"; }
+    return 0
+  fi
+  if [[ -L "$dest" ]]; then
+    rm -f "$tmp"; die "$dest is a symlink — refusing to write through it" "cli_error" "remove it or use --force"
+  fi
+  local nod=""
+  if ln --help 2>&1 | grep -q -- '-T'; then nod="-T"; fi
+  if ! ln $nod "$tmp" "$dest" 2>/dev/null; then
+    rm -f "$tmp"
+    if [[ -e "$dest" ]]; then die "file already exists: $dest (use --force to overwrite)" "cli_error" "re-run with --force"; fi
+    die "could not write to $dest" "cli_error" "check permissions / filesystem hard-link support"
+  fi
+  if [[ -L "$dest" || ! -f "$dest" ]]; then die "write verification failed for $dest" "cli_error" "unexpected destination type"; fi
+  rm -f "$tmp"
+  return 0
+}
+
+# _recipe_write <src_file> <dest> <force>
+# Stage src into dest's own directory (so the final link/rename is same-fs and
+# atomic — never a cross-filesystem cp onto the live destination), then commit.
+_recipe_write() {
+  local src="$1" dest="$2" force="$3"
+  local dd; dd="$(dirname "$dest")"
+  [[ -d "$dd" ]] || mkdir -p "$dd" || die "could not create destination directory: $dd" "cli_error"
+  local dt
+  dt="$(mktemp "$dd/.opensop-recipe.XXXXXX")" || die "could not stage a temp file in $dd" "cli_error" "check write permissions on: $dd"
+  cp "$src" "$dt" || { rm -f "$dt"; die "could not stage recipe in $dd" "cli_error"; }
+  _recipe_commit "$dt" "$dest" "$force"
+}
+
+# _recipe_json <file> <source> <sha256> [<install>] [<tags-csv>]
+# Emit a stable machine-readable summary. `executed:false` is an explicit safety
+# signal — these commands never run the recipe.
+_recipe_json() {
+  local file="$1" source_url="$2" sha256="$3" install="${4:-}" tags_csv="${5:-}"
+  local p
+  p=$(jq -c '(if has("process") then .process else . end)' "$file")
+  jq -nc \
+    --argjson p "$p" \
+    --arg file "$file" --arg src "$source_url" --arg sha "$sha256" \
+    --arg install "$install" --arg tags "$tags_csv" \
+    '{
+       ok: true,
+       name: ($p.name // "unnamed"),
+       version: ($p.version // "unversioned"),
+       steps: (($p.steps // []) | length),
+       types: (($p.steps // []) | [.[].type] | unique | sort),
+       source: (if ($p.recipe.source // "") != "" then $p.recipe.source elif $src != "" then $src else null end),
+       sha256: (if $sha != "" then $sha else null end),
+       output_path: $file,
+       install: (if $install != "" then $install else ($p.recipe.install // null) end),
+       tags: ($p.recipe.tags // (if $tags != "" then ($tags | split(", ")) else [] end)),
+       executed: false
+     }'
+}
+
 cmd_pull() {
   require_curl
 
@@ -7344,7 +7427,8 @@ cmd_pull() {
   local recipes_base="${OPENSOP_RECIPES_BASE:-https://raw.githubusercontent.com/Chosen9115/opensop}"
   local fetch_url="${recipes_base}/${ref}/recipes/${author}/${slug}.sop.json"
 
-  info "fetching ${fetch_url} …"
+  # Progress goes to stderr so stdout stays clean for JSON consumers.
+  info "fetching ${fetch_url} …" >&2
 
   # Download to a temp file in the destination directory for atomic rename.
   local dest_dir
@@ -7358,8 +7442,8 @@ cmd_pull() {
   tmp_file="$(mktemp "${dest_dir}/.opensop-pull.XXXXXX")" || \
     die "could not create temp file in ${dest_dir}" "cli_error" \
         "check write permissions on: $dest_dir"
-  # shellcheck disable=SC2064
-  trap "rm -f '$tmp_file'" EXIT
+  _RECIPE_TMP="$tmp_file"
+  trap _recipe_cleanup EXIT
 
   # Support both http(s) and file:// URLs (the latter for offline testing).
   local curl_rc=0
@@ -7417,19 +7501,20 @@ cmd_pull() {
     fi
   fi
 
-  # Atomic write: rename temp to final destination.
-  mv "$tmp_file" "$output_path" || \
-    die "could not write to $output_path" "cli_error" "check write permissions"
-  # Clear the trap — the file is now in its final location.
-  trap - EXIT
+  # Atomic no-clobber commit (tmp_file already lives in the destination dir).
+  _recipe_commit "$tmp_file" "$output_path" "$force"
+  _RECIPE_TMP=""; trap - EXIT
 
-  # Print summary + safety note.
-  _recipe_print_summary "$output_path" "$fetch_url" "$file_hash"
-  printf '\n'
-  printf '%sreview the steps before running:%s  opensop dry-run %s\n' \
-         "$C_YELLOW" "$C_RESET" "$output_path"
-  printf '%snote:%s sha256 shown for pinning/identification. File and hash share the same GitHub origin — this confirms transfer integrity, not third-party authenticity. Supply --verify <sha256> to enforce a hash obtained out-of-band.\n' \
-         "$C_DIM" "$C_RESET"
+  if _output_is_json; then
+    _recipe_json "$output_path" "$fetch_url" "$file_hash"
+  else
+    _recipe_print_summary "$output_path" "$fetch_url" "$file_hash"
+    printf '\n'
+    printf '%sreview the steps before running:%s  opensop dry-run %s\n' \
+           "$C_YELLOW" "$C_RESET" "$output_path"
+    printf '%snote:%s sha256 shown for pinning/identification. File and hash share the same GitHub origin — this confirms transfer integrity, not third-party authenticity. Supply --verify <sha256> to enforce a hash obtained out-of-band.\n' \
+           "$C_DIM" "$C_RESET"
+  fi
 }
 
 # _recipe_print_summary <file> <source_url> <sha256>
@@ -7529,8 +7614,8 @@ cmd_import() {
   # Read the recipe content into a temp file.
   local tmp_file
   tmp_file="$(mktemp)" || die "could not create temp file" "cli_error"
-  # shellcheck disable=SC2064
-  trap "rm -f '$tmp_file'" EXIT
+  _RECIPE_TMP="$tmp_file"
+  trap _recipe_cleanup EXIT
 
   if [[ "$source_arg" == "-" ]]; then
     # Read from stdin.
@@ -7582,27 +7667,21 @@ cmd_import() {
   local file_hash=""
   file_hash=$(_portable_sha256 "$tmp_file" 2>/dev/null || true)
 
-  # Atomic write.
-  local dest_dir
-  dest_dir="$(dirname "$output_path")"
-  if [[ ! -d "$dest_dir" ]]; then
-    mkdir -p "$dest_dir" || die "could not create destination directory: $dest_dir" "cli_error"
-  fi
+  # Atomic no-clobber write: stage into the destination's own directory (never a
+  # cross-filesystem cp onto the live path) then commit atomically.
+  _recipe_write "$tmp_file" "$output_path" "$force"
+  _recipe_cleanup; trap - EXIT
 
-  # Move temp to final location (same-fs if $output_path is in a different dir,
-  # fall back to cp+rm for cross-filesystem moves).
-  mv "$tmp_file" "$output_path" 2>/dev/null || {
-    cp "$tmp_file" "$output_path" && rm -f "$tmp_file"
-  } || die "could not write to $output_path" "cli_error" "check write permissions"
-  trap - EXIT
-
-  # Print summary + safety note.
   local source_label=""
   [[ "$source_arg" == "-" ]] && source_label="stdin" || source_label="$source_arg"
-  _recipe_print_summary "$output_path" "$source_label" "$file_hash"
-  printf '\n'
-  printf '%sreview the steps before running:%s  opensop dry-run %s\n' \
-         "$C_YELLOW" "$C_RESET" "$output_path"
+  if _output_is_json; then
+    _recipe_json "$output_path" "$source_label" "$file_hash"
+  else
+    _recipe_print_summary "$output_path" "$source_label" "$file_hash"
+    printf '\n'
+    printf '%sreview the steps before running:%s  opensop dry-run %s\n' \
+           "$C_YELLOW" "$C_RESET" "$output_path"
+  fi
 }
 
 # --------------------------------------------------------------------------- #
@@ -7647,13 +7726,16 @@ cmd_info() {
   recipe_install=$(jq -r '(if has("process") then .process else . end).recipe.install // ""' "$file")
   recipe_tags=$(jq -r '(if has("process") then .process else . end).recipe.tags // [] | join(", ")' "$file")
 
-  _recipe_print_summary "$file" "$recipe_source" "$file_hash"
-
-  if [[ -n "$recipe_install" ]]; then
-    printf '  %-16s %s\n' "install:" "$recipe_install"
-  fi
-  if [[ -n "$recipe_tags" ]]; then
-    printf '  %-16s %s\n' "tags:" "$recipe_tags"
+  if _output_is_json; then
+    _recipe_json "$file" "$recipe_source" "$file_hash" "$recipe_install" "$recipe_tags"
+  else
+    _recipe_print_summary "$file" "$recipe_source" "$file_hash"
+    if [[ -n "$recipe_install" ]]; then
+      printf '  %-16s %s\n' "install:" "$recipe_install"
+    fi
+    if [[ -n "$recipe_tags" ]]; then
+      printf '  %-16s %s\n' "tags:" "$recipe_tags"
+    fi
   fi
 }
 

@@ -6550,29 +6550,29 @@ pull_home="$pull_workdir/local-home"
 mkdir -p "$pull_home"
 set +e
 pull_out="$(OPENSOP_LOCAL_HOME="$pull_home" "$cli" pull opensop/daily-standup-notes \
-            --output "$pull_out_file" 2>&1)"; pull_rc=$?
+            --output "$pull_out_file" 2>/dev/null)"; pull_rc=$?
 set -e
 [ "$pull_rc" -eq 0 ] \
   || { echo "FAIL: pull happy-path should exit 0, got $pull_rc: $pull_out"; exit 1; }
 [ -f "$pull_out_file" ] \
   || { echo "FAIL: pull did not write the output file"; exit 1; }
-echo "$pull_out" | grep -q "sha256:" \
-  || { echo "FAIL: pull did not print sha256 in summary"; exit 1; }
+# Captured/piped output is JSON (auto-when-piped contract) carrying the
+# executed:false safety signal and a sha256.
+echo "$pull_out" | jq -e '.ok == true and .executed == false and (.sha256 | type=="string" and length>0)' >/dev/null \
+  || { echo "FAIL: pull did not emit a valid JSON summary (ok/executed:false/sha256): $pull_out"; exit 1; }
 # Never creates a run directory.
 [ ! -d "$pull_home/runs" ] \
   || { echo "FAIL: pull must not create a runs/ directory (safety: never auto-run)"; exit 1; }
-echo "PASS: pull happy-path — file written, sha256 printed, no run created"
+echo "PASS: pull happy-path — file written, JSON summary (executed:false), no run created"
 
-# --- pull: printed sha256 matches the file on disk ---
-pull_sha_line="$(echo "$pull_out" | grep 'sha256:')"
-pull_sha="${pull_sha_line##*sha256:}"
-pull_sha="${pull_sha// /}"  # trim spaces
+# --- pull: reported sha256 matches the file on disk ---
+pull_sha="$(echo "$pull_out" | jq -r '.sha256')"
 actual_sha="$(sha256sum "$pull_out_file" 2>/dev/null | awk '{print $1}' \
               || shasum -a 256 "$pull_out_file" 2>/dev/null | awk '{print $1}' \
               || openssl dgst -sha256 "$pull_out_file" | awk '{print $NF}')"
 [ "$pull_sha" = "$actual_sha" ] \
-  || { echo "FAIL: pull sha256 in summary ($pull_sha) does not match file ($actual_sha)"; exit 1; }
-echo "PASS: pull — sha256 in summary matches file on disk"
+  || { echo "FAIL: pull reported sha256 ($pull_sha) does not match file ($actual_sha)"; exit 1; }
+echo "PASS: pull — reported sha256 matches file on disk"
 
 # --- pull: bad slug (file not found in fixture) → error, non-zero exit ---
 set +e
@@ -6652,18 +6652,18 @@ import_home="$import_workdir/local-home"
 mkdir -p "$import_home"
 set +e
 imp_out="$(OPENSOP_LOCAL_HOME="$import_home" "$cli" import "$import_src" \
-           --output "$import_dst" 2>&1)"; imp_rc=$?
+           --output "$import_dst" 2>/dev/null)"; imp_rc=$?
 set -e
 [ "$imp_rc" -eq 0 ] \
   || { echo "FAIL: import happy-path should exit 0, got $imp_rc: $imp_out"; exit 1; }
 [ -f "$import_dst" ] \
   || { echo "FAIL: import did not write the output file"; exit 1; }
-echo "$imp_out" | grep -q "sha256:" \
-  || { echo "FAIL: import did not print sha256 in summary"; exit 1; }
+echo "$imp_out" | jq -e '.ok == true and .executed == false and (.sha256 | type=="string")' >/dev/null \
+  || { echo "FAIL: import did not emit a valid JSON summary (ok/executed:false/sha256): $imp_out"; exit 1; }
 # Never creates a run directory.
 [ ! -d "$import_home/runs" ] \
   || { echo "FAIL: import must not create a runs/ directory (safety: never auto-run)"; exit 1; }
-echo "PASS: import from file — file written, sha256 printed, no run created"
+echo "PASS: import from file — file written, JSON summary (executed:false), no run created"
 
 # --- import from stdin (- sentinel) ---
 stdin_dst="$import_workdir/stdin-imported.sop.json"
@@ -6717,6 +6717,53 @@ echo "PASS: import --force — overwrites existing file"
 [ ! -d "$import_home/runs" ] \
   || { echo "FAIL: import must NEVER create a runs/ directory (safety: never auto-run)"; exit 1; }
 echo "PASS: import — never creates a runs/ directory (safety: never auto-run confirmed)"
+
+# --- pull: --output into a dir whose name contains a single quote AND a
+#     command-substitution string must NOT execute anything (EXIT-trap injection
+#     guard). With the old interpolated trap, the temp path would break the
+#     quoting and run the embedded command on exit. ---
+inj_parent="$(mktemp -d)"
+inj_marker="$inj_parent/INJECTED"
+inj_dir="$inj_parent/a'\$(touch $inj_marker)b"   # literal quote + $(...) in the dir name
+mkdir -p "$inj_dir"
+set +e
+OPENSOP_RECIPES_BASE="file://$pull_fixture" "$cli" pull opensop/daily-standup-notes \
+  --output "$inj_dir/out.sop.json" >/dev/null 2>&1; inj_rc=$?
+set -e
+[ "$inj_rc" -eq 0 ] \
+  || { echo "FAIL: pull into a dir with quote/\$() in its name should still succeed"; exit 1; }
+[ -f "$inj_dir/out.sop.json" ] \
+  || { echo "FAIL: pull into quoted dir did not write the file"; exit 1; }
+[ ! -e "$inj_marker" ] \
+  || { echo "FAIL: pull EXIT trap executed an injected command (marker was created)"; exit 1; }
+rm -rf "$inj_parent"
+echo "PASS: pull — quote/\$() in --output dir name cannot inject via the EXIT trap"
+
+# --- pull/import/info honor --json (machine-readable success output) ---
+json_target="$pull_workdir/json-out.sop.json"
+set +e
+pj="$(OPENSOP_RECIPES_BASE="file://$pull_fixture" "$cli" pull opensop/daily-standup-notes --output "$json_target" --json 2>/dev/null)"; pj_rc=$?
+set -e
+[ "$pj_rc" -eq 0 ] || { echo "FAIL: pull --json should exit 0: $pj"; exit 1; }
+echo "$pj" | jq -e '.ok == true and .executed == false and .name != null and (.output_path | endswith("json-out.sop.json"))' >/dev/null \
+  || { echo "FAIL: pull --json did not emit the expected JSON object: $pj"; exit 1; }
+echo "PASS: pull --json — emits a structured summary object"
+
+set +e
+ij="$("$cli" import "$pull_fixture/main/recipes/opensop/triage-bug-report.sop.json" --output "$pull_workdir/json-import.sop.json" --json 2>/dev/null)"; ij_rc=$?
+set -e
+[ "$ij_rc" -eq 0 ] || { echo "FAIL: import --json should exit 0: $ij"; exit 1; }
+echo "$ij" | jq -e '.ok == true and .executed == false and (.sha256 | type=="string")' >/dev/null \
+  || { echo "FAIL: import --json did not emit the expected JSON object: $ij"; exit 1; }
+echo "PASS: import --json — emits a structured summary object"
+
+set +e
+nj="$("$cli" info "$json_target" --json 2>/dev/null)"; nj_rc=$?
+set -e
+[ "$nj_rc" -eq 0 ] || { echo "FAIL: info --json should exit 0: $nj"; exit 1; }
+echo "$nj" | jq -e '.ok == true and .executed == false and (.tags | type=="array") and (.install != null)' >/dev/null \
+  || { echo "FAIL: info --json did not emit the expected JSON object (tags array + install): $nj"; exit 1; }
+echo "PASS: info --json — emits recipe metadata as a structured object"
 
 # Cleanup.
 unset OPENSOP_RECIPES_BASE
