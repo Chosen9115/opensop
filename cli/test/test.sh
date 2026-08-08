@@ -6389,4 +6389,64 @@ echo "$help_json_skill" | jq -e 'any(.[]; .command == "doctor")' >/dev/null \
   || { echo "FAIL: doctor not in help --json registry"; exit 1; }
 echo "PASS: skill and doctor appear in help --json registry"
 
+# --- skill install: unsupported explicit scope must FAIL, not silently switch ---
+# goose is a user-only runtime; requesting --scope project must error, never
+# write to $HOME/user config behind the caller's back.
+set +e
+"$cli" skill install --runtime goose --scope project >/dev/null 2>&1; goose_scope_rc=$?
+set -e
+[ "$goose_scope_rc" -ne 0 ] \
+  || { echo "FAIL: skill install --runtime goose --scope project — should fail (user-only), not substitute"; exit 1; }
+echo "PASS: skill install — unsupported explicit scope fails instead of silently switching"
+
+# --- skill install: <dir> and --runtime are mutually exclusive ---
+set +e
+"$cli" skill install /tmp/opensop-test-xyz --runtime claude >/dev/null 2>&1; both_rc=$?
+set -e
+[ "$both_rc" -ne 0 ] \
+  || { echo "FAIL: skill install <dir> --runtime <flavour> — should reject both given together"; exit 1; }
+echo "PASS: skill install — rejects <dir> and --runtime together"
+
+# --- skill install: atomic write leaves no temp file behind ---
+inst_dir="$(mktemp -d)"
+"$cli" skill install "$inst_dir" >/dev/null 2>&1 \
+  || { echo "FAIL: skill install <dir> — should succeed"; exit 1; }
+[ -f "$inst_dir/opensop/SKILL.md" ] \
+  || { echo "FAIL: skill install — SKILL.md not written"; exit 1; }
+leftover="$(find "$inst_dir/opensop" -name '.SKILL.md.*' 2>/dev/null | wc -l | tr -d ' ')"
+[ "$leftover" = "0" ] \
+  || { echo "FAIL: skill install — atomic write left a temp file behind"; exit 1; }
+rm -rf "$inst_dir"
+echo "PASS: skill install — atomic write succeeds and leaves no temp file"
+
+# --- doctor: must run and self-report when jq is ABSENT (its whole purpose) ---
+# Build a PATH that contains every tool EXCEPT jq, then confirm doctor still
+# runs, exits non-zero (critical), and emits valid JSON via a jq-free encoder.
+nojq_bin="$(mktemp -d)"
+_old_ifs="$IFS"; IFS=:
+for _d in $PATH; do
+  [ -d "$_d" ] || continue
+  for _f in "$_d"/*; do
+    _b="$(basename "$_f")"
+    [ -e "$nojq_bin/$_b" ] || ln -s "$_f" "$nojq_bin/$_b" 2>/dev/null || true
+  done
+done
+IFS="$_old_ifs"
+rm -f "$nojq_bin/jq"
+set +e
+nojq_pretty="$(PATH="$nojq_bin" "$cli" doctor 2>&1)"; nojq_pretty_rc=$?
+nojq_json="$(PATH="$nojq_bin" "$cli" doctor --json 2>/dev/null)"; nojq_json_rc=$?
+set -e
+rm -rf "$nojq_bin"
+[ "$nojq_pretty_rc" -ne 0 ] \
+  || { echo "FAIL: doctor (no jq) — should exit non-zero (critical)"; exit 1; }
+echo "$nojq_pretty" | grep -qi "jq" \
+  || { echo "FAIL: doctor (no jq) — pretty output should name the missing jq"; exit 1; }
+[ "$nojq_json_rc" -ne 0 ] \
+  || { echo "FAIL: doctor --json (no jq) — should exit non-zero"; exit 1; }
+# The JSON is emitted WITHOUT jq; verify it is nonetheless valid + correct (parse WITH jq).
+echo "$nojq_json" | jq -e '.critical == true and .jq.ok == false' >/dev/null \
+  || { echo "FAIL: doctor --json (no jq) — must emit valid JSON with critical=true, jq.ok=false"; exit 1; }
+echo "PASS: doctor — runs, self-reports, and emits valid JSON even when jq is absent"
+
 echo "ALL PASS"

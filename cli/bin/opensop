@@ -6910,6 +6910,12 @@ cmd_skill() {
 
   local target_dir=""
 
+  # <dir> and --runtime are mutually exclusive — reject both rather than
+  # silently preferring one destination over the other.
+  [[ -n "$install_runtime" && -n "$install_dir" ]] && \
+    die "give either a directory or --runtime, not both" "usage_error" \
+        "opensop skill install <dir>   OR   opensop skill install --runtime <flavour>"
+
   if [[ -n "$install_runtime" ]]; then
     # Validate the flavour.
     local valid_flavours; valid_flavours=$(_skill_valid_flavours)
@@ -6948,19 +6954,22 @@ RULES_GUIDANCE
       return 0
     fi
 
-    # Resolve the path for the given flavour + scope.
-    local resolved_path
-    resolved_path=$(_skill_resolve_path "$install_runtime" "$scope") || {
-      # Flavour exists but not for this scope — try the other scope.
-      local alt_scope
+    # Resolve the path for the given flavour + scope. If the requested scope is
+    # unsupported for this runtime, FAIL — never silently write to the other
+    # scope. An agent asking for a project-local install must not have its
+    # request redirected into persistent $HOME/user configuration.
+    local resolved_path alt_scope
+    if resolved_path=$(_skill_resolve_path "$install_runtime" "$scope"); then
+      target_dir="$resolved_path"
+    else
       [[ "$scope" == "project" ]] && alt_scope="user" || alt_scope="project"
-      resolved_path=$(_skill_resolve_path "$install_runtime" "$alt_scope") || {
-        die "runtime '$install_runtime' has no path for scope '$scope'" \
-            "usage_error" "run 'opensop skill paths' to see available scopes"
-      }
-      warn "'$install_runtime' only supports scope '$alt_scope' — using that instead"
-    }
-    target_dir="$resolved_path"
+      if _skill_resolve_path "$install_runtime" "$alt_scope" >/dev/null 2>&1; then
+        die "runtime '$install_runtime' does not support scope '$scope' (only '$alt_scope')" \
+            "usage_error" "opensop skill install --runtime $install_runtime --scope $alt_scope"
+      fi
+      die "runtime '$install_runtime' has no path for scope '$scope'" \
+          "usage_error" "run 'opensop skill paths' to see available scopes"
+    fi
   elif [[ -n "$install_dir" ]]; then
     target_dir="$install_dir/opensop"
   else
@@ -6976,8 +6985,23 @@ RULES_GUIDANCE
         "cli_error" "opensop skill install ... --force"
   fi
 
-  mkdir -p "$target_dir"
-  _skill_embedded_content > "$skill_file"
+  mkdir -p "$target_dir" || die "could not create '$target_dir'" "cli_error" "check directory permissions"
+
+  # Write atomically: fill a temp file in the SAME directory, then rename over
+  # the target. An interrupted or failed write can never truncate or corrupt an
+  # existing valid SKILL.md (important when an agent retries an install).
+  local tmp_file
+  tmp_file=$(mktemp "$target_dir/.SKILL.md.XXXXXX") \
+    || die "could not create a temp file in '$target_dir'" "cli_error" "check permissions and free space"
+  if ! _skill_embedded_content > "$tmp_file"; then
+    rm -f "$tmp_file"
+    die "failed writing skill content in '$target_dir'" "cli_error" "check free disk space"
+  fi
+  chmod 0644 "$tmp_file" 2>/dev/null || true
+  if ! mv -f "$tmp_file" "$skill_file"; then
+    rm -f "$tmp_file"
+    die "failed to install skill to '$skill_file'" "cli_error" "check directory permissions"
+  fi
 
   if $want_json || [[ "$OUTPUT_MODE" == "json" ]]; then
     jq -nc --arg path "$skill_file" '{installed: true, path: $path}'
@@ -7027,6 +7051,27 @@ cmd_doctor() {
   local bash_version="${BASH_VERSION:-unknown}"
   local bash_ok=false
   (( bash_major >= 4 )) && bash_ok=true
+
+  # jq is a hard dependency for the skill scan and every output path below (they
+  # all shell out to jq). If jq is absent — the exact critical condition doctor
+  # exists to report — emit a jq-INDEPENDENT diagnostic here and exit non-zero.
+  # Do NOT call die/emit_pretty_or_json: those render JSON via jq too.
+  if ! $jq_ok; then
+    local _bash_state; $bash_ok && _bash_state="ok" || _bash_state="TOO OLD (need bash >= 4)"
+    if $want_json; then
+      # Hand-rolled minimal JSON (values are controlled: version/bash strings
+      # contain no double-quotes). jq is unavailable, so we cannot use it here.
+      printf '{"ok":false,"critical":true,"version":"%s","opensop_path":"%s","jq":{"ok":false,"version":"absent"},"bash":{"ok":%s,"version":"%s"},"message":"jq is not installed; install jq (https://jqlang.github.io/jq) — required for OpenSOP JSON output and the full doctor scan"}\n' \
+        "$version" "$opensop_path" "$bash_ok" "$bash_version"
+    else
+      printf 'opensop doctor\n'
+      printf '  version    %s\n' "$version"
+      printf '  jq         %sMISSING%s (critical) — install jq: https://jqlang.github.io/jq\n' "$C_RED" "$C_RESET"
+      printf '  bash       %s (%s)\n' "$_bash_state" "$bash_version"
+      printf '\n  %sCRITICAL%s jq is required for OpenSOP JSON output and the full skill scan.\n' "$C_RED" "$C_RESET"
+    fi
+    return 1
+  fi
 
   # Skill installation: scan each flavour/scope in the registry.
   # Build an array of {flavour, scope, path, installed} objects.
@@ -7140,8 +7185,6 @@ cmd_doctor() {
 }
 
 main() {
-  require_jq
-
   # Strip global flags anywhere in the argument list.
   # v0.8: default backend is LOCAL. --remote uses the configured server URL;
   # --server <url> sets the URL for this invocation and implies --remote.
@@ -7194,6 +7237,11 @@ main() {
   set -- "${args[@]}"
 
   local cmd="$1"; shift
+
+  # jq is required for every command EXCEPT `doctor`, which must be able to run
+  # in — and diagnose — an environment where jq is missing. All other commands
+  # (including `help`, whose --json path needs jq) are gated here.
+  if [[ "$cmd" != "doctor" ]]; then require_jq; fi
 
   # help is local-only and must render regardless of --remote / server config.
   # Short-circuit BEFORE the remote config + curl init below, so that
