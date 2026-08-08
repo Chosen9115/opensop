@@ -6488,9 +6488,27 @@ set +e
 weird_json="$(PATH="$weird_dir:$nojq_bin2" "$weird_dir/opensop" doctor --json 2>/dev/null)"
 set -e
 rm -rf "$nojq_bin2" "$weird_parent"
-# Must still be parseable by jq and reflect the hostile path.
-echo "$weird_json" | jq -e '.jq.ok == false and (.opensop_path | contains("q\"uote"))' >/dev/null \
-  || { echo "FAIL: doctor --json (no jq) — hostile opensop_path produced invalid/incorrect JSON: $weird_json"; exit 1; }
-echo "PASS: doctor — jq-free JSON escapes a JSON-hostile opensop_path correctly"
+# Must still be parseable by jq (valid JSON) even though opensop lives in a
+# hostile path; opensop_path is intentionally omitted from the jq-free fallback.
+echo "$weird_json" | jq -e '.jq.ok == false and .critical == true' >/dev/null \
+  || { echo "FAIL: doctor --json (no jq) — must stay valid JSON when opensop lives in a hostile path: $weird_json"; exit 1; }
+echo "$weird_json" | jq -e 'has("opensop_path") | not' >/dev/null \
+  || { echo "FAIL: doctor --json (no jq) — opensop_path must be omitted from the jq-free fallback"; exit 1; }
+echo "PASS: doctor — jq-free JSON stays valid when opensop lives in a JSON-hostile path"
+
+# --- skill install: refuse to install through a symlink destination ---
+# A broken symlink passes the -e existence check, so this exercises the explicit
+# -L symlink guard (never install THROUGH a link into an attacker-chosen dir).
+sl_dir="$(mktemp -d)"; mkdir -p "$sl_dir/opensop"
+ln -s "$sl_dir/does-not-exist" "$sl_dir/opensop/SKILL.md"
+set +e
+"$cli" skill install "$sl_dir" >/dev/null 2>&1; sl_rc=$?
+set -e
+[ "$sl_rc" -ne 0 ] \
+  || { echo "FAIL: skill install should refuse a symlink SKILL.md destination"; exit 1; }
+[ -L "$sl_dir/opensop/SKILL.md" ] \
+  || { echo "FAIL: skill install must not have replaced/followed the symlink"; exit 1; }
+rm -rf "$sl_dir"
+echo "PASS: skill install — refuses to install through a symlink destination"
 
 echo "ALL PASS"

@@ -7007,9 +7007,19 @@ RULES_GUIDANCE
   else
     # No --force: hard-link into place. ln fails atomically if the destination
     # already exists, closing the check-then-write race — a concurrent writer's
-    # file is never clobbered. The content persists at the destination via the
-    # link, so the temp is then removed.
-    if ! ln "$tmp_file" "$skill_file" 2>/dev/null; then
+    # file is never clobbered.
+    # Refuse a symlink destination outright so we never install THROUGH a link
+    # (which could redirect the write into an attacker-chosen directory).
+    if [[ -L "$skill_file" ]]; then
+      rm -f "$tmp_file"
+      die "'$skill_file' is a symlink — refusing to install through it" \
+          "cli_error" "remove the symlink or pass --force"
+    fi
+    # Prefer GNU 'ln -T' (never treats an existing symlink-to-dir as a target
+    # directory); fall back to plain ln on BSD/macOS userlands.
+    local _ln_no_deref=""
+    ln --help 2>&1 | grep -q -- '-T' && _ln_no_deref="-T"
+    if ! ln $_ln_no_deref "$tmp_file" "$skill_file" 2>/dev/null; then
       rm -f "$tmp_file"
       if [[ -e "$skill_file" ]]; then
         die "'$skill_file' already exists — pass --force to overwrite" \
@@ -7017,6 +7027,11 @@ RULES_GUIDANCE
       fi
       die "failed to install skill to '$skill_file'" "cli_error" \
           "check directory permissions / filesystem hard-link support"
+    fi
+    # Post-verify: destination must be a regular, non-symlink file.
+    if [[ -L "$skill_file" || ! -f "$skill_file" ]]; then
+      die "install verification failed for '$skill_file'" "cli_error" \
+          "unexpected destination type"
     fi
     rm -f "$tmp_file"
   fi
@@ -7095,15 +7110,18 @@ cmd_doctor() {
   if ! $jq_ok; then
     local _bash_state; $bash_ok && _bash_state="ok" || _bash_state="TOO OLD (need bash >= 4)"
     if $want_json; then
-      # Hand-rolled JSON (jq is unavailable here). Every interpolated string is
-      # run through _json_escape so a hostile PATH-derived value can't produce
-      # malformed JSON. $bash_ok is a literal true/false (safe unquoted).
-      local _ev _eo _eb
+      # Hand-rolled JSON (jq is unavailable here). We interpolate ONLY controlled
+      # values: $version (compile-time constant) and $bash_version (set by bash;
+      # always ASCII). Both are still run through _json_escape defensively.
+      # $opensop_path is intentionally OMITTED from this fallback: it is the only
+      # field sourced from the filesystem (via `command -v`) and can contain
+      # arbitrary/invalid bytes that pure bash cannot reliably encode as valid
+      # JSON. It IS present in the normal (jq-present) doctor output below.
+      local _ev _eb
       _ev=$(_json_escape "$version")
-      _eo=$(_json_escape "$opensop_path")
       _eb=$(_json_escape "$bash_version")
-      printf '{"ok":false,"critical":true,"version":"%s","opensop_path":"%s","jq":{"ok":false,"version":"absent"},"bash":{"ok":%s,"version":"%s"},"message":"jq is not installed; install jq (https://jqlang.github.io/jq) — required for OpenSOP JSON output and the full doctor scan"}\n' \
-        "$_ev" "$_eo" "$bash_ok" "$_eb"
+      printf '{"ok":false,"critical":true,"version":"%s","jq":{"ok":false,"version":"absent"},"bash":{"ok":%s,"version":"%s"},"message":"jq is not installed; install jq (https://jqlang.github.io/jq) — required for OpenSOP JSON output and the full doctor scan"}\n' \
+        "$_ev" "$bash_ok" "$_eb"
     else
       printf 'opensop doctor\n'
       printf '  version    %s\n' "$version"
