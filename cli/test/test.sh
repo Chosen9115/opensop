@@ -6511,4 +6511,215 @@ set -e
 rm -rf "$sl_dir"
 echo "PASS: skill install — refuses to install through a symlink destination"
 
+# --------------------------------------------------------------------------- #
+# Seed recipes: each must pass opensop dry-run (OFFLINE — no network needed)  #
+# --------------------------------------------------------------------------- #
+recipes_dir="$(cd "$(dirname "$0")/../.." && pwd)/recipes/opensop"
+for recipe_file in \
+    "$recipes_dir/daily-standup-notes.sop.json" \
+    "$recipes_dir/triage-bug-report.sop.json" \
+    "$recipes_dir/release-checklist.sop.json"; do
+  [ -f "$recipe_file" ] \
+    || { echo "FAIL: seed recipe file missing: $recipe_file"; exit 1; }
+  set +e
+  dry_out="$("$cli" dry-run "$recipe_file" --json 2>&1)"; dry_rc=$?
+  set -e
+  [ "$dry_rc" -eq 0 ] \
+    || { echo "FAIL: seed recipe dry-run failed ($dry_rc): $recipe_file: $dry_out"; exit 1; }
+  echo "$dry_out" | jq -e '.valid == true' >/dev/null \
+    || { echo "FAIL: seed recipe dry-run reports invalid: $recipe_file: $dry_out"; exit 1; }
+  echo "PASS: seed recipe passes dry-run: $(basename "$recipe_file")"
+done
+
+# --------------------------------------------------------------------------- #
+# opensop pull — offline tests via OPENSOP_RECIPES_BASE=file://...            #
+# --------------------------------------------------------------------------- #
+
+# Build a local fixture tree mirroring the GitHub raw URL layout.
+pull_workdir="$(mktemp -d)"
+pull_fixture="$pull_workdir/fixture"
+mkdir -p "$pull_fixture/main/recipes/opensop"
+cp "$recipes_dir/daily-standup-notes.sop.json" "$pull_fixture/main/recipes/opensop/"
+cp "$recipes_dir/triage-bug-report.sop.json"   "$pull_fixture/main/recipes/opensop/"
+
+export OPENSOP_RECIPES_BASE="file://${pull_fixture}"
+
+# --- pull happy-path: writes file, prints sha256, does NOT create a run dir ---
+pull_out_file="$pull_workdir/daily-standup-notes.sop.json"
+pull_home="$pull_workdir/local-home"
+mkdir -p "$pull_home"
+set +e
+pull_out="$(OPENSOP_LOCAL_HOME="$pull_home" "$cli" pull opensop/daily-standup-notes \
+            --output "$pull_out_file" 2>&1)"; pull_rc=$?
+set -e
+[ "$pull_rc" -eq 0 ] \
+  || { echo "FAIL: pull happy-path should exit 0, got $pull_rc: $pull_out"; exit 1; }
+[ -f "$pull_out_file" ] \
+  || { echo "FAIL: pull did not write the output file"; exit 1; }
+echo "$pull_out" | grep -q "sha256:" \
+  || { echo "FAIL: pull did not print sha256 in summary"; exit 1; }
+# Never creates a run directory.
+[ ! -d "$pull_home/runs" ] \
+  || { echo "FAIL: pull must not create a runs/ directory (safety: never auto-run)"; exit 1; }
+echo "PASS: pull happy-path — file written, sha256 printed, no run created"
+
+# --- pull: printed sha256 matches the file on disk ---
+pull_sha_line="$(echo "$pull_out" | grep 'sha256:')"
+pull_sha="${pull_sha_line##*sha256:}"
+pull_sha="${pull_sha// /}"  # trim spaces
+actual_sha="$(sha256sum "$pull_out_file" 2>/dev/null | awk '{print $1}' \
+              || shasum -a 256 "$pull_out_file" 2>/dev/null | awk '{print $1}' \
+              || openssl dgst -sha256 "$pull_out_file" | awk '{print $NF}')"
+[ "$pull_sha" = "$actual_sha" ] \
+  || { echo "FAIL: pull sha256 in summary ($pull_sha) does not match file ($actual_sha)"; exit 1; }
+echo "PASS: pull — sha256 in summary matches file on disk"
+
+# --- pull: bad slug (file not found in fixture) → error, non-zero exit ---
+set +e
+bad_out="$("$cli" pull opensop/no-such-recipe --output "$pull_workdir/nowhere.sop.json" 2>&1)"; bad_rc=$?
+set -e
+[ "$bad_rc" -ne 0 ] \
+  || { echo "FAIL: pull bad slug should exit non-zero"; exit 1; }
+# Must NOT have written the output file.
+[ ! -f "$pull_workdir/nowhere.sop.json" ] \
+  || { echo "FAIL: pull bad slug must not write a file on error"; exit 1; }
+echo "PASS: pull bad slug — exits non-zero, no file written"
+
+# --- pull: no-clobber (refuses to overwrite without --force) ---
+set +e
+clobber_out="$("$cli" pull opensop/daily-standup-notes --output "$pull_out_file" 2>&1)"; clobber_rc=$?
+set -e
+[ "$clobber_rc" -ne 0 ] \
+  || { echo "FAIL: pull no-clobber should exit non-zero when file exists"; exit 1; }
+echo "$clobber_out" | grep -q "force" \
+  || { echo "FAIL: pull no-clobber hint should mention --force"; exit 1; }
+echo "PASS: pull no-clobber — refuses without --force, mentions hint"
+
+# --- pull: --force overwrites ---
+set +e
+force_out="$("$cli" pull opensop/daily-standup-notes --output "$pull_out_file" --force 2>&1)"; force_rc=$?
+set -e
+[ "$force_rc" -eq 0 ] \
+  || { echo "FAIL: pull --force should succeed, got $force_rc: $force_out"; exit 1; }
+echo "PASS: pull --force — overwrites existing file"
+
+# --- pull: --verify mismatch fails, no file written ---
+verify_target="$pull_workdir/verify-mismatch.sop.json"
+set +e
+verify_out="$("$cli" pull opensop/triage-bug-report --output "$verify_target" \
+              --verify BADHASH1234 2>&1)"; verify_rc=$?
+set -e
+[ "$verify_rc" -ne 0 ] \
+  || { echo "FAIL: pull --verify mismatch should exit non-zero"; exit 1; }
+[ ! -f "$verify_target" ] \
+  || { echo "FAIL: pull --verify mismatch must not write the file"; exit 1; }
+echo "PASS: pull --verify mismatch — exits non-zero, no file written"
+
+# --- pull: --verify correct hash succeeds ---
+correct_hash="$(sha256sum "$pull_fixture/main/recipes/opensop/triage-bug-report.sop.json" 2>/dev/null | awk '{print $1}' \
+                || shasum -a 256 "$pull_fixture/main/recipes/opensop/triage-bug-report.sop.json" 2>/dev/null | awk '{print $1}' \
+                || openssl dgst -sha256 "$pull_fixture/main/recipes/opensop/triage-bug-report.sop.json" | awk '{print $NF}')"
+verify_ok_target="$pull_workdir/verify-ok.sop.json"
+set +e
+"$cli" pull opensop/triage-bug-report --output "$verify_ok_target" \
+      --verify "$correct_hash" >/dev/null 2>&1; verify_ok_rc=$?
+set -e
+[ "$verify_ok_rc" -eq 0 ] \
+  || { echo "FAIL: pull --verify correct hash should succeed"; exit 1; }
+[ -f "$verify_ok_target" ] \
+  || { echo "FAIL: pull --verify correct hash must write the file"; exit 1; }
+echo "PASS: pull --verify correct hash — succeeds and writes file"
+
+# --- pull with pin (@ref) --- use @main which is our fixture ref ---
+pin_target="$pull_workdir/pin-test.sop.json"
+set +e
+"$cli" pull "opensop/daily-standup-notes@main" --output "$pin_target" >/dev/null 2>&1; pin_rc=$?
+set -e
+[ "$pin_rc" -eq 0 ] \
+  || { echo "FAIL: pull with @ref pin should succeed for existing ref"; exit 1; }
+echo "PASS: pull with @ref pin — resolves and writes file"
+
+# --------------------------------------------------------------------------- #
+# opensop import — OFFLINE (no curl, no network)                              #
+# --------------------------------------------------------------------------- #
+
+import_workdir="$(mktemp -d)"
+
+# --- import happy-path from file: writes, validates, prints sha256, no run ---
+import_src="$pull_fixture/main/recipes/opensop/daily-standup-notes.sop.json"
+import_dst="$import_workdir/imported.sop.json"
+import_home="$import_workdir/local-home"
+mkdir -p "$import_home"
+set +e
+imp_out="$(OPENSOP_LOCAL_HOME="$import_home" "$cli" import "$import_src" \
+           --output "$import_dst" 2>&1)"; imp_rc=$?
+set -e
+[ "$imp_rc" -eq 0 ] \
+  || { echo "FAIL: import happy-path should exit 0, got $imp_rc: $imp_out"; exit 1; }
+[ -f "$import_dst" ] \
+  || { echo "FAIL: import did not write the output file"; exit 1; }
+echo "$imp_out" | grep -q "sha256:" \
+  || { echo "FAIL: import did not print sha256 in summary"; exit 1; }
+# Never creates a run directory.
+[ ! -d "$import_home/runs" ] \
+  || { echo "FAIL: import must not create a runs/ directory (safety: never auto-run)"; exit 1; }
+echo "PASS: import from file — file written, sha256 printed, no run created"
+
+# --- import from stdin (- sentinel) ---
+stdin_dst="$import_workdir/stdin-imported.sop.json"
+set +e
+imp_stdin_out="$(cat "$import_src" | "$cli" import - --output "$stdin_dst" 2>&1)"; imp_stdin_rc=$?
+set -e
+[ "$imp_stdin_rc" -eq 0 ] \
+  || { echo "FAIL: import from stdin should exit 0, got $imp_stdin_rc: $imp_stdin_out"; exit 1; }
+[ -f "$stdin_dst" ] \
+  || { echo "FAIL: import from stdin did not write the output file"; exit 1; }
+echo "PASS: import from stdin (- sentinel) — file written"
+
+# --- import invalid JSON → error ---
+bad_json_file="$import_workdir/bad.json"
+printf 'this is { not valid json' > "$bad_json_file"
+set +e
+"$cli" import "$bad_json_file" --output "$import_workdir/bad-out.sop.json" >/dev/null 2>&1; bad_json_rc=$?
+set -e
+[ "$bad_json_rc" -ne 0 ] \
+  || { echo "FAIL: import invalid JSON should exit non-zero"; exit 1; }
+echo "PASS: import invalid JSON — exits non-zero"
+
+# --- import valid JSON that is not a process → error ---
+non_proc_file="$import_workdir/non-proc.json"
+printf '{"foo": "bar"}' > "$non_proc_file"
+set +e
+"$cli" import "$non_proc_file" --output "$import_workdir/non-proc-out.sop.json" >/dev/null 2>&1; non_proc_rc=$?
+set -e
+[ "$non_proc_rc" -ne 0 ] \
+  || { echo "FAIL: import non-process JSON should exit non-zero"; exit 1; }
+echo "PASS: import non-process JSON — exits non-zero"
+
+# --- import no-clobber ---
+set +e
+"$cli" import "$import_src" --output "$import_dst" >/dev/null 2>&1; imp_clob_rc=$?
+set -e
+[ "$imp_clob_rc" -ne 0 ] \
+  || { echo "FAIL: import no-clobber should exit non-zero"; exit 1; }
+echo "PASS: import no-clobber — refuses without --force"
+
+# --- import --force overwrites ---
+set +e
+"$cli" import "$import_src" --output "$import_dst" --force >/dev/null 2>&1; imp_force_rc=$?
+set -e
+[ "$imp_force_rc" -eq 0 ] \
+  || { echo "FAIL: import --force should succeed"; exit 1; }
+echo "PASS: import --force — overwrites existing file"
+
+# --- import never creates a run (safety) ---
+# We already checked above; this is a belt-and-suspenders check after all imports.
+[ ! -d "$import_home/runs" ] \
+  || { echo "FAIL: import must NEVER create a runs/ directory (safety: never auto-run)"; exit 1; }
+echo "PASS: import — never creates a runs/ directory (safety: never auto-run confirmed)"
+
+# Cleanup.
+unset OPENSOP_RECIPES_BASE
+rm -rf "$pull_workdir" "$import_workdir"
+
 echo "ALL PASS"

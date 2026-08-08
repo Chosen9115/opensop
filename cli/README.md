@@ -326,6 +326,8 @@ $ opensop --json schema validate /nonexistent.yaml 2>&1 1>/dev/null
 
 Set `NO_COLOR=1` to disable ANSI color.
 
+**`OPENSOP_RECIPES_BASE`** overrides the base URL used by `opensop pull` (default: `https://raw.githubusercontent.com/Chosen9115/opensop`). Set it to a `file://` URL pointing at a local directory with the same `<ref>/recipes/<author>/<slug>.sop.json` layout for offline testing or air-gapped environments.
+
 ## Input forms
 
 Three ways to provide inputs to `run` (and outputs to `submit`):
@@ -475,6 +477,10 @@ Commands marked **[remote]** require `--remote` or `--server <url>`. All others 
 | `opensop skill install --runtime <flavour> [--scope user\|project] [--force]` | Install the SKILL.md at the canonical path for the given agent runtime (see table below). Rules-only runtimes (`cline`, `cursor`, `continue`, `aider`) print guidance instead (exit 0, no file written). Unknown flavour → `usage_error` listing valid names. |
 | `opensop skill paths [--json]` | Print the flavour→path registry as a TTY table or JSON object. This is the authoritative reference for where each runtime expects the skill file. |
 | `opensop doctor [--json]` | Self-check: opensop version + PATH, jq present, bash ≥4, per-runtime skill installation status. Exits non-zero only on CRITICAL failure (jq missing, bash too old). Missing skills are informational. |
+| **Recipes** | |
+| `opensop pull <author>/<slug>[@<ref>]` | Download a recipe from the opensop recipe library (`recipes/<author>/<slug>.sop.json` in this repo). Defaults to `main`; pin with a commit SHA: `opensop pull opensop/daily-standup-notes@a1b2c3d`. `--output <path>` overrides the default `./<slug>.sop.json`. No-clobber without `--force`. Prints a summary (name, version, step count + types, source, sha256) and a "review before running" note. **Never executes the file.** `--verify <sha256>` enforces a hash the user supplies out-of-band. Requires curl. |
+| `opensop import [<file>\|-] [--output <path>] [--force]` | Read a recipe from a local file or stdin (`-`), validate it as a process, write to `./<name>.sop.json` or `--output <path>`, no-clobber without `--force`. Prints the same summary; **never executes the file.** Local-only (no curl). |
+| `opensop info <file.sop.json>` | Print a recipe's `recipe.*` metadata (source, install hint, tags) plus the process summary (name, version, step count + types, sha256). No writes; no curl. |
 
 ### Agent runtime skill paths
 
