@@ -6449,4 +6449,48 @@ echo "$nojq_json" | jq -e '.critical == true and .jq.ok == false' >/dev/null \
   || { echo "FAIL: doctor --json (no jq) — must emit valid JSON with critical=true, jq.ok=false"; exit 1; }
 echo "PASS: doctor — runs, self-reports, and emits valid JSON even when jq is absent"
 
+# --- skill install: no --force must refuse to overwrite an existing skill ---
+clob_dir="$(mktemp -d)"
+"$cli" skill install "$clob_dir" >/dev/null 2>&1 \
+  || { echo "FAIL: first skill install should succeed"; exit 1; }
+set +e
+"$cli" skill install "$clob_dir" >/dev/null 2>&1; clob_rc=$?
+set -e
+[ "$clob_rc" -ne 0 ] \
+  || { echo "FAIL: second skill install without --force should fail (no-clobber)"; exit 1; }
+# --force must succeed and leave a valid SKILL.md
+"$cli" skill install "$clob_dir" --force >/dev/null 2>&1 \
+  || { echo "FAIL: skill install --force should overwrite"; exit 1; }
+head -1 "$clob_dir/opensop/SKILL.md" | grep -q -- '---' \
+  || { echo "FAIL: --force overwrite left an invalid SKILL.md"; exit 1; }
+rm -rf "$clob_dir"
+echo "PASS: skill install — refuses to overwrite without --force; --force replaces atomically"
+
+# --- doctor --json (no jq): opensop_path with JSON-hostile chars stays valid JSON ---
+# Put opensop in a directory whose name contains a double-quote and a space, so
+# `command -v opensop` returns a value that MUST be JSON-escaped by the fallback.
+weird_parent="$(mktemp -d)"
+weird_dir="$weird_parent/q\"uote sp ace"
+mkdir -p "$weird_dir"
+ln -s "$cli" "$weird_dir/opensop"
+nojq_bin2="$(mktemp -d)"
+_old_ifs="$IFS"; IFS=:
+for _d in $PATH; do
+  [ -d "$_d" ] || continue
+  for _f in "$_d"/*; do
+    _b="$(basename "$_f")"
+    [ -e "$nojq_bin2/$_b" ] || ln -s "$_f" "$nojq_bin2/$_b" 2>/dev/null || true
+  done
+done
+IFS="$_old_ifs"
+rm -f "$nojq_bin2/jq"
+set +e
+weird_json="$(PATH="$weird_dir:$nojq_bin2" "$weird_dir/opensop" doctor --json 2>/dev/null)"
+set -e
+rm -rf "$nojq_bin2" "$weird_parent"
+# Must still be parseable by jq and reflect the hostile path.
+echo "$weird_json" | jq -e '.jq.ok == false and (.opensop_path | contains("q\"uote"))' >/dev/null \
+  || { echo "FAIL: doctor --json (no jq) — hostile opensop_path produced invalid/incorrect JSON: $weird_json"; exit 1; }
+echo "PASS: doctor — jq-free JSON escapes a JSON-hostile opensop_path correctly"
+
 echo "ALL PASS"

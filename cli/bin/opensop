@@ -6998,9 +6998,27 @@ RULES_GUIDANCE
     die "failed writing skill content in '$target_dir'" "cli_error" "check free disk space"
   fi
   chmod 0644 "$tmp_file" 2>/dev/null || true
-  if ! mv -f "$tmp_file" "$skill_file"; then
+  if $force; then
+    # --force: replace atomically.
+    if ! mv -f "$tmp_file" "$skill_file"; then
+      rm -f "$tmp_file"
+      die "failed to install skill to '$skill_file'" "cli_error" "check directory permissions"
+    fi
+  else
+    # No --force: hard-link into place. ln fails atomically if the destination
+    # already exists, closing the check-then-write race — a concurrent writer's
+    # file is never clobbered. The content persists at the destination via the
+    # link, so the temp is then removed.
+    if ! ln "$tmp_file" "$skill_file" 2>/dev/null; then
+      rm -f "$tmp_file"
+      if [[ -e "$skill_file" ]]; then
+        die "'$skill_file' already exists — pass --force to overwrite" \
+            "cli_error" "opensop skill install ... --force"
+      fi
+      die "failed to install skill to '$skill_file'" "cli_error" \
+          "check directory permissions / filesystem hard-link support"
+    fi
     rm -f "$tmp_file"
-    die "failed to install skill to '$skill_file'" "cli_error" "check directory permissions"
   fi
 
   if $want_json || [[ "$OUTPUT_MODE" == "json" ]]; then
@@ -7008,6 +7026,24 @@ RULES_GUIDANCE
   else
     ok "skill installed → $skill_file"
   fi
+}
+
+# jq-independent JSON string escaper. Used ONLY on the doctor fallback path,
+# where jq is absent and values (notably `opensop_path` from `command -v`) may
+# contain JSON-significant characters via a PATH directory name. Escapes
+# backslash, double-quote, and the common control chars, then strips any
+# remaining C0 controls so the result is always a valid JSON string body.
+_json_escape() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  # Drop any remaining raw C0 control characters (0x00–0x1F except the three
+  # handled above) to guarantee valid JSON without needing jq.
+  s=$(printf '%s' "$s" | LC_ALL=C tr -d '\000-\010\013\014\016-\037')
+  printf '%s' "$s"
 }
 
 # --------------------------------------------------------------------------- #
@@ -7059,10 +7095,15 @@ cmd_doctor() {
   if ! $jq_ok; then
     local _bash_state; $bash_ok && _bash_state="ok" || _bash_state="TOO OLD (need bash >= 4)"
     if $want_json; then
-      # Hand-rolled minimal JSON (values are controlled: version/bash strings
-      # contain no double-quotes). jq is unavailable, so we cannot use it here.
+      # Hand-rolled JSON (jq is unavailable here). Every interpolated string is
+      # run through _json_escape so a hostile PATH-derived value can't produce
+      # malformed JSON. $bash_ok is a literal true/false (safe unquoted).
+      local _ev _eo _eb
+      _ev=$(_json_escape "$version")
+      _eo=$(_json_escape "$opensop_path")
+      _eb=$(_json_escape "$bash_version")
       printf '{"ok":false,"critical":true,"version":"%s","opensop_path":"%s","jq":{"ok":false,"version":"absent"},"bash":{"ok":%s,"version":"%s"},"message":"jq is not installed; install jq (https://jqlang.github.io/jq) — required for OpenSOP JSON output and the full doctor scan"}\n' \
-        "$version" "$opensop_path" "$bash_ok" "$bash_version"
+        "$_ev" "$_eo" "$bash_ok" "$_eb"
     else
       printf 'opensop doctor\n'
       printf '  version    %s\n' "$version"
