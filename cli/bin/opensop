@@ -6640,10 +6640,11 @@ description: |
   Use this skill when the user wants to run, list, search, inspect, or manage
   OpenSOP .sop.json processes locally; view or replay audit receipts; resume
   paused (waiting) runs; diagnose or re-run failed steps (heal); compare runs
-  with diff; watch live process status; or install the OpenSOP skill into an
-  agent runtime with `opensop skill install`. Trigger on any mention of
-  ".sop.json", "opensop run", audit receipts, step-level orchestration, or
-  "Process as Infrastructure". Do NOT run a process the user did not ask for.
+  with diff; watch live process status; pull or import shareable recipes; or
+  install the OpenSOP skill into an agent runtime with `opensop skill install`.
+  Trigger on any mention of ".sop.json", "opensop run", audit receipts,
+  step-level orchestration, "Process as Infrastructure", or recipe sharing.
+  Do NOT run a process the user did not ask for.
 license: Apache-2.0
 allowed-tools:
   - "Bash(opensop *)"
@@ -6679,6 +6680,9 @@ opensop search <keyword>                              ranked text search over pr
 opensop ps [--follow]                                 process status table
 opensop diff <run_id1> <run_id2>                      compare two runs
 opensop dry-run <name|file.sop.json>                  validate + preview, no run created
+opensop pull <author>/<slug>[@<ref>]                  download a recipe from the library (writes file, never runs it)
+opensop import [<file>|-]                             import a recipe from a local file or stdin (writes file, never runs it)
+opensop info <file.sop.json>                          print recipe metadata + process summary, no writes
 opensop skill install --runtime <flavour>             install this skill into agent runtime
 opensop skill paths [--json]                          show per-runtime install paths
 opensop skill show                                    print this SKILL.md to stdout
@@ -6707,6 +6711,33 @@ Errors emit `{error, message, hint?}` to stderr in JSON mode.
 
 5. **Always parse JSON.** Pipe any command with `--json` to `jq` for safe
    field access — do not screen-scrape TTY output.
+
+## Recipes / the library
+
+The `recipes/` library (in the opensop GitHub repo) contains shareable
+`.sop.json` processes.  Use `opensop pull` to fetch one and `opensop import`
+to bring in a local or piped file:
+
+```bash
+opensop pull opensop/daily-standup-notes          # fetch from library (main branch)
+opensop pull opensop/triage-bug-report@a1b2c3d    # pin to a specific commit SHA
+opensop import ./my-recipe.sop.json               # import from a local file
+opensop import -                                  # import from stdin
+opensop info ./daily-standup-notes.sop.json       # inspect recipe metadata
+```
+
+`pull` and `import` only **write** the file — they never execute it.
+
+**CRITICAL SAFETY — pulled and imported recipes are UNTRUSTED code.**
+A recipe's `shell`/`automated` steps run arbitrary shell on your machine,
+exactly like a Makefile.  Before running any pulled or imported recipe:
+
+1. Inspect it: `opensop dry-run <file>` (validates and previews steps, no
+   execution) or read the file's steps directly.
+2. Get explicit user confirmation that they want to run it.
+3. Only then call `opensop run <file>`.
+
+Never auto-run a recipe obtained from an external source.
 
 ## SAFETY
 
@@ -6745,6 +6776,12 @@ opensop submit 20250101T120000Z-12345-6789 collect --output budget=5000 --output
 # Heal a failed step
 opensop heal 20250101T120000Z-12345-6789
 opensop heal 20250101T120000Z-12345-6789 --apply
+
+# Pull a recipe, review it, then run it
+opensop pull opensop/daily-standup-notes
+opensop dry-run ./daily-standup-notes.sop.json   # review steps — no execution
+# (confirm with user, then:)
+opensop run ./daily-standup-notes.sop.json
 
 # Install this skill
 opensop skill install --runtime claude          # → .claude/skills/opensop/SKILL.md

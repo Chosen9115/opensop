@@ -531,11 +531,32 @@ In production the server **fails closed** (503 with `server_misconfigured`) when
 
 ## Use with Claude Code (and other agents)
 
-The CLI was designed so an agent can use OpenSOP without writing HTTP requests. See [`docs/CLAUDE-INTEGRATION.md`](docs/CLAUDE-INTEGRATION.md) for the recipe — a small CLAUDE.md snippet that teaches the agent when to reach for `opensop` instead of doing things ad-hoc.
+The CLI was designed so an agent can use OpenSOP without writing HTTP requests. See [`docs/AGENTS.md`](../docs/AGENTS.md) for the full agent guide — discovery, run lifecycle, building processes, the openSOP-ize pattern, and CLAUDE.md snippets.
 
 The short version: when an agent recognizes that what it's about to do is a multi-step process, it runs it with `opensop run`, polls `opensop status`, and submits step outputs as it works. Local runs need no server; add `--remote` to involve the runtime's database.
 
 For discovery, agents should use `opensop search` or `opensop suggest` rather than scanning the full `list` output — they surface the right process from intent, not from name recall.
+
+**Adopt OpenSOP in your agent runtime** — install the embedded SKILL.md in one command:
+
+```bash
+opensop skill install --runtime claude   # Claude Code: .claude/skills/opensop/SKILL.md
+opensop skill install --runtime codex    # Codex: .agents/skills/opensop/SKILL.md
+opensop skill paths                      # see all supported runtimes and their paths
+```
+
+For runtimes without a SKILL.md slot (`cline`, `cursor`, `continue`, `aider`), add the AGENTS.md block from [`docs/AGENTS.md §11`](../docs/AGENTS.md#11-adopt-opensop-in-your-agent--agentsmd-block) to your rules file. Run `opensop doctor` to verify the installation.
+
+**Recipe library** — shareable `.sop.json` processes live in [`recipes/`](../recipes/). Pull one with:
+
+```bash
+opensop pull opensop/daily-standup-notes       # download to ./daily-standup-notes.sop.json
+opensop pull opensop/triage-bug-report         # download to ./triage-bug-report.sop.json
+opensop info ./daily-standup-notes.sop.json    # inspect recipe metadata before running
+opensop dry-run ./daily-standup-notes.sop.json # preview steps without executing
+```
+
+`opensop pull` and `opensop import` only write the file — they never execute it. Always review the steps before running a pulled recipe.
 
 ## Limitations
 
