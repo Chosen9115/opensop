@@ -6399,6 +6399,19 @@ set -e
   || { echo "FAIL: skill install --runtime goose --scope project — should fail (user-only), not substitute"; exit 1; }
 echo "PASS: skill install — unsupported explicit scope fails instead of silently switching"
 
+# --- skill install: a single-scope runtime (goose = user-only) installs with the
+#     DEFAULT scope by auto-selecting the sole supported scope (no --scope needed) ---
+goose_home="$(mktemp -d)"
+set +e
+HOME="$goose_home" "$cli" skill install --runtime goose >/dev/null 2>&1; goose_def_rc=$?
+set -e
+[ "$goose_def_rc" -eq 0 ] \
+  || { echo "FAIL: skill install --runtime goose (default scope) should succeed by auto-selecting the sole scope"; exit 1; }
+[ -f "$goose_home/.config/goose/skills/opensop/SKILL.md" ] \
+  || { echo "FAIL: goose default install did not land at its user path"; exit 1; }
+rm -rf "$goose_home"
+echo "PASS: skill install — single-scope runtime (goose) installs with the default scope"
+
 # --- skill install: <dir> and --runtime are mutually exclusive ---
 set +e
 "$cli" skill install /tmp/opensop-test-xyz --runtime claude >/dev/null 2>&1; both_rc=$?

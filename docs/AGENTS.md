@@ -688,10 +688,12 @@ SOPs live in `./sops/` (or alongside the code they relate to as `.sop.json` file
   opensop import ./my-recipe.sop.json        # import from a local file
   opensop info ./my-recipe.sop.json          # inspect metadata
 
-  SAFETY: pulled and imported recipes are untrusted code. Always review
-  the steps (`opensop dry-run <file>`) and get user confirmation before
-  calling `opensop run`. `pull`/`import` only write the file — they
-  never execute it.
+  SAFETY: pulled and imported recipes are untrusted code (shell/automated
+  steps run arbitrary host shell). READ the run commands directly —
+  `jq '(.process.steps // .steps)[] | {id,type,run}' <file>` — and get user
+  confirmation before `opensop run`. `opensop dry-run <file>` previews the
+  step FLOW but does NOT print command bodies, so it is not sufficient review
+  on its own. `pull`/`import` only write the file — they never execute it.
 
 **Self-check**:
   opensop doctor                    # version, jq, bash, skill installation status

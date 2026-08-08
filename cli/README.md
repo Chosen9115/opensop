@@ -556,7 +556,7 @@ opensop info ./daily-standup-notes.sop.json    # inspect recipe metadata before 
 opensop dry-run ./daily-standup-notes.sop.json # preview steps without executing
 ```
 
-`opensop pull` and `opensop import` only write the file — they never execute it. Always review the steps before running a pulled recipe.
+`opensop pull` and `opensop import` only write the file — they never execute it. A pulled recipe is untrusted code: **read its `run` commands directly** (`jq '(.process.steps // .steps)[] | {id,type,run}' <file>`) before running it. `opensop dry-run <file>` previews the step flow but does **not** print command bodies, so it is not a substitute for reading the steps.
 
 ## Limitations
 
