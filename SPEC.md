@@ -369,15 +369,14 @@ documentation.
 ```yaml
 opensop: "0.7"
 
-recipe:
-  source: acme/customer-onboarding
-  install: opensop pull acme/customer-onboarding
-  tags: [onboarding, crm, sales]
-
 process:
   name: customer-onboarding
   version: "2.1"
   description: "Onboard a new customer: collect info, verify, assign rep"
+  recipe:
+    source: acme/customer-onboarding
+    install: opensop pull acme/customer-onboarding
+    tags: [onboarding, crm, sales]
   steps:
     - id: collect
       type: form
@@ -385,16 +384,20 @@ process:
         - { name: company, type: string }
 ```
 
-In the wrapped YAML envelope, `recipe` is a sibling of `opensop` and `process`
-— it sits at the top level of the document, outside `process:`, because it
-describes the file as a distribution artifact, not the process's execution model.
-In the flat JSON form, `recipe` is a top-level key alongside `name`, `steps`, etc.
+`recipe` is a Process field (§2.2), so it follows the same flat/wrapped
+projection as every other process field (§2.1): in the wrapped envelope it sits
+inside `process:`; in the flat `.sop.json` form it appears as a top-level key
+alongside `name`, `steps`, etc. It is purely distribution metadata that
+describes the file as an artifact — it never participates in the execution model.
 
-**Engine behavior:** conforming parsers MUST silently ignore `recipe` and all its
-sub-fields when loading a process for execution. A server parser that rejects an
-unknown top-level key on the wrapped envelope for any reason other than
-`opensop` version gating MUST be treated as a bug — unknown top-level keys at the
-envelope level are forward-compatible extensions in v0.7.x.
+**Engine behavior:** conforming v0.7.x parsers MUST ignore the `recipe` object
+and its sub-fields when loading a process for execution — it never affects which
+steps run or what they produce. Normal document validation (size limits, type
+checks, security constraints) still applies to the object itself. Older or strict
+parsers that predate the v0.7.x `recipe` field may not recognize it; that is a
+known compatibility boundary, not a conformance violation — `recipe` metadata is
+advisory and safe to drop. This clause establishes no general rule about other
+unknown keys; it governs `recipe` only.
 
 ---
 
@@ -2104,7 +2107,7 @@ process:
 | 0.2 | `llm` step, `tools:`, collection outputs, `exit_when:`, `loop:` step, interval trigger (parser-only), `post_review:` hook (roadmapped), shared state (roadmapped), `validation:` on `automated` |
 | 0.6 | Local execution backend (genuine local execution, no server), `.sop.json` flat format, run-dir artifacts (manifest/audit/context), pause/resume state machine, cell substrate (init/scope/annotate/lineage/fork), `shell` and `noop` local-only step types, `executor` audit field, `--conflicts` for list |
 | 0.7 | Process status model (§9): canonical process states (`open`/`scheduled`/`running`) and rollup fields (`last_status`, `last_run_at`, `next_run_at`). Reliability metrics contract (§10): per-step `duration_ms`, `model`, `tokens_in`, `tokens_out`, `result_hash`, `token_source` in run receipts; top-level manifest `duration_ms`; resumed-completion `duration_ms` + `result_hash` on completed events written by `local_submit` (C1a follow-up); `duration_ms` + `result_hash:"pending"` on subprocess and webhook-callback waiting events (C1a follow-up); manifest total-duration-on-resume recomputed as full wall time from run start (C1a follow-up); the aggregated `metrics` block is reserved for v0.7.x. Security model (§11): no-telemetry statement, shell-step trust boundary, daemon secrets posture, fault-record redaction rules, stream auth requirement. Stream protocol, self-heal semantics, scheduler-trigger promotion, and server metrics API reserved for v0.7.x. `/sop/*` HTTP contract unchanged. |
-| 0.7.x (additive) | Optional `recipe` object (§2.8): `recipe.source` (canonical origin), `recipe.install` (one-line install hint), `recipe.tags` (discovery tags). Distribution metadata only — ignored by the execution engine, non-breaking, backward-compatible with all earlier parsers. No HTTP API change. No CLI parsing required for MVP (later slice). |
+| 0.7.x (additive) | Optional `recipe` object (§2.8), a Process field: `recipe.source` (canonical origin), `recipe.install` (one-line install hint), `recipe.tags` (discovery tags). Distribution metadata only — ignored by the execution engine, additive and non-breaking; ignored by v0.7.x-capable parsers (older strict parsers may not recognize it — a known compatibility boundary). No HTTP API change. No CLI parsing required for MVP (later slice). |
 
 ## Appendix B — Flat vs. wrapped envelope quick reference
 
