@@ -6429,8 +6429,20 @@ do
 done
 "$cli" skill show 2>/dev/null | grep -qE '\{id, ?type, ?run\}' \
   || { echo "FAIL: embedded SKILL.md lacks the direct 'read the run commands' review idiom"; exit 1; }
-grep -qE 'review before running.*run commands' "$cli" \
-  || { echo "FAIL: pull/import output no longer points at reading the run commands"; exit 1; }
+# pull AND import each emit the read-the-run-commands guidance — checked
+# INDEPENDENTLY by invoking each against a fixture (pretty mode → human output),
+# so one regressing can't be masked by the other.
+_rev_fx="$(mktemp -d)"; mkdir -p "$_rev_fx/main/recipes/opensop"
+cp "$repo_root/recipes/opensop/daily-standup-notes.sop.json" "$_rev_fx/main/recipes/opensop/"
+_rev_out="$(mktemp -d)"
+pull_review="$(OPENSOP_RECIPES_BASE="file://$_rev_fx" "$cli" pull opensop/daily-standup-notes --output "$_rev_out/p.sop.json" --pretty 2>&1)"
+echo "$pull_review" | grep -qE '\{id, ?type, ?run\}|run commands' \
+  || { echo "FAIL: pull output does not point at reading the run commands: $pull_review"; rm -rf "$_rev_fx" "$_rev_out"; exit 1; }
+imp_review="$("$cli" import "$_rev_fx/main/recipes/opensop/daily-standup-notes.sop.json" --output "$_rev_out/i.sop.json" --pretty 2>&1)"
+echo "$imp_review" | grep -qE '\{id, ?type, ?run\}|run commands' \
+  || { echo "FAIL: import output does not point at reading the run commands: $imp_review"; rm -rf "$_rev_fx" "$_rev_out"; exit 1; }
+rm -rf "$_rev_fx" "$_rev_out"
+echo "PASS: pull and import each independently emit the read-the-run-commands guidance"
 
 # (b) NEGATIVE: reject any surface that annotates an 'opensop dry-run' command as
 #     the review step (an inline '# ... review' comment on a dry-run line, or the
@@ -6450,11 +6462,15 @@ done
 #     ('opensop dry-run ./...'), a direct jq inspection MUST appear BEFORE it, so
 #     a reader following the workflow top-to-bottom reads the shell before the
 #     flow-only preview.
+# Applies to the recipe pull-then-review WORKFLOW surfaces. (docs/AGENTS.md's
+# `dry-run ./process` lines are general usage examples, not recipe-review
+# workflows, so they are covered by the presence/no-review-annotation checks
+# above rather than ordering.)
 _skill_tmp="$(mktemp)"; "$cli" skill show 2>/dev/null > "$_skill_tmp"
-for f in "$repo_root/cli/README.md" "$_skill_tmp"; do
-  dr=$(grep -nE 'opensop dry-run +\./' "$f" | head -1 | cut -d: -f1)
+for f in "$repo_root/cli/README.md" "$repo_root/recipes/README.md" "$_skill_tmp"; do
+  dr=$(grep -nE 'opensop dry-run +\./' "$f" | head -1 | cut -d: -f1) || dr=""
   [ -n "$dr" ] || continue   # no concrete recipe dry-run on this surface
-  jqln=$(grep -nE '\{id, ?type, ?run\}' "$f" | awk -F: -v d="$dr" '$1 < d {print $1; exit}')
+  jqln=$(grep -nE '\{id, ?type, ?run\}' "$f" | awk -F: -v d="$dr" '$1 < d {print $1; exit}') || jqln=""
   [ -n "$jqln" ] \
     || { label=$([ "$f" = "$_skill_tmp" ] && echo "embedded SKILL.md" || echo "${f#$repo_root/}"); \
          echo "FAIL: $label shows 'opensop dry-run <recipe>' (line $dr) with no jq inspection before it"; rm -f "$_skill_tmp"; exit 1; }
