@@ -732,6 +732,8 @@ upgrade|upgrade the installed opensop CLI to the latest (or a pinned) release|up
 help|show help for a command or the full command reference|help [<command>] [--json]|config|local
 bench|3-arm reliability comparison: skill vs json_only vs opensop over N runs|bench [<task-dir>] [--n N] [--model MODEL] [--arm ARMNAME] [--stub]|bench|local
 onboard|first-run experience: scaffold, validate, bench, and show next steps|onboard [<process.sop.json>] [--stub] [--n N]|onboarding|local
+skill|install the embedded OpenSOP SKILL.md into an agent runtime or directory|skill <install/paths/show> [--runtime FLAVOUR] [--scope user/project] [--force] [--json]|agent-skills|local
+doctor|self-check: version, jq, bash, and skill installation status|doctor [--json]|agent-skills|local
 REGISTRY
 }
 
@@ -1143,6 +1145,24 @@ EX
   opensop onboard ./my-process.sop.json        # validate + bench an existing process
   opensop onboard ./my-process.sop.json --stub # no API key — offline bench self-test
   opensop onboard --json                       # machine-readable summary
+EX
+      ;;
+    skill)
+      cat <<'EX'
+  opensop skill install ./my-dir              # write SKILL.md to ./my-dir/opensop/SKILL.md
+  opensop skill install ./my-dir --force      # overwrite an existing SKILL.md
+  opensop skill install --runtime claude      # install to .claude/skills/opensop/ (project scope)
+  opensop skill install --runtime claude --scope user  # install to ~/.claude/skills/opensop/
+  opensop skill install --runtime codex       # install to .agents/skills/opensop/ (Agent Skills std)
+  opensop skill paths                         # table: flavour -> canonical install path
+  opensop skill paths --json                  # machine-readable {flavour: path} object
+  opensop skill show                          # print the embedded SKILL.md to stdout
+EX
+      ;;
+    doctor)
+      cat <<'EX'
+  opensop doctor                              # human-readable self-check report
+  opensop doctor --json                       # machine-readable {version, jq, bash, skills, ok}
 EX
       ;;
     *)
@@ -6589,9 +6609,641 @@ cmd_onboard() {
   fi
 }
 
-main() {
-  require_jq
+# --------------------------------------------------------------------------- #
+# Subcommand: skill
+#
+# Install the embedded OpenSOP SKILL.md into an agent runtime skills directory
+# or any explicit directory.  The canonical SKILL.md content is embedded as a
+# heredoc in _skill_embedded_content() — it never reads from the filesystem, so
+# single-file curl installs work without sibling files.
+#
+# skill install <dir>                 — write to <dir>/opensop/SKILL.md
+# skill install --runtime <flavour>   — resolve canonical path from the embedded
+#                                       registry and install there
+# skill paths [--json]                — print flavour → path table
+# skill show  (or --path)             — print embedded SKILL.md to stdout
+# --------------------------------------------------------------------------- #
 
+# _skill_embedded_content — emit the canonical OpenSOP SKILL.md to stdout.
+# This function is the single source of truth for the embedded skill content.
+# Do NOT read from disk here — this function must work after a single-file install.
+_skill_embedded_content() {
+  cat <<'SKILL_EOF'
+---
+name: opensop
+description: |
+  Use this skill when the user wants to run, list, search, inspect, or manage
+  OpenSOP .sop.json processes locally; view or replay audit receipts; resume
+  paused (waiting) runs; diagnose or re-run failed steps (heal); compare runs
+  with diff; watch live process status; or install the OpenSOP skill into an
+  agent runtime with `opensop skill install`. Trigger on any mention of
+  ".sop.json", "opensop run", audit receipts, step-level orchestration, or
+  "Process as Infrastructure". Do NOT run a process the user did not ask for.
+license: Apache-2.0
+allowed-tools:
+  - "Bash(opensop *)"
+metadata:
+  homepage: https://github.com/Chosen9115/opensop
+  spec: SPEC.md
+  version: "0.8"
+compatibility:
+  - claude
+  - codex
+  - cursor
+  - gemini
+  - agentskills
+---
+
+# OpenSOP skill
+
+OpenSOP runs executable processes — declared as `.sop.json` files — locally on
+the host.  No server, no daemon, no network required for local execution.
+
+## Command surface
+
+```
+opensop run <name|file.sop.json> [--input k=v ...]   start a local run
+opensop list [dir]                                    list processes in the cell chain
+opensop runs                                          list local runs
+opensop show <run_id> [--json]                        receipt + per-step audit
+opensop status <run_id>                               current run state
+opensop steps <run_id>                                per-step state table
+opensop submit <run_id> <step-id> [--output k=v ...]  resume a paused step
+opensop heal <run_id> [--apply] [--input k=v ...]     diagnose or re-run a failed step
+opensop search <keyword>                              ranked text search over processes
+opensop ps [--follow]                                 process status table
+opensop diff <run_id1> <run_id2>                      compare two runs
+opensop dry-run <name|file.sop.json>                  validate + preview, no run created
+opensop skill install --runtime <flavour>             install this skill into agent runtime
+opensop skill paths [--json]                          show per-runtime install paths
+opensop skill show                                    print this SKILL.md to stdout
+opensop doctor [--json]                               self-check: jq, bash, skill status
+opensop onboard [<process.sop.json>]                  first-run experience: scaffold + bench
+```
+
+All commands emit compact JSON when piped or when `--json` is passed.
+Errors emit `{error, message, hint?}` to stderr in JSON mode.
+
+## Key patterns
+
+1. **Discover then run.** Prefer `opensop search <keyword>` or
+   `opensop suggest "<task description>"` over guessing file paths.  Use
+   `opensop list` to enumerate what is available.
+
+2. **Poll after run.** After `opensop run`, check `opensop status <run_id>`
+   in a loop until `status` is not `running` or `waiting`.
+
+3. **Resume paused steps.** When `status == waiting`, read
+   `manifest.waiting` from `opensop show <run_id> --json` to learn which
+   step is paused and what outputs it expects.  Call `opensop submit`.
+
+4. **Heal failures.** When `status == failed`, use `opensop heal <run_id>`
+   to get a structured fault record, then `--apply` to retry.
+
+5. **Always parse JSON.** Pipe any command with `--json` to `jq` for safe
+   field access — do not screen-scrape TTY output.
+
+## SAFETY
+
+- **Do not run a process the user did not explicitly ask for.**  OpenSOP
+  `.sop.json` steps execute arbitrary shell on the host (same trust boundary
+  as a Makefile).  Ask before running anything the user has not confirmed.
+
+- **Never auto-run a freshly obtained or unknown recipe.**  If a process file
+  arrives from an external source (URL, paste, unknown registry), show the
+  user its steps and get explicit confirmation before calling `opensop run`.
+
+- **`opensop dry-run`** is safe: it validates and previews steps without
+  creating a run or executing any shell.  Prefer it when uncertain.
+
+- Errors and non-zero exits are informational — surface them to the user,
+  then decide together whether to heal, retry, or abort.
+
+## Examples (all synthetic)
+
+```bash
+# Discover
+opensop search "onboard customer"
+opensop suggest "send a weekly digest"
+
+# Run
+opensop run ./processes/greet.sop.json --input name=Alice
+opensop run greet --input name=Bob          # bare name resolves from cell chain
+
+# Inspect
+opensop show 20250101T120000Z-12345-6789 --json | jq '.status'
+opensop steps 20250101T120000Z-12345-6789
+
+# Resume a paused form step
+opensop submit 20250101T120000Z-12345-6789 collect --output budget=5000 --output notes="good fit"
+
+# Heal a failed step
+opensop heal 20250101T120000Z-12345-6789
+opensop heal 20250101T120000Z-12345-6789 --apply
+
+# Install this skill
+opensop skill install --runtime claude          # → .claude/skills/opensop/SKILL.md
+opensop skill install --runtime codex           # → .agents/skills/opensop/SKILL.md
+opensop skill paths                             # show all runtime paths
+```
+SKILL_EOF
+}
+
+# _skill_flavour_registry — emit lines: flavour|scope|path_template
+# path_template uses HOME as a literal placeholder expanded by _skill_resolve_path.
+# Runtimes with only one scope emit a single line with scope "only".
+# Rules-only runtimes (no SKILL.md slot) use scope "rules" — install prints guidance.
+_skill_flavour_registry() {
+  cat <<'FLAVOURS'
+claude|project|.claude/skills/opensop
+claude|user|~/.claude/skills/opensop
+codex|project|.agents/skills/opensop
+codex|user|~/.agents/skills/opensop
+agentskills|project|.agents/skills/opensop
+agentskills|user|~/.agents/skills/opensop
+hermes|project|.hermes/skills/opensop
+hermes|user|~/.hermes/skills/opensop
+openclaw|project|skills/opensop
+openclaw|user|~/.claw/skills/opensop
+openhands|project|.openhands/skills/opensop
+goose|user|~/.config/goose/skills/opensop
+cline|rules|(rules-only runtime — no SKILL.md slot)
+cursor|rules|(rules-only runtime — no SKILL.md slot)
+continue|rules|(rules-only runtime — no SKILL.md slot)
+aider|rules|(rules-only runtime — no SKILL.md slot)
+FLAVOURS
+}
+
+# _skill_valid_flavours — space-separated list of all known flavour names.
+_skill_valid_flavours() {
+  _skill_flavour_registry | awk -F'|' '{print $1}' | sort -u | tr '\n' ' '
+}
+
+# _skill_resolve_path FLAVOUR SCOPE — echo the resolved absolute path for the
+# given flavour+scope, or return 1 if not found.
+# Expands leading ~/ to $HOME.
+_skill_resolve_path() {
+  local want_flavour="$1" want_scope="$2"
+  local flavour scope tpl
+  while IFS='|' read -r flavour scope tpl; do
+    if [[ "$flavour" == "$want_flavour" && "$scope" == "$want_scope" ]]; then
+      # Expand leading ~/ to $HOME.
+      if [[ "$tpl" == '~/'* ]]; then
+        printf '%s' "$HOME/${tpl#\~/}"
+      else
+        printf '%s' "$tpl"
+      fi
+      return 0
+    fi
+  done < <(_skill_flavour_registry)
+  return 1
+}
+
+cmd_skill() {
+  local subcmd=""
+  local runtime="" scope="project" force=false want_json=false want_path=false
+
+  [[ "$OUTPUT_MODE" == "json" ]] && want_json=true
+
+  if [[ $# -eq 0 ]]; then
+    die "usage: opensop skill <install|paths|show>" "usage_error" \
+        "opensop skill install <dir>|--runtime FLAVOUR; opensop skill paths; opensop skill show"
+  fi
+
+  # Top-level flags / subcommand detection.
+  case "$1" in
+    install|paths|show) subcmd="$1"; shift ;;
+    --path) want_path=true; subcmd="show" ;;
+    --json) want_json=true; subcmd="paths" ;;
+    *)
+      die "unknown skill subcommand '$1' — valid: install, paths, show" \
+          "usage_error" "opensop skill <install|paths|show>"
+      ;;
+  esac
+
+  # ---------- skill show (--path) ----------
+  if [[ "$subcmd" == "show" ]] || $want_path; then
+    _skill_embedded_content
+    return 0
+  fi
+
+  # ---------- skill paths ----------
+  if [[ "$subcmd" == "paths" ]]; then
+    # Parse remaining flags.
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --json) want_json=true ;;
+        *) die "unknown flag '$1' for skill paths" "unknown_flag" "opensop skill paths [--json]" ;;
+      esac
+      shift
+    done
+
+    if $want_json; then
+      # Emit a JSON object: {flavour: {project: path, user: path}, ...}
+      # We build it by iterating the registry.
+      local json_out="{}"
+      local flavour scope tpl resolved
+      while IFS='|' read -r flavour scope tpl; do
+        if [[ "$tpl" == '~/'* ]]; then
+          resolved="$HOME/${tpl#\~/}"
+        else
+          resolved="$tpl"
+        fi
+        # Merge into the JSON object using jq.
+        json_out=$(jq -n \
+          --argjson obj "$json_out" \
+          --arg f "$flavour" \
+          --arg s "$scope" \
+          --arg p "$resolved" \
+          '$obj * {($f): ($obj[$f] // {} | . + {($s): $p})}')
+      done < <(_skill_flavour_registry)
+      printf '%s\n' "$json_out" | emit_pretty_or_json
+    else
+      # TTY table: flavour | scope | path
+      local cur_flavour="" flavour scope tpl resolved
+      printf '%s%-14s %-10s %s%s\n' "$C_BOLD" "FLAVOUR" "SCOPE" "PATH" "$C_RESET"
+      while IFS='|' read -r flavour scope tpl; do
+        if [[ "$tpl" == '~/'* ]]; then
+          resolved="$HOME/${tpl#\~/}"
+        else
+          resolved="$tpl"
+        fi
+        if [[ "$scope" == "rules" ]]; then
+          printf '  %-14s %-10s %s\n' "$flavour" "(rules)" "$resolved"
+        else
+          printf '  %-14s %-10s %s\n' "$flavour" "$scope" "$resolved"
+        fi
+      done < <(_skill_flavour_registry)
+    fi
+    return 0
+  fi
+
+  # ---------- skill install ----------
+  # Parse install args: optional <dir> positional OR --runtime, plus --scope and --force.
+  local install_dir="" install_runtime=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --runtime)
+        [[ $# -lt 2 ]] && die "--runtime requires a flavour name" "usage_error" \
+            "opensop skill install --runtime <claude|codex|hermes|...>"
+        install_runtime="$2"; shift 2 ;;
+      --scope)
+        [[ $# -lt 2 ]] && die "--scope requires user or project" "usage_error" \
+            "opensop skill install --scope <user|project>"
+        scope="$2"; shift 2
+        [[ "$scope" == "user" || "$scope" == "project" ]] \
+          || die "unknown scope '$scope' — valid: user, project" "usage_error" \
+                 "opensop skill install --scope <user|project>"
+        ;;
+      --force) force=true; shift ;;
+      --json)  want_json=true; shift ;;
+      -*)
+        die "unknown flag '$1' for skill install" "unknown_flag" \
+            "opensop skill install [<dir>|--runtime FLAVOUR] [--scope user|project] [--force]"
+        ;;
+      *)
+        [[ -z "$install_dir" ]] || die "unexpected argument '$1'" "usage_error" \
+            "opensop skill install <dir>"
+        install_dir="$1"; shift ;;
+    esac
+  done
+
+  local target_dir=""
+
+  # <dir> and --runtime are mutually exclusive — reject both rather than
+  # silently preferring one destination over the other.
+  [[ -n "$install_runtime" && -n "$install_dir" ]] && \
+    die "give either a directory or --runtime, not both" "usage_error" \
+        "opensop skill install <dir>   OR   opensop skill install --runtime <flavour>"
+
+  if [[ -n "$install_runtime" ]]; then
+    # Validate the flavour.
+    local valid_flavours; valid_flavours=$(_skill_valid_flavours)
+    local found=false
+    local f
+    for f in $valid_flavours; do
+      [[ "$f" == "$install_runtime" ]] && { found=true; break; }
+    done
+    $found || die "unknown runtime '$install_runtime' — valid: ${valid_flavours% }" \
+                  "usage_error" "run 'opensop skill paths' to see all flavours"
+
+    # Check if it's a rules-only runtime (no SKILL.md slot).
+    # Use distinct variable names to avoid shadowing the outer $scope variable.
+    local is_rules=false
+    local _rf _rs _rt
+    while IFS='|' read -r _rf _rs _rt; do
+      if [[ "$_rf" == "$install_runtime" && "$_rs" == "rules" ]]; then
+        is_rules=true; break
+      fi
+    done < <(_skill_flavour_registry)
+
+    if $is_rules; then
+      printf '%s%s%s has no SKILL.md slot — it is a rules-only runtime.\n' \
+             "$C_YELLOW" "$install_runtime" "$C_RESET"
+      cat <<'RULES_GUIDANCE'
+
+To add OpenSOP awareness to a rules-only agent runtime, include the
+SKILL.md content in your AGENTS.md, .cursorrules, .aider.conf.yml, or
+equivalent rules file. You can get the content with:
+
+  opensop skill show
+
+Then paste the relevant sections (description, command surface, SAFETY)
+into your rules file.
+RULES_GUIDANCE
+      return 0
+    fi
+
+    # Resolve the path for the given flavour + scope. If the requested scope is
+    # unsupported for this runtime, FAIL — never silently write to the other
+    # scope. An agent asking for a project-local install must not have its
+    # request redirected into persistent $HOME/user configuration.
+    local resolved_path alt_scope
+    if resolved_path=$(_skill_resolve_path "$install_runtime" "$scope"); then
+      target_dir="$resolved_path"
+    else
+      [[ "$scope" == "project" ]] && alt_scope="user" || alt_scope="project"
+      if _skill_resolve_path "$install_runtime" "$alt_scope" >/dev/null 2>&1; then
+        die "runtime '$install_runtime' does not support scope '$scope' (only '$alt_scope')" \
+            "usage_error" "opensop skill install --runtime $install_runtime --scope $alt_scope"
+      fi
+      die "runtime '$install_runtime' has no path for scope '$scope'" \
+          "usage_error" "run 'opensop skill paths' to see available scopes"
+    fi
+  elif [[ -n "$install_dir" ]]; then
+    target_dir="$install_dir/opensop"
+  else
+    die "skill install requires a directory argument or --runtime <flavour>" \
+        "usage_error" \
+        "opensop skill install <dir>  OR  opensop skill install --runtime <flavour>"
+  fi
+
+  local skill_file="$target_dir/SKILL.md"
+
+  if [[ -e "$skill_file" ]] && ! $force; then
+    die "'$skill_file' already exists — pass --force to overwrite" \
+        "cli_error" "opensop skill install ... --force"
+  fi
+
+  mkdir -p "$target_dir" || die "could not create '$target_dir'" "cli_error" "check directory permissions"
+
+  # Write atomically: fill a temp file in the SAME directory, then rename over
+  # the target. An interrupted or failed write can never truncate or corrupt an
+  # existing valid SKILL.md (important when an agent retries an install).
+  local tmp_file
+  tmp_file=$(mktemp "$target_dir/.SKILL.md.XXXXXX") \
+    || die "could not create a temp file in '$target_dir'" "cli_error" "check permissions and free space"
+  if ! _skill_embedded_content > "$tmp_file"; then
+    rm -f "$tmp_file"
+    die "failed writing skill content in '$target_dir'" "cli_error" "check free disk space"
+  fi
+  chmod 0644 "$tmp_file" 2>/dev/null || true
+  if $force; then
+    # --force: replace atomically.
+    if ! mv -f "$tmp_file" "$skill_file"; then
+      rm -f "$tmp_file"
+      die "failed to install skill to '$skill_file'" "cli_error" "check directory permissions"
+    fi
+  else
+    # No --force: hard-link into place. ln fails atomically if the destination
+    # already exists, closing the check-then-write race — a concurrent writer's
+    # file is never clobbered.
+    # Refuse a symlink destination outright so we never install THROUGH a link
+    # (which could redirect the write into an attacker-chosen directory).
+    if [[ -L "$skill_file" ]]; then
+      rm -f "$tmp_file"
+      die "'$skill_file' is a symlink — refusing to install through it" \
+          "cli_error" "remove the symlink or pass --force"
+    fi
+    # Prefer GNU 'ln -T' (never treats an existing symlink-to-dir as a target
+    # directory); fall back to plain ln on BSD/macOS userlands.
+    local _ln_no_deref=""
+    ln --help 2>&1 | grep -q -- '-T' && _ln_no_deref="-T"
+    if ! ln $_ln_no_deref "$tmp_file" "$skill_file" 2>/dev/null; then
+      rm -f "$tmp_file"
+      if [[ -e "$skill_file" ]]; then
+        die "'$skill_file' already exists — pass --force to overwrite" \
+            "cli_error" "opensop skill install ... --force"
+      fi
+      die "failed to install skill to '$skill_file'" "cli_error" \
+          "check directory permissions / filesystem hard-link support"
+    fi
+    # Post-verify: destination must be a regular, non-symlink file.
+    if [[ -L "$skill_file" || ! -f "$skill_file" ]]; then
+      die "install verification failed for '$skill_file'" "cli_error" \
+          "unexpected destination type"
+    fi
+    rm -f "$tmp_file"
+  fi
+
+  if $want_json || [[ "$OUTPUT_MODE" == "json" ]]; then
+    jq -nc --arg path "$skill_file" '{installed: true, path: $path}'
+  else
+    ok "skill installed → $skill_file"
+  fi
+}
+
+# jq-independent JSON string escaper. Used ONLY on the doctor fallback path,
+# where jq is absent and values (notably `opensop_path` from `command -v`) may
+# contain JSON-significant characters via a PATH directory name. Escapes
+# backslash, double-quote, and the common control chars, then strips any
+# remaining C0 controls so the result is always a valid JSON string body.
+_json_escape() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  # Drop any remaining raw C0 control characters (0x00–0x1F except the three
+  # handled above) to guarantee valid JSON without needing jq.
+  s=$(printf '%s' "$s" | LC_ALL=C tr -d '\000-\010\013\014\016-\037')
+  printf '%s' "$s"
+}
+
+# --------------------------------------------------------------------------- #
+# Subcommand: doctor
+#
+# Self-check: version, jq present, bash >= 4, and for each registry flavour
+# whether the skill is currently installed at its canonical path.
+# Exits non-zero only on a CRITICAL failure (jq missing or bash too old).
+# Missing skills are informational.
+# --------------------------------------------------------------------------- #
+
+cmd_doctor() {
+  local want_json=false
+  [[ "$OUTPUT_MODE" == "json" ]] && want_json=true
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) want_json=true ;;
+      *) die "unknown flag '$1' for doctor" "unknown_flag" "opensop doctor [--json]" ;;
+    esac
+    shift
+  done
+
+  # --- collect facts ---
+
+  local version="$OPENSOP_CLI_VERSION"
+
+  # opensop on PATH (check if we resolve; BASH_SOURCE[0] is always us)
+  local opensop_path
+  opensop_path=$(command -v opensop 2>/dev/null || true)
+
+  # jq: critical dependency.
+  local jq_ok=false jq_version="absent"
+  if command -v jq >/dev/null 2>&1; then
+    jq_ok=true
+    jq_version=$(jq --version 2>/dev/null || echo "unknown")
+  fi
+
+  # bash version: need >= 4.
+  local bash_major="${BASH_VERSINFO[0]:-0}"
+  local bash_version="${BASH_VERSION:-unknown}"
+  local bash_ok=false
+  (( bash_major >= 4 )) && bash_ok=true
+
+  # jq is a hard dependency for the skill scan and every output path below (they
+  # all shell out to jq). If jq is absent — the exact critical condition doctor
+  # exists to report — emit a jq-INDEPENDENT diagnostic here and exit non-zero.
+  # Do NOT call die/emit_pretty_or_json: those render JSON via jq too.
+  if ! $jq_ok; then
+    local _bash_state; $bash_ok && _bash_state="ok" || _bash_state="TOO OLD (need bash >= 4)"
+    if $want_json; then
+      # Hand-rolled JSON (jq is unavailable here). We interpolate ONLY controlled
+      # values: $version (compile-time constant) and $bash_version (set by bash;
+      # always ASCII). Both are still run through _json_escape defensively.
+      # $opensop_path is intentionally OMITTED from this fallback: it is the only
+      # field sourced from the filesystem (via `command -v`) and can contain
+      # arbitrary/invalid bytes that pure bash cannot reliably encode as valid
+      # JSON. It IS present in the normal (jq-present) doctor output below.
+      local _ev _eb
+      _ev=$(_json_escape "$version")
+      _eb=$(_json_escape "$bash_version")
+      printf '{"ok":false,"critical":true,"version":"%s","jq":{"ok":false,"version":"absent"},"bash":{"ok":%s,"version":"%s"},"message":"jq is not installed; install jq (https://jqlang.github.io/jq) — required for OpenSOP JSON output and the full doctor scan"}\n' \
+        "$_ev" "$bash_ok" "$_eb"
+    else
+      printf 'opensop doctor\n'
+      printf '  version    %s\n' "$version"
+      printf '  jq         %sMISSING%s (critical) — install jq: https://jqlang.github.io/jq\n' "$C_RED" "$C_RESET"
+      printf '  bash       %s (%s)\n' "$_bash_state" "$bash_version"
+      printf '\n  %sCRITICAL%s jq is required for OpenSOP JSON output and the full skill scan.\n' "$C_RED" "$C_RESET"
+    fi
+    return 1
+  fi
+
+  # Skill installation: scan each flavour/scope in the registry.
+  # Build an array of {flavour, scope, path, installed} objects.
+  local -a skill_records=()
+  local seen_paths=""
+  local flavour scope tpl resolved installed_val
+  while IFS='|' read -r flavour scope tpl; do
+    [[ "$scope" == "rules" ]] && continue   # rules-only: skip file check
+
+    if [[ "$tpl" == '~/'* ]]; then
+      resolved="$HOME/${tpl#\~/}"
+    else
+      resolved="$tpl"
+    fi
+
+    installed_val=false
+    [[ -f "$resolved/SKILL.md" ]] && installed_val=true
+
+    # Deduplicate paths (agentskills and codex share a path).
+    local record_key="${flavour}|${scope}"
+    if [[ "$seen_paths" != *"|${resolved}|"* ]]; then
+      seen_paths="${seen_paths}|${resolved}|"
+    fi
+    skill_records+=("$(jq -nc \
+      --arg f "$flavour" --arg s "$scope" \
+      --arg p "$resolved/SKILL.md" \
+      --argjson i "$installed_val" \
+      '{flavour:$f, scope:$s, path:$p, installed:$i}')")
+  done < <(_skill_flavour_registry)
+
+  # Overall critical check.
+  local critical=false
+  $jq_ok   || critical=true
+  $bash_ok  || critical=true
+
+  if $want_json; then
+    # Guard empty array expansion.
+    local skills_json="[]"
+    if (( ${#skill_records[@]} > 0 )); then
+      skills_json=$(printf '%s\n' "${skill_records[@]}" | jq -s '.')
+    fi
+    jq -nc \
+      --arg version "$version" \
+      --arg opensop_path "$opensop_path" \
+      --arg jq_version "$jq_version" \
+      --argjson jq_ok "$jq_ok" \
+      --arg bash_version "$bash_version" \
+      --argjson bash_ok "$bash_ok" \
+      --argjson skills "$skills_json" \
+      --argjson ok "$(! $critical && echo true || echo false)" \
+      '{version:$version, opensop_path:$opensop_path,
+        jq:{ok:$jq_ok, version:$jq_version},
+        bash:{ok:$bash_ok, version:$bash_version},
+        skills:$skills, ok:$ok}'
+    $critical && return 1
+    return 0
+  fi
+
+  # Human-readable output.
+  printf '\n%sopensop doctor%s (v%s)\n\n' "$C_BOLD" "$C_RESET" "$version"
+
+  # Version + PATH.
+  if [[ -n "$opensop_path" ]]; then
+    printf '  %s%-12s%s %s\n' "$C_GREEN" "opensop" "$C_RESET" "$opensop_path"
+  else
+    printf '  %s%-12s%s not found on PATH (running from: %s)\n' \
+           "$C_YELLOW" "opensop" "$C_RESET" "${BASH_SOURCE[0]}"
+  fi
+
+  # jq.
+  if $jq_ok; then
+    printf '  %s%-12s%s %s\n' "$C_GREEN" "jq" "$C_RESET" "$jq_version"
+  else
+    printf '  %s%-12s%s MISSING — install jq first (brew install jq / apt install jq)\n' \
+           "$C_RED" "jq" "$C_RESET"
+  fi
+
+  # bash.
+  if $bash_ok; then
+    printf '  %s%-12s%s %s\n' "$C_GREEN" "bash" "$C_RESET" "$bash_version"
+  else
+    printf '  %s%-12s%s %s — bash 4+ required (macOS: brew install bash)\n' \
+           "$C_RED" "bash" "$C_RESET" "$bash_version"
+  fi
+
+  # Skills.
+  printf '\n  %sAgent skill installation:%s\n' "$C_BOLD" "$C_RESET"
+  local rec flavour_val scope_val path_val inst_val
+  for rec in "${skill_records[@]}"; do
+    flavour_val=$(jq -r '.flavour' <<< "$rec")
+    scope_val=$(jq -r '.scope'   <<< "$rec")
+    path_val=$(jq -r '.path'    <<< "$rec")
+    inst_val=$(jq -r '.installed' <<< "$rec")
+    if [[ "$inst_val" == "true" ]]; then
+      printf '    %s✓%s  %-12s %-8s %s\n' \
+             "$C_GREEN" "$C_RESET" "$flavour_val" "$scope_val" "$path_val"
+    else
+      printf '    %s–%s  %-12s %-8s %s\n' \
+             "$C_DIM" "$C_RESET" "$flavour_val" "$scope_val" "$path_val"
+    fi
+  done
+
+  # Overall verdict.
+  printf '\n'
+  if $critical; then
+    printf '  %sCRITICAL%s fix the issues above before running opensop.\n' "$C_RED" "$C_RESET"
+    return 1
+  else
+    printf '  %sok%s — opensop is healthy.\n' "$C_GREEN" "$C_RESET"
+  fi
+}
+
+main() {
   # Strip global flags anywhere in the argument list.
   # v0.8: default backend is LOCAL. --remote uses the configured server URL;
   # --server <url> sets the URL for this invocation and implies --remote.
@@ -6644,6 +7296,11 @@ main() {
   set -- "${args[@]}"
 
   local cmd="$1"; shift
+
+  # jq is required for every command EXCEPT `doctor`, which must be able to run
+  # in — and diagnose — an environment where jq is missing. All other commands
+  # (including `help`, whose --json path needs jq) are gated here.
+  if [[ "$cmd" != "doctor" ]]; then require_jq; fi
 
   # help is local-only and must render regardless of --remote / server config.
   # Short-circuit BEFORE the remote config + curl init below, so that
@@ -6715,6 +7372,8 @@ main() {
     heal)       local_heal "$@" ;;
     bench)      cmd_bench "$@" ;;
     onboard)    cmd_onboard "$@" ;;
+    skill)      cmd_skill "$@" ;;
+    doctor)     cmd_doctor "$@" ;;
     # 'help' is handled by the local-only short-circuit above (before remote init).
     *)          die "unknown command '$cmd' — run 'opensop help' for usage" "unknown_command" "run opensop help" ;;
   esac

@@ -469,6 +469,28 @@ Commands marked **[remote]** require `--remote` or `--server <url>`. All others 
 | `opensop bench [<task-dir>] [--n N] [--model MODEL] [--arm ARMNAME] [--stub]` | 3-arm reliability comparison: skill vs json_only vs opensop over N runs. Built-in default task: extract-action-items. `--stub` runs offline (no API key). |
 | **Onboarding** | |
 | `opensop onboard [<process.sop.json>] [--stub] [--n N]` | First-run experience: scaffold a starter `.sop.json` if none given, validate it via dry-run, run the 3-arm bench comparison (built-in task only) to prove the reliability gain, and print next steps. Side-effect-safe: never executes your process against production. `--stub` runs offline. To benchmark a custom task use `opensop bench <task>` directly. |
+| **Agent Skills** | |
+| `opensop skill show` | Print the embedded SKILL.md to stdout — no file written. Lets an agent read the skill content without installing it. |
+| `opensop skill install <dir> [--force]` | Write the embedded SKILL.md to `<dir>/opensop/SKILL.md` (creates dirs as needed). Requires `--force` to overwrite an existing file. |
+| `opensop skill install --runtime <flavour> [--scope user\|project] [--force]` | Install the SKILL.md at the canonical path for the given agent runtime (see table below). Rules-only runtimes (`cline`, `cursor`, `continue`, `aider`) print guidance instead (exit 0, no file written). Unknown flavour → `usage_error` listing valid names. |
+| `opensop skill paths [--json]` | Print the flavour→path registry as a TTY table or JSON object. This is the authoritative reference for where each runtime expects the skill file. |
+| `opensop doctor [--json]` | Self-check: opensop version + PATH, jq present, bash ≥4, per-runtime skill installation status. Exits non-zero only on CRITICAL failure (jq missing, bash too old). Missing skills are informational. |
+
+### Agent runtime skill paths
+
+| Flavour | Scope | Canonical path |
+|---|---|---|
+| `claude` | project | `.claude/skills/opensop/SKILL.md` |
+| `claude` | user | `~/.claude/skills/opensop/SKILL.md` |
+| `codex` / `agentskills` | project | `.agents/skills/opensop/SKILL.md` (Agent Skills standard) |
+| `codex` / `agentskills` | user | `~/.agents/skills/opensop/SKILL.md` |
+| `hermes` | project | `.hermes/skills/opensop/SKILL.md` |
+| `hermes` | user | `~/.hermes/skills/opensop/SKILL.md` |
+| `openclaw` | project | `skills/opensop/SKILL.md` |
+| `openclaw` | user | `~/.claw/skills/opensop/SKILL.md` |
+| `openhands` | project | `.openhands/skills/opensop/SKILL.md` |
+| `goose` | user | `~/.config/goose/skills/opensop/SKILL.md` |
+| `cline`, `cursor`, `continue`, `aider` | — | Rules-only (no SKILL.md slot; see `opensop skill install --runtime cline`) |
 
 ## Demo
 
