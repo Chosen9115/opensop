@@ -11,6 +11,35 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Added
 
+- **Slice 2 — `opensop skill` and `opensop doctor`: agent runtime skill integration.**
+  Any agent runtime that adopts OpenSOP as a SKILL.md skill (the cross-vendor Agent
+  Skills standard) can now install and inspect the embedded skill in one command:
+
+  - `opensop skill show` — print the embedded SKILL.md to stdout without writing
+    anything to disk (useful for agents reading it programmatically).
+  - `opensop skill install <dir>` — write the embedded SKILL.md to `<dir>/opensop/SKILL.md`
+    (creates dirs as needed; `--force` to overwrite; `--json` for machine output).
+  - `opensop skill install --runtime <flavour>` — resolve the canonical install path
+    from the embedded flavour registry and install there.  Supports `--scope user|project`
+    for runtimes that have both paths.  Registry: `claude` → `.claude/skills/opensop`;
+    `codex`/`agentskills` → `.agents/skills/opensop`; `hermes` → `.hermes/skills/opensop`;
+    `openclaw` → `skills/opensop`; `openhands` → `.openhands/skills/opensop`;
+    `goose` → `~/.config/goose/skills/opensop`.  Rules-only runtimes (`cline`, `cursor`,
+    `continue`, `aider`) print guidance to add an AGENTS.md/rules block instead (exit 0,
+    no file written).  Unknown flavour → `usage_error` listing valid names.
+  - `opensop skill paths [--json]` — print the full flavour→path registry (TTY table
+    or JSON object).  This is the authoritative place an agent queries to learn where
+    its runtime expects the skill file.
+  - `opensop doctor [--json]` — self-check: opensop version + PATH resolution, jq
+    presence, bash ≥4, and per-flavour skill installation status.  Exits non-zero only
+    on a CRITICAL failure (jq missing or bash too old); missing skills are informational.
+
+  The SKILL.md content is embedded as a heredoc inside `bin/opensop` itself —
+  no sibling files are needed.  Single-file `curl` installs pick it up automatically.
+  The embedded skill uses the Agent Skills 6-field portable subset (YAML frontmatter:
+  `name`, `description`, `license`, `allowed-tools`, `metadata`, `compatibility`) and
+  includes a SAFETY section covering the trust boundary around `.sop.json` shell steps.
+
 - **C1a follow-up: reliability metrics on resumed steps.** Completes the deferred
   piece of §10 (SPEC v0.7). Three behaviors now ship:
 

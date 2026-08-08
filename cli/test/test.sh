@@ -6234,4 +6234,159 @@ c1af_prec_result="$(jq -rn \
   || { echo "FAIL: Fix2b precision — expected 4500 (started_at_ms path), got: $c1af_prec_result"; exit 1; }
 echo "PASS: Fix2b precision — started_at_ms path yields 4500ms (not 5000ms from second-granular started_at)"
 
+# --------------------------------------------------------------------------- #
+# skill / doctor — feature/cli-skill-doctor (Slice 2 of 5)
+# --------------------------------------------------------------------------- #
+
+# --- skill show: embedded SKILL.md must print to stdout ---
+skill_show="$("$cli" skill show 2>&1)"
+echo "$skill_show" | grep -q "name: opensop" \
+  || { echo "FAIL: skill show — no 'name: opensop' in output"; exit 1; }
+echo "$skill_show" | grep -q "allowed-tools" \
+  || { echo "FAIL: skill show — no 'allowed-tools' in output"; exit 1; }
+echo "$skill_show" | grep -q "SAFETY" \
+  || { echo "FAIL: skill show — no SAFETY section in output"; exit 1; }
+echo "PASS: skill show — embedded SKILL.md contains name, allowed-tools, SAFETY"
+
+# --- skill show: frontmatter must be valid YAML (at least parseable lines) ---
+# Check the 6-field standard: name, description, license, allowed-tools, metadata, compatibility
+echo "$skill_show" | grep -q "^name:" \
+  || { echo "FAIL: skill show — missing 'name:' frontmatter field"; exit 1; }
+echo "$skill_show" | grep -q "^license:" \
+  || { echo "FAIL: skill show — missing 'license:' frontmatter field"; exit 1; }
+echo "$skill_show" | grep -q "^compatibility:" \
+  || { echo "FAIL: skill show — missing 'compatibility:' frontmatter field"; exit 1; }
+echo "PASS: skill show — frontmatter has required 6-field portable subset"
+
+# --- skill install into a temp directory ---
+skill_install_dir="$(mktemp -d)"
+"$cli" skill install "$skill_install_dir" >/dev/null
+[ -f "$skill_install_dir/opensop/SKILL.md" ] \
+  || { echo "FAIL: skill install — SKILL.md not created at expected path"; exit 1; }
+# Installed file must contain valid frontmatter
+grep -q "^name: opensop" "$skill_install_dir/opensop/SKILL.md" \
+  || { echo "FAIL: skill install — installed SKILL.md missing 'name: opensop'"; exit 1; }
+grep -q "^---" "$skill_install_dir/opensop/SKILL.md" \
+  || { echo "FAIL: skill install — installed SKILL.md missing YAML frontmatter delimiter"; exit 1; }
+rm -rf "$skill_install_dir"
+echo "PASS: skill install — writes SKILL.md with valid frontmatter at <dir>/opensop/SKILL.md"
+
+# --- skill install: require --force when file already exists ---
+skill_install_dir2="$(mktemp -d)"
+"$cli" skill install "$skill_install_dir2" >/dev/null
+set +e
+"$cli" skill install "$skill_install_dir2" >/dev/null 2>&1; skill_overwrite_rc=$?
+set -e
+[ "$skill_overwrite_rc" -ne 0 ] \
+  || { echo "FAIL: skill install — second install without --force should exit non-zero"; exit 1; }
+# With --force it should succeed.
+"$cli" skill install "$skill_install_dir2" --force >/dev/null
+[ -f "$skill_install_dir2/opensop/SKILL.md" ] \
+  || { echo "FAIL: skill install --force — SKILL.md not present after forced overwrite"; exit 1; }
+rm -rf "$skill_install_dir2"
+echo "PASS: skill install — second install without --force exits non-zero; --force overwrites"
+
+# --- skill install --json: emits {installed, path} ---
+skill_install_dir3="$(mktemp -d)"
+skill_install_json="$("$cli" skill install "$skill_install_dir3" --json)"
+echo "$skill_install_json" | jq -e '.installed == true' >/dev/null \
+  || { echo "FAIL: skill install --json — .installed should be true"; exit 1; }
+echo "$skill_install_json" | jq -e '.path | length > 0' >/dev/null \
+  || { echo "FAIL: skill install --json — .path should be non-empty"; exit 1; }
+rm -rf "$skill_install_dir3"
+echo "PASS: skill install --json — emits valid {installed:true, path:...} object"
+
+# --- skill install --runtime: unknown flavour exits non-zero with usage_error ---
+set +e
+skill_bad_runtime="$("$cli" skill install --runtime "totally-fake-runtime" 2>&1)"; skill_bad_rt_rc=$?
+set -e
+[ "$skill_bad_rt_rc" -ne 0 ] \
+  || { echo "FAIL: skill install --runtime bogus — should exit non-zero"; exit 1; }
+echo "$skill_bad_runtime" | grep -q "unknown runtime\|valid:" \
+  || { echo "FAIL: skill install --runtime bogus — error should mention 'unknown runtime' and list valid"; exit 1; }
+echo "PASS: skill install --runtime bogus — exits non-zero with helpful error listing valid flavours"
+
+# --- skill install --runtime claude: installs to project scope ---
+skill_claude_dir="$(mktemp -d)"
+( cd "$skill_claude_dir" && "$cli" skill install --runtime claude >/dev/null )
+[ -f "$skill_claude_dir/.claude/skills/opensop/SKILL.md" ] \
+  || { echo "FAIL: skill install --runtime claude — SKILL.md not at .claude/skills/opensop/SKILL.md"; exit 1; }
+grep -q "^name: opensop" "$skill_claude_dir/.claude/skills/opensop/SKILL.md" \
+  || { echo "FAIL: skill install --runtime claude — installed file missing 'name: opensop'"; exit 1; }
+rm -rf "$skill_claude_dir"
+echo "PASS: skill install --runtime claude — installs to .claude/skills/opensop/SKILL.md"
+
+# --- skill install --runtime codex: installs to .agents/skills/opensop/ ---
+skill_codex_dir="$(mktemp -d)"
+( cd "$skill_codex_dir" && "$cli" skill install --runtime codex >/dev/null )
+[ -f "$skill_codex_dir/.agents/skills/opensop/SKILL.md" ] \
+  || { echo "FAIL: skill install --runtime codex — SKILL.md not at .agents/skills/opensop/SKILL.md"; exit 1; }
+rm -rf "$skill_codex_dir"
+echo "PASS: skill install --runtime codex — installs to .agents/skills/opensop/SKILL.md (Agent Skills std)"
+
+# --- skill install --runtime cline (rules-only): exits 0, prints guidance ---
+set +e
+skill_cline_out="$("$cli" skill install --runtime cline 2>&1)"; skill_cline_rc=$?
+set -e
+[ "$skill_cline_rc" -eq 0 ] \
+  || { echo "FAIL: skill install --runtime cline — should exit 0 (rules-only, no error)"; exit 1; }
+echo "$skill_cline_out" | grep -qi "rules\|no SKILL" \
+  || { echo "FAIL: skill install --runtime cline — output should mention rules-only"; exit 1; }
+echo "PASS: skill install --runtime cline — exits 0, prints guidance (rules-only runtime)"
+
+# --- skill paths --json: valid JSON object ---
+skill_paths_json="$("$cli" skill paths --json)"
+echo "$skill_paths_json" | jq -e 'type == "object"' >/dev/null \
+  || { echo "FAIL: skill paths --json — should emit a JSON object"; exit 1; }
+echo "$skill_paths_json" | jq -e 'has("claude")' >/dev/null \
+  || { echo "FAIL: skill paths --json — should have a 'claude' key"; exit 1; }
+echo "$skill_paths_json" | jq -e 'has("codex")' >/dev/null \
+  || { echo "FAIL: skill paths --json — should have a 'codex' key"; exit 1; }
+echo "PASS: skill paths --json — valid JSON object with claude and codex keys"
+
+# --- doctor --json: valid JSON, required fields ---
+doctor_json="$("$cli" doctor --json)"
+echo "$doctor_json" | jq -e '.version | length > 0' >/dev/null \
+  || { echo "FAIL: doctor --json — .version should be non-empty"; exit 1; }
+echo "$doctor_json" | jq -e '.jq.ok == true' >/dev/null \
+  || { echo "FAIL: doctor --json — .jq.ok should be true (jq is installed)"; exit 1; }
+echo "$doctor_json" | jq -e '.bash.ok == true' >/dev/null \
+  || { echo "FAIL: doctor --json — .bash.ok should be true (bash 4+ is present)"; exit 1; }
+echo "$doctor_json" | jq -e '.skills | type == "array"' >/dev/null \
+  || { echo "FAIL: doctor --json — .skills should be an array"; exit 1; }
+echo "$doctor_json" | jq -e '.ok == true' >/dev/null \
+  || { echo "FAIL: doctor --json — .ok should be true (jq + bash both present)"; exit 1; }
+echo "PASS: doctor --json — valid JSON with version, jq, bash, skills, ok fields"
+
+# --- doctor --json: skills array items have required fields ---
+echo "$doctor_json" | jq -e '.skills | all(.[]; (.flavour|length>0) and (.scope|length>0) and (.path|length>0) and (.installed|type=="boolean"))' >/dev/null \
+  || { echo "FAIL: doctor --json — skill records missing required fields"; exit 1; }
+echo "PASS: doctor --json — skill records have flavour, scope, path, installed fields"
+
+# --- doctor (human-readable): exits 0 ---
+set +e
+doctor_pretty="$("$cli" doctor 2>&1)"; doctor_pretty_rc=$?
+set -e
+[ "$doctor_pretty_rc" -eq 0 ] \
+  || { echo "FAIL: doctor — should exit 0 when jq + bash are present, got $doctor_pretty_rc"; exit 1; }
+echo "$doctor_pretty" | grep -q "opensop" \
+  || { echo "FAIL: doctor — output should mention opensop"; exit 1; }
+echo "PASS: doctor — exits 0, output mentions opensop"
+
+# --- unknown skill subcommand: exits non-zero ---
+set +e
+"$cli" skill bogus-sub 2>/dev/null; skill_unknown_rc=$?
+set -e
+[ "$skill_unknown_rc" -ne 0 ] \
+  || { echo "FAIL: skill bogus-sub — should exit non-zero for unknown subcommand"; exit 1; }
+echo "PASS: skill bogus-sub — exits non-zero with unknown subcommand"
+
+# --- skill in registry: help --json includes skill and doctor ---
+help_json_skill="$("$cli" help --json)"
+echo "$help_json_skill" | jq -e 'any(.[]; .command == "skill")' >/dev/null \
+  || { echo "FAIL: skill not in help --json registry"; exit 1; }
+echo "$help_json_skill" | jq -e 'any(.[]; .command == "doctor")' >/dev/null \
+  || { echo "FAIL: doctor not in help --json registry"; exit 1; }
+echo "PASS: skill and doctor appear in help --json registry"
+
 echo "ALL PASS"
