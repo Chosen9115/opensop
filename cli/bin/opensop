@@ -7020,18 +7020,16 @@ RULES_GUIDANCE
       die "'$skill_file' is a symlink — refusing to install through it" \
           "cli_error" "remove the symlink or pass --force"
     fi
-    # Prefer GNU 'ln -T' (never treats an existing symlink-to-dir as a target
-    # directory); fall back to plain ln on BSD/macOS userlands.
-    local _ln_no_deref=""
-    if ln --help 2>&1 | grep -q -- '-T'; then _ln_no_deref="-T"; fi
-    if ! ln $_ln_no_deref "$tmp_file" "$skill_file" 2>/dev/null; then
+    # Atomic no-clobber hard-link that never dereferences a symlink dest
+    # (GNU 'ln -T' / BSD 'ln -h'; fails closed if neither is available).
+    if ! _hardlink_noclobber "$tmp_file" "$skill_file"; then
       rm -f "$tmp_file"
       if [[ -e "$skill_file" ]]; then
         die "'$skill_file' already exists — pass --force to overwrite" \
             "cli_error" "opensop skill install ... --force"
       fi
       die "failed to install skill to '$skill_file'" "cli_error" \
-          "check directory permissions / filesystem hard-link support"
+          "check directory permissions / platform hard-link support (use --force)"
     fi
     # Post-verify: destination must be a regular, non-symlink file.
     if [[ -L "$skill_file" || ! -f "$skill_file" ]]; then
@@ -7288,6 +7286,26 @@ _output_is_json() {
 _RECIPE_TMP=""
 _recipe_cleanup() { [[ -n "${_RECIPE_TMP:-}" ]] && rm -f "$_RECIPE_TMP"; _RECIPE_TMP=""; return 0; }
 
+# _hardlink_noclobber <src> <dest>
+# Atomically hard-link src -> dest WITHOUT dereferencing a symlink at dest, so a
+# raced symlink-to-directory cannot redirect the link inside it. Uses GNU
+# `ln -T` or BSD/macOS `ln -h`; FAILS CLOSED (returns non-zero) if neither is
+# available rather than falling back to an unsafe plain `ln`. Returns 0 on
+# success; non-zero if dest exists, the link failed, or no safe flag exists.
+_hardlink_noclobber() {
+  local src="$1" dest="$2"
+  if ln --help 2>&1 | grep -q -- '-T'; then
+    ln -T "$src" "$dest" 2>/dev/null
+    return $?
+  fi
+  # BSD/macOS: -h prevents following a symlink dest.
+  if ln -h "$src" "$dest" 2>/dev/null; then
+    return 0
+  fi
+  # Neither GNU -T nor BSD -h worked → fail closed (never unsafe plain ln).
+  return 1
+}
+
 # _recipe_commit <tmp_in_dest_dir> <dest> <force:true|false>
 # Atomically place tmp (which MUST already live in dest's directory) at dest.
 # No-clobber via an atomic hard-link unless force; refuses a symlink dest. Dies
@@ -7302,12 +7320,10 @@ _recipe_commit() {
   if [[ -L "$dest" ]]; then
     rm -f "$tmp"; die "$dest is a symlink — refusing to write through it" "cli_error" "remove it or use --force"
   fi
-  local nod=""
-  if ln --help 2>&1 | grep -q -- '-T'; then nod="-T"; fi
-  if ! ln $nod "$tmp" "$dest" 2>/dev/null; then
+  if ! _hardlink_noclobber "$tmp" "$dest"; then
     rm -f "$tmp"
     if [[ -e "$dest" ]]; then die "file already exists: $dest (use --force to overwrite)" "cli_error" "re-run with --force"; fi
-    die "could not write to $dest" "cli_error" "check permissions / filesystem hard-link support"
+    die "could not write to $dest" "cli_error" "check permissions / platform hard-link support (use --force)"
   fi
   if [[ -L "$dest" || ! -f "$dest" ]]; then die "write verification failed for $dest" "cli_error" "unexpected destination type"; fi
   rm -f "$tmp"

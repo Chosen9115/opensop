@@ -6765,6 +6765,21 @@ echo "$nj" | jq -e '.ok == true and .executed == false and (.tags | type=="array
   || { echo "FAIL: info --json did not emit the expected JSON object (tags array + install): $nj"; exit 1; }
 echo "PASS: info --json — emits recipe metadata as a structured object"
 
+# --- pull: a symlink-to-directory destination must be refused, and nothing may
+#     be written INTO the linked directory (no-dereference hard-link guard) ---
+sl_parent="$(mktemp -d)"; mkdir -p "$sl_parent/realdir"
+ln -s "$sl_parent/realdir" "$sl_parent/link.sop.json"
+set +e
+OPENSOP_RECIPES_BASE="file://$pull_fixture" "$cli" pull opensop/daily-standup-notes \
+  --output "$sl_parent/link.sop.json" >/dev/null 2>&1; slp_rc=$?
+set -e
+[ "$slp_rc" -ne 0 ] \
+  || { echo "FAIL: pull into a symlink destination should be refused"; exit 1; }
+[ -z "$(ls -A "$sl_parent/realdir")" ] \
+  || { echo "FAIL: pull wrote a file INTO the symlinked directory"; exit 1; }
+rm -rf "$sl_parent"
+echo "PASS: pull — refuses a symlink destination; nothing written into the linked dir"
+
 # Cleanup.
 unset OPENSOP_RECIPES_BASE
 rm -rf "$pull_workdir" "$import_workdir"
