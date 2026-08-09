@@ -21,7 +21,7 @@
       "id": "kickoff-approval",
       "type": "approval",
       "description": "Customer Success lead must confirm the kickoff is ready to proceed.",
-      "prompt": "Confirm kickoff is ready for {{collect-customer.name}} ({{collect-customer.plan}} plan). Primary contact: {{collect-customer.primary_contact}}. Approve to start onboarding.",
+      "prompt": "Review the new customer details collected in the previous step. Approve to confirm the kickoff is ready and begin onboarding, or reject if additional information is needed.",
       "decision_field": "decision"
     },
     {

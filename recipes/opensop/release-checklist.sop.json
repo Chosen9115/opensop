@@ -11,28 +11,28 @@
       "id": "confirm-tests-pass",
       "type": "approval",
       "description": "All automated tests pass on the release branch.",
-      "prompt": "Confirm: all automated tests (unit, integration, E2E) pass on the release branch for {{inputs.component}} {{inputs.version}}?",
+      "prompt": "Confirm: all automated tests (unit, integration, E2E) pass on the release branch for the component and version specified in the process inputs.",
       "decision_field": "decision"
     },
     {
       "id": "confirm-changelog",
       "type": "approval",
       "description": "CHANGELOG is updated and the release entry is complete.",
-      "prompt": "Confirm: CHANGELOG.md for {{inputs.component}} {{inputs.version}} is updated with all notable changes, linked issues, and a date?",
+      "prompt": "Confirm: CHANGELOG.md for this release is updated with all notable changes, linked issues, and a date.",
       "decision_field": "decision"
     },
     {
       "id": "confirm-docs",
       "type": "approval",
       "description": "Documentation is updated to reflect any new or changed behaviour.",
-      "prompt": "Confirm: user-facing docs and API references are updated for {{inputs.component}} {{inputs.version}}?",
+      "prompt": "Confirm: user-facing docs and API references are updated for this release.",
       "decision_field": "decision"
     },
     {
       "id": "confirm-security",
       "type": "approval",
       "description": "No known security issues in the release artifact.",
-      "prompt": "Confirm: dependency audit and any security review have been completed for {{inputs.component}} {{inputs.version}} with no open blockers?",
+      "prompt": "Confirm: dependency audit and any security review have been completed for this release with no open blockers.",
       "decision_field": "decision"
     },
     {

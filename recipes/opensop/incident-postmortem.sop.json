@@ -1,7 +1,7 @@
 {
   "name": "incident-postmortem",
-  "version": "1.0.0",
-  "description": "Collect incident details via form, gate on human sign-off, then emit a structured postmortem Markdown document.",
+  "version": "1.1.0",
+  "description": "Collect incident details via form, gate on human sign-off, then emit a structured postmortem Markdown document — or a rejection record if the postmortem is not approved.",
   "inputs": {
     "team": "Platform"
   },
@@ -13,7 +13,7 @@
       "fields": [
         { "name": "title",    "type": "string", "required": true,  "description": "One-line incident title" },
         { "name": "severity", "type": "enum",   "required": true,  "values": ["SEV1", "SEV2", "SEV3", "SEV4"], "description": "Incident severity level" },
-        { "name": "timeline", "type": "string", "required": true,  "description": "Chronological timeline of events (detection → resolution)" },
+        { "name": "timeline", "type": "string", "required": true,  "description": "Chronological timeline of events (detection to resolution)" },
         { "name": "impact",   "type": "string", "required": true,  "description": "Customer and business impact" },
         { "name": "root_cause", "type": "string", "required": false, "description": "Root cause (if known)" }
       ]
@@ -22,14 +22,14 @@
       "id": "sign-off",
       "type": "approval",
       "description": "Incident commander or engineering lead must approve the postmortem before it is published.",
-      "prompt": "Review the incident details for {{collect-incident.title}} ({{collect-incident.severity}}) and approve the postmortem for publication.",
+      "prompt": "Review the collected incident details and approve the postmortem for publication, or reject if it needs revision.",
       "decision_field": "decision"
     },
     {
       "id": "format-postmortem",
       "type": "shell",
-      "description": "Emit the postmortem Markdown document.",
-      "run": "jq -r '\n  \"# Postmortem: \" + (.\"collect-incident\".title // \"(untitled)\") + \"\\n\\n\" +\n  \"**Severity:** \" + (.\"collect-incident\".severity // \"?\") + \"\\n\" +\n  \"**Team:** \" + (.inputs.team // \"Platform\") + \"\\n\" +\n  \"**Status:** Approved\\n\\n\" +\n  \"## Timeline\\n\\n\" + (.\"collect-incident\".timeline // \"(none)\") + \"\\n\\n\" +\n  \"## Impact\\n\\n\" + (.\"collect-incident\".impact // \"(none)\") + \"\\n\\n\" +\n  if (.\"collect-incident\".root_cause // \"\") != \"\" then\n    \"## Root Cause\\n\\n\" + .\"collect-incident\".root_cause + \"\\n\"\n  else\n    \"## Root Cause\\n\\n_Under investigation._\\n\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{postmortem: .}'"
+      "description": "Emit the postmortem document (approved) or a rejection record (rejected).",
+      "run": "jq -r '\n  if .[\"sign-off\"].decision == \"approve\" then\n    \"# Postmortem: \" + (.[\"collect-incident\"].title // \"(untitled)\") + \"\\n\\n\" +\n    \"**Severity:** \" + (.[\"collect-incident\"].severity // \"?\") + \"\\n\" +\n    \"**Team:** \" + (.inputs.team // \"Platform\") + \"\\n\" +\n    \"**Status:** Approved\\n\\n\" +\n    \"## Timeline\\n\\n\" + (.[\"collect-incident\"].timeline // \"(none)\") + \"\\n\\n\" +\n    \"## Impact\\n\\n\" + (.[\"collect-incident\"].impact // \"(none)\") + \"\\n\\n\" +\n    if (.[\"collect-incident\"].root_cause // \"\") != \"\" then\n      \"## Root Cause\\n\\n\" + .[\"collect-incident\"].root_cause + \"\\n\"\n    else\n      \"## Root Cause\\n\\n_Under investigation._\\n\"\n    end\n  else\n    \"# Postmortem REJECTED — not published\\n\\n\" +\n    \"**Incident:** \" + (.[\"collect-incident\"].title // \"(untitled)\") + \"\\n\" +\n    \"**Severity:** \" + (.[\"collect-incident\"].severity // \"?\") + \"\\n\" +\n    \"**Team:** \" + (.inputs.team // \"Platform\") + \"\\n\" +\n    \"**Status:** Rejected — postmortem requires revision before publication.\\n\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{postmortem: .}'"
     }
   ],
   "recipe": {

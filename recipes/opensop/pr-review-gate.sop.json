@@ -21,7 +21,7 @@
       "id": "gate-review",
       "type": "approval",
       "description": "Reviewer must approve or reject the PR before the record is written.",
-      "prompt": "Review PR '{{collect-pr.title}}' by {{collect-pr.author}} (risk: {{collect-pr.risk}}). Approve or reject.",
+      "prompt": "Review the pull request details collected in the previous step. Approve to record an approved review, or reject to record a rejection.",
       "decision_field": "decision"
     },
     {

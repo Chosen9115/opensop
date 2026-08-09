@@ -21,7 +21,7 @@
       "id": "editorial-approval",
       "type": "approval",
       "description": "Editor must approve the content before it is published.",
-      "prompt": "Review '{{collect-draft.title}}' for {{collect-draft.channel}}. Summary: {{collect-draft.summary}}. Approve to publish.",
+      "prompt": "Review the draft content details collected in the previous step. Approve to publish, or reject if the content needs revision.",
       "decision_field": "decision"
     },
     {
