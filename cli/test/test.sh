@@ -6688,27 +6688,37 @@ lq_ok="$(OSL_LLM_STUB='{"outcome":"qualified","rationale":"good fit"}' OPENSOP_L
   || { echo "FAIL: lead-qualification valid enum outcome should complete, got $(echo "$lq_ok" | jq -r '.status')"; exit 1; }
 echo "PASS: lead-qualification — outcome enum enforced (out-of-enum fails, valid completes)"
 
-# --- email-spam-filter: fail-safe routing — only an explicit ham verdict delivers;
-#     spam quarantines; an out-of-enum label fails the run (enum enforced). ---
+# --- email-spam-filter: delivery requires ham AND confidence in [0.85, 1.0].
+#     spam, low/out-of-range confidence all recommend QUARANTINE (fail-safe);
+#     an out-of-enum label fails the run (enum enforced). ---
 esf="$recipes_dir/email-spam-filter.sop.json"
-esf_verdict() {  # $1 stub → echoes the DELIVER/QUARANTINE line
+esf_rec() {  # $1 stub → echoes the DELIVER/QUARANTINE recommendation line
   local stub="$1" mh m rid
   mh="$(mktemp -d)"
   m="$(OSL_LLM_STUB="$stub" OPENSOP_LOCAL_HOME="$mh" "$cli" run "$esf" --input sender="a@b.com" --input body="hello" --json 2>/dev/null)"
   rid="$(echo "$m" | jq -r '.run_id')"
-  jq -r 'to_entries[]|select(.value|type=="object" and has("verdict"))|.value.verdict' "$mh/runs/$rid/context.json" 2>/dev/null | head -1
+  jq -r 'to_entries[]|select(.value|type=="object" and has("recommendation"))|.value.recommendation' "$mh/runs/$rid/context.json" 2>/dev/null | head -1
   rm -rf "$mh"
 }
-echo "$(esf_verdict '{"label":"ham","confidence":0.9,"reason":"legit"}')"  | grep -q "DELIVER" \
-  || { echo "FAIL: email-spam-filter ham should DELIVER"; exit 1; }
-echo "$(esf_verdict '{"label":"spam","confidence":0.9,"reason":"scam"}')" | grep -q "QUARANTINE" \
-  || { echo "FAIL: email-spam-filter spam should QUARANTINE"; exit 1; }
+# high-confidence ham → DELIVER
+echo "$(esf_rec '{"label":"ham","confidence":0.95,"reason":"legit"}')" | grep -q "DELIVER" \
+  || { echo "FAIL: email-spam-filter high-confidence ham should recommend DELIVER"; exit 1; }
+# fail-safe boundary matrix — all must QUARANTINE
+for stub in \
+    '{"label":"ham","confidence":0.5,"reason":"unsure"}' \
+    '{"label":"ham","confidence":0,"reason":"x"}' \
+    '{"label":"ham","confidence":-1,"reason":"x"}' \
+    '{"label":"ham","confidence":1.5,"reason":"x"}' \
+    '{"label":"spam","confidence":0.99,"reason":"scam"}'; do
+  echo "$(esf_rec "$stub")" | grep -q "QUARANTINE" \
+    || { echo "FAIL: email-spam-filter must QUARANTINE for stub $stub (fail-safe/confidence gate)"; exit 1; }
+done
 set +e
 esf_bad="$(OSL_LLM_STUB='{"label":"maybe","confidence":0.5,"reason":"x"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$esf" --input sender="a@b.com" --input body="x" --json 2>/dev/null)"
 set -e
 [ "$(echo "$esf_bad" | jq -r '.status')" = "failed" ] \
   || { echo "FAIL: email-spam-filter out-of-enum label should fail the run, got $(echo "$esf_bad" | jq -r '.status')"; exit 1; }
-echo "PASS: email-spam-filter — ham delivers, spam quarantines, out-of-enum label fails (fail-safe + enum)"
+echo "PASS: email-spam-filter — deliver only on high-confidence ham; low/out-of-range/spam quarantine; out-of-enum fails"
 
 # --- release-checklist: release_ready must be gated on ALL four approvals — a
 #     single rejected gate must NOT produce a release-ready artifact. ---
