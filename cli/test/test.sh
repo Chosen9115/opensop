@@ -6606,7 +6606,8 @@ for recipe_file in \
     "$recipes_dir/pr-review-gate.sop.json" \
     "$recipes_dir/customer-onboarding.sop.json" \
     "$recipes_dir/content-publish-approval.sop.json" \
-    "$recipes_dir/weekly-status-digest.sop.json"; do
+    "$recipes_dir/weekly-status-digest.sop.json" \
+    "$recipes_dir/email-spam-filter.sop.json"; do
   [ -f "$recipe_file" ] \
     || { echo "FAIL: seed recipe file missing: $recipe_file"; exit 1; }
   set +e
@@ -6686,6 +6687,28 @@ lq_ok="$(OSL_LLM_STUB='{"outcome":"qualified","rationale":"good fit"}' OPENSOP_L
 [ "$(echo "$lq_ok" | jq -r '.status')" = "completed" ] \
   || { echo "FAIL: lead-qualification valid enum outcome should complete, got $(echo "$lq_ok" | jq -r '.status')"; exit 1; }
 echo "PASS: lead-qualification — outcome enum enforced (out-of-enum fails, valid completes)"
+
+# --- email-spam-filter: fail-safe routing — only an explicit ham verdict delivers;
+#     spam quarantines; an out-of-enum label fails the run (enum enforced). ---
+esf="$recipes_dir/email-spam-filter.sop.json"
+esf_verdict() {  # $1 stub → echoes the DELIVER/QUARANTINE line
+  local stub="$1" mh m rid
+  mh="$(mktemp -d)"
+  m="$(OSL_LLM_STUB="$stub" OPENSOP_LOCAL_HOME="$mh" "$cli" run "$esf" --input sender="a@b.com" --input body="hello" --json 2>/dev/null)"
+  rid="$(echo "$m" | jq -r '.run_id')"
+  jq -r 'to_entries[]|select(.value|type=="object" and has("verdict"))|.value.verdict' "$mh/runs/$rid/context.json" 2>/dev/null | head -1
+  rm -rf "$mh"
+}
+echo "$(esf_verdict '{"label":"ham","confidence":0.9,"reason":"legit"}')"  | grep -q "DELIVER" \
+  || { echo "FAIL: email-spam-filter ham should DELIVER"; exit 1; }
+echo "$(esf_verdict '{"label":"spam","confidence":0.9,"reason":"scam"}')" | grep -q "QUARANTINE" \
+  || { echo "FAIL: email-spam-filter spam should QUARANTINE"; exit 1; }
+set +e
+esf_bad="$(OSL_LLM_STUB='{"label":"maybe","confidence":0.5,"reason":"x"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$esf" --input sender="a@b.com" --input body="x" --json 2>/dev/null)"
+set -e
+[ "$(echo "$esf_bad" | jq -r '.status')" = "failed" ] \
+  || { echo "FAIL: email-spam-filter out-of-enum label should fail the run, got $(echo "$esf_bad" | jq -r '.status')"; exit 1; }
+echo "PASS: email-spam-filter — ham delivers, spam quarantines, out-of-enum label fails (fail-safe + enum)"
 
 # --- release-checklist: release_ready must be gated on ALL four approvals — a
 #     single rejected gate must NOT produce a release-ready artifact. ---

@@ -1,0 +1,34 @@
+{
+  "name": "email-spam-filter",
+  "version": "1.0.0",
+  "description": "Classify an inbound email as spam or ham with an LLM, then route it: ham is delivered, spam (or anything uncertain) is quarantined. Pass the email as process inputs.",
+  "recipe": {
+    "source": "opensop/email-spam-filter",
+    "install": "opensop pull opensop/email-spam-filter",
+    "tags": ["email", "spam", "classification", "filter", "llm", "moderation"]
+  },
+  "inputs": {
+    "sender": { "type": "string", "required": true, "description": "The From: address of the email." },
+    "subject": { "type": "string", "required": false, "default": "(no subject)", "description": "The email subject line." },
+    "body": { "type": "string", "required": true, "description": "The plain-text email body." }
+  },
+  "steps": [
+    {
+      "id": "classify",
+      "type": "llm",
+      "model": "claude-haiku-4-5",
+      "prompt": "You are an email spam classifier. Classify the email below. Respond with ONLY a JSON object with keys: \"label\" (exactly \"spam\" or \"ham\"), \"confidence\" (a number 0.0-1.0), and \"reason\" (one short sentence). Do not add any text outside the JSON.\n\nFrom: {{sender}}\nSubject: {{subject}}\n\n{{body}}",
+      "expected_output_schema": {
+        "label": { "type": "enum", "values": ["spam", "ham"], "required": true },
+        "confidence": { "type": "number", "required": true },
+        "reason": { "type": "string", "required": true }
+      }
+    },
+    {
+      "id": "route",
+      "type": "shell",
+      "description": "Fail-safe routing: only an explicit ham verdict is delivered; spam or any unexpected label is quarantined.",
+      "run": "set -o pipefail; jq -r '\n  (if (.classify.label) == \"ham\" then \"DELIVER\" else \"QUARANTINE\" end) as $action |\n  \"## Email verdict: \" + $action + \"\\n\" +\n  \"**From:** \" + ((.sender // \"?\") | tostring) + \"\\n\" +\n  \"**Subject:** \" + ((.subject // \"(no subject)\") | tostring) + \"\\n\" +\n  \"**Label:** \" + ((.classify.label // \"(none)\") | tostring) + \"\\n\" +\n  \"**Confidence:** \" + ((.classify.confidence // \"?\") | tostring) + \"\\n\" +\n  \"**Reason:** \" + ((.classify.reason // \"?\") | tostring) + \"\\n\" +\n  (if $action == \"DELIVER\" then \"Delivered to the inbox.\" else \"Quarantined — not delivered (spam or uncertain).\" end)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{verdict: .}'"
+    }
+  ]
+}

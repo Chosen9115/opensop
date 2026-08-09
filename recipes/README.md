@@ -75,6 +75,7 @@ The `sha256` printed after every pull is for pinning and identification (both th
 | `customer-onboarding` | Collect customer details, gate on kickoff go/no-go, then emit an onboarding checklist |
 | `content-publish-approval` | Collect draft content details, gate on editorial approval, then emit a publish record |
 | `weekly-status-digest` | Collect weekly wins, risks, and next steps via form, then format a Markdown status digest |
+| `email-spam-filter` | Classify an inbound email (spam/ham) with an LLM, then route it — ham delivers, spam or uncertain quarantines (fail-safe) |
 
 ## How to contribute
 
