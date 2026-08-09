@@ -6679,6 +6679,23 @@ jq -e '.steps|any(.id=="mark-ready")|not' "$rc_recipe" >/dev/null \
   || { echo "FAIL: release-checklist still contains mark-ready noop step"; exit 1; }
 echo "PASS: release-checklist — mark-ready noop step is gone"
 
+# --- approval formatters must FAIL CLOSED: a null/missing decision (e.g. from a
+#     corrupted/partial context) must NEVER yield an approved/actionable artifact.
+#     Tested at the formatter level (the submit validator also rejects null). ---
+for triple in \
+    "content-publish-approval:editorial-approval:publish_record:REJECTED" \
+    "customer-onboarding:kickoff-approval:onboarding_checklist:NOT STARTED" \
+    "incident-postmortem:sign-off:postmortem:REJECTED"; do
+  rf="$recipes_dir/$(echo "$triple" | cut -d: -f1).sop.json"
+  appr="$(echo "$triple" | cut -d: -f2)"; key="$(echo "$triple" | cut -d: -f3)"; want="$(echo "$triple" | cut -d: -f4)"
+  runc="$(jq -r '(.steps//.process.steps)[]|select(.type=="shell")|.run' "$rf")"
+  ctxn="$(jq -nc --arg a "$appr" '{($a):{decision:null}, "collect-draft":{title:"t"}, "collect-customer":{name:"n"}, "collect-incident":{title:"t"}}')"
+  outn="$(OSL_CONTEXT="$ctxn" bash -c "$runc" <<< "$ctxn" 2>/dev/null | jq -r --arg k "$key" '.[$k] // ""' 2>/dev/null)"
+  echo "$outn" | grep -qi "$want" \
+    || { echo "FAIL: $(basename "$rf") null decision must fail closed (want '$want'), got: $outn"; exit 1; }
+done
+echo "PASS: approval formatters fail closed — a null/missing decision never yields an approved/actionable artifact"
+
 # --------------------------------------------------------------------------- #
 # Shell formatter hardening: malformed numeric form outputs must NOT cause
 # a jq type error (empty artifact + silent success). set -o pipefail + tostring
