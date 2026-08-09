@@ -10,7 +10,7 @@
       "id": "collect-pr",
       "type": "form",
       "description": "Enter the pull request details.",
-      "fields": [
+      "inputs": [
         {
           "name": "title",
           "type": "string",

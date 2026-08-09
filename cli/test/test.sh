@@ -6619,6 +6619,37 @@ for recipe_file in \
   echo "PASS: seed recipe passes dry-run: $(basename "$recipe_file")"
 done
 
+# --- form fields must be declared under `inputs` (not `fields`) so the engine
+#     surfaces them in waiting.expects and an agent can DISCOVER what to submit.
+#     (A form step with a `fields` key is invisible to the runtime — the run
+#     pauses with empty expects and the recipe can't be completed correctly.) ---
+for recipe_file in "$recipes_dir"/*.sop.json; do
+  bad="$(jq '[(.steps//.process.steps)[] | select(.type=="form" and has("fields"))] | length' "$recipe_file")"
+  [ "$bad" = "0" ] \
+    || { echo "FAIL: $(basename "$recipe_file") has $bad form step(s) using the undiscoverable 'fields' key — use 'inputs'"; exit 1; }
+done
+echo "PASS: seed recipes — all form steps declare fields under 'inputs' (discoverable via waiting.expects)"
+
+# Dynamic proof: a form recipe surfaces a NON-EMPTY waiting.expects so an agent
+# can learn the field name, submit it, and get populated output.
+dsn="$recipes_dir/daily-standup-notes.sop.json"
+dh="$(mktemp -d)"
+dm="$(OPENSOP_LOCAL_HOME="$dh" "$cli" run "$dsn" --json 2>/dev/null)"
+drid="$(echo "$dm" | jq -r '.run_id')"; dfield="$(echo "$dm" | jq -r '.waiting.expects.outputs[0] // .waiting.expects.schema[0].name // ""')"
+[ -n "$dfield" ] \
+  || { echo "FAIL: daily-standup-notes form pause exposes no discoverable field in waiting.expects"; rm -rf "$dh"; exit 1; }
+dstep="$(echo "$dm" | jq -r '.waiting.step')"; di=0
+while [ -n "$dstep" ] && [ "$di" -lt 4 ]; do
+  dfield="$(echo "$dm" | jq -r '.waiting.expects.outputs[0] // .waiting.expects.schema[0].name // "value"')"
+  dm="$(OPENSOP_LOCAL_HOME="$dh" "$cli" submit "$drid" "$dstep" --output "$dfield=populated-$di" --json 2>/dev/null)"
+  dstep="$(echo "$dm" | jq -r '.waiting.step // empty')"; di=$((di+1))
+done
+dout="$(jq -r 'to_entries[]|select(.value|type=="object" and has("summary"))|.value.summary' "$dh/runs/$drid/context.json" 2>/dev/null)"
+rm -rf "$dh"
+echo "$dout" | grep -q "populated-0" \
+  || { echo "FAIL: daily-standup-notes submitted form value did not appear in the output: $dout"; exit 1; }
+echo "PASS: form recipe — waiting.expects exposes fields; submitted values populate the output (end-to-end)"
+
 # --- meeting-action-items: malformed LLM items (numeric/array/null/missing/scalar)
 #     must COMPLETE with a NON-EMPTY artifact — never crash, never silently empty
 #     (defensive tostring formatting + set -o pipefail). Dry-run can't catch this. ---

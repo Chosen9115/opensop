@@ -11,7 +11,7 @@
       "id": "collect-wins",
       "type": "form",
       "description": "What were the key wins this week?",
-      "fields": [
+      "inputs": [
         {
           "name": "wins",
           "type": "string",
@@ -24,7 +24,7 @@
       "id": "collect-risks",
       "type": "form",
       "description": "What are the current risks or blockers?",
-      "fields": [
+      "inputs": [
         {
           "name": "risks",
           "type": "string",
@@ -37,7 +37,7 @@
       "id": "collect-next",
       "type": "form",
       "description": "What are the priorities for next week?",
-      "fields": [
+      "inputs": [
         {
           "name": "next",
           "type": "string",

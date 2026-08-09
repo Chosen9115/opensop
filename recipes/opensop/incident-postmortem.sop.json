@@ -10,7 +10,7 @@
       "id": "collect-incident",
       "type": "form",
       "description": "Enter the incident details.",
-      "fields": [
+      "inputs": [
         {
           "name": "title",
           "type": "string",
