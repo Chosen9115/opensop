@@ -10,7 +10,7 @@
       "id": "collect-customer",
       "type": "form",
       "description": "Enter the new customer's details.",
-      "fields": [
+      "inputs": [
         {
           "name": "name",
           "type": "string",

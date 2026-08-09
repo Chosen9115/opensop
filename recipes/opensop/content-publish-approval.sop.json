@@ -10,7 +10,7 @@
       "id": "collect-draft",
       "type": "form",
       "description": "Enter the draft content details.",
-      "fields": [
+      "inputs": [
         {
           "name": "title",
           "type": "string",

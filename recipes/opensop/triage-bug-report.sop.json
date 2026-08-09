@@ -10,7 +10,7 @@
       "id": "collect-report",
       "type": "form",
       "description": "Enter the bug report details.",
-      "fields": [
+      "inputs": [
         {
           "name": "title",
           "type": "string",

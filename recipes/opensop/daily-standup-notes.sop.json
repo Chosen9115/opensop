@@ -10,7 +10,7 @@
       "id": "collect-yesterday",
       "type": "form",
       "description": "What did you complete yesterday?",
-      "fields": [
+      "inputs": [
         {
           "name": "yesterday",
           "type": "string",
@@ -23,7 +23,7 @@
       "id": "collect-today",
       "type": "form",
       "description": "What will you work on today?",
-      "fields": [
+      "inputs": [
         {
           "name": "today",
           "type": "string",
@@ -36,7 +36,7 @@
       "id": "collect-blockers",
       "type": "form",
       "description": "Any blockers or help needed?",
-      "fields": [
+      "inputs": [
         {
           "name": "blockers",
           "type": "string",
