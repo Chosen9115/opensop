@@ -37,7 +37,7 @@
       "id": "format-list",
       "type": "shell",
       "description": "Format the action item list as a Markdown checklist.",
-      "run": "set -o pipefail; jq -r '\n  \"## Action Items — \" + ((.meeting_title // \"Meeting\") | tostring) + \"\\n\" +\n  (if (((.\"extract-actions\".items) // []) | length) == 0 then\n    \"_No action items found._\"\n  else\n    [ (.\"extract-actions\".items)[] |\n      if type == \"object\" then \"- [ ] **\" + ((.owner // \"(unassigned)\") | tostring) + \":** \" + ((.task // \"(no task)\") | tostring)\n      else \"- [ ] \" + (. | tostring) end\n    ] | join(\"\\n\")\n  end)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{action_items: .}'"
+      "run": "set -o pipefail; jq -r '\n  (if ((.\"extract-actions\".items) | type) == \"array\" then .\"extract-actions\".items else [] end) as $items |\n  \"## Action Items — \" + ((.meeting_title // \"Meeting\") | tostring) + \"\\n\" +\n  (if ($items | length) == 0 then\n    \"_No action items found._\"\n  else\n    [ $items[] |\n      if type == \"object\" then \"- [ ] **\" + ((.owner // \"(unassigned)\") | tostring) + \":** \" + ((.task // \"(no task)\") | tostring)\n      else \"- [ ] \" + (. | tostring) end\n    ] | join(\"\\n\")\n  end)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{action_items: .}'"
     }
   ],
   "recipe": {

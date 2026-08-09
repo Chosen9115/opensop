@@ -6628,7 +6628,10 @@ for stub in \
     '{"items":[{"owner":"Al","task":["a","b"]}]}' \
     '{"items":[null,{"owner":"Al","task":"real"}]}' \
     '{"items":[{"owner":"Al"}]}' \
-    '{"items":["a bare string"]}'; do
+    '{"items":["a bare string"]}' \
+    '{"items":7}' \
+    '{"items":"a scalar"}' \
+    '{"items":{"owner":"x","task":"y"}}'; do
   mh="$(mktemp -d)"
   mm="$(OSL_LLM_STUB="$stub" OPENSOP_LOCAL_HOME="$mh" "$cli" run "$mai" --input notes=x --input meeting_title=T --json 2>/dev/null)"
   st="$(echo "$mm" | jq -r '.status')"; rid="$(echo "$mm" | jq -r '.run_id')"
