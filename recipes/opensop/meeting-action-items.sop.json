@@ -26,7 +26,10 @@
       "model": "claude-haiku-4-5",
       "prompt": "Extract all action items from the meeting notes below. Return a JSON object with a single key 'items' whose value is an array of objects, each with 'owner' (string — person responsible) and 'task' (string — what they need to do). If no action items are found, return {\"items\": []}.\n\nMeeting title: {{meeting_title}}\n\nMeeting notes:\n{{notes}}",
       "expected_output_schema": {
-        "items": { "type": "array", "required": true }
+        "items": {
+          "type": "array",
+          "required": true
+        }
       },
       "max_retries": 2
     },
@@ -34,12 +37,19 @@
       "id": "format-list",
       "type": "shell",
       "description": "Format the action item list as a Markdown checklist.",
-      "run": "jq -r '\n  \"## Action Items — \" + (.meeting_title // \"Meeting\") + \"\\n\" +\n  (if (.[\"extract-actions\"].items | length) == 0 then\n    \"_No action items found._\"\n  else\n    [ .[\"extract-actions\"].items[] | \"- [ ] **\" + .owner + \":** \" + .task ] | join(\"\\n\")\n  end)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{action_items: .}'"
+      "run": "jq -r '\n  \"## Action Items — \" + (.meeting_title // \"Meeting\") + \"\\n\" +\n  (if (((.\"extract-actions\".items) // []) | length) == 0 then\n    \"_No action items found._\"\n  else\n    [ (.\"extract-actions\".items)[] |\n      if type == \"object\" then \"- [ ] **\" + (.owner // \"(unassigned)\") + \":** \" + (.task // \"(no task)\")\n      else \"- [ ] \" + (. | tostring) end\n    ] | join(\"\\n\")\n  end)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{action_items: .}'"
     }
   ],
   "recipe": {
     "source": "opensop/meeting-action-items",
     "install": "opensop pull opensop/meeting-action-items",
-    "tags": ["meetings", "action-items", "llm", "productivity", "reliability", "ai-transformation"]
+    "tags": [
+      "meetings",
+      "action-items",
+      "llm",
+      "productivity",
+      "reliability",
+      "ai-transformation"
+    ]
   }
 }

@@ -47,8 +47,18 @@
       "model": "claude-haiku-4-5",
       "prompt": "You are a sales qualification analyst. Review the lead below and output a JSON object with two keys: 'outcome' (one of: qualified, nurture) and 'rationale' (one sentence explaining the decision).\n\nLead:\n- Company: {{company}}\n- Budget: {{budget}}\n- Timeline: {{timeline}}\n- Need: {{need}}",
       "expected_output_schema": {
-        "outcome": { "type": "string", "required": true },
-        "rationale": { "type": "string", "required": true }
+        "outcome": {
+          "type": "enum",
+          "values": [
+            "qualified",
+            "nurture"
+          ],
+          "required": true
+        },
+        "rationale": {
+          "type": "string",
+          "required": true
+        }
       },
       "max_retries": 2
     },
@@ -62,6 +72,12 @@
   "recipe": {
     "source": "opensop/lead-qualification",
     "install": "opensop pull opensop/lead-qualification",
-    "tags": ["sales", "lead-qualification", "crm", "routing", "agent-sellers"]
+    "tags": [
+      "sales",
+      "lead-qualification",
+      "crm",
+      "routing",
+      "agent-sellers"
+    ]
   }
 }
