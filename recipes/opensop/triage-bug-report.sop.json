@@ -1,61 +1,7 @@
 {
   "name": "triage-bug-report",
-  "version": "1.0.0",
-  "description": "Walk through a bug report with structured form collection and a judgment step that produces a prioritised triage summary.",
-  "inputs": {
-    "reporter": "unknown"
-  },
-  "steps": [
-    {
-      "id": "collect-report",
-      "type": "form",
-      "description": "Enter the bug report details.",
-      "inputs": [
-        {
-          "name": "title",
-          "type": "string",
-          "required": true,
-          "description": "One-line bug title"
-        },
-        {
-          "name": "description",
-          "type": "string",
-          "required": true,
-          "description": "Steps to reproduce and observed behaviour"
-        },
-        {
-          "name": "severity",
-          "type": "enum",
-          "required": true,
-          "values": [
-            "critical",
-            "high",
-            "medium",
-            "low"
-          ],
-          "description": "Reporter-assessed severity"
-        },
-        {
-          "name": "component",
-          "type": "string",
-          "required": false,
-          "description": "Affected component or subsystem (optional)"
-        }
-      ]
-    },
-    {
-      "id": "assess-priority",
-      "type": "judgment",
-      "description": "Review the report and assign a triage priority.",
-      "prompt": "You are a senior engineer triaging a bug report. Based on the report below, output a JSON object with two keys: 'priority' (one of: P0 P1 P2 P3) and 'rationale' (one sentence explaining the priority). Do not add commentary outside the JSON object.\n\nReport:\n- Title: {{collect-report.title}}\n- Severity: {{collect-report.severity}}\n- Description: {{collect-report.description}}\n- Component: {{collect-report.component}}"
-    },
-    {
-      "id": "format-triage",
-      "type": "shell",
-      "description": "Assemble the final triage summary.",
-      "run": "set -o pipefail; jq -r '\n  \"## Triage Summary\\n\" +\n  \"**Title:** \" + ((.\"collect-report\".title // \"(untitled)\") | tostring) + \"\\n\" +\n  \"**Reporter:** \" + ((.inputs.reporter // \"unknown\") | tostring) + \"\\n\" +\n  \"**Severity (self-reported):** \" + ((.\"collect-report\".severity // \"?\") | tostring) + \"\\n\" +\n  \"**Priority (triaged):** \" + ((.\"assess-priority\".priority // \"?\") | tostring) + \"\\n\" +\n  \"**Rationale:** \" + ((.\"assess-priority\".rationale // \"?\") | tostring) + \"\\n\" +\n  if ((.\"collect-report\".component // \"\") | tostring) != \"\" then\n    \"**Component:** \" + ((.\"collect-report\".component // \"\") | tostring)\n  else empty end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{triage_summary: .}'"
-    }
-  ],
+  "version": "1.1.0",
+  "description": "Triage a bug report with an LLM: assign a P0–P3 priority + rationale, then format a triage summary. Pass the report as process inputs (no interactive form).",
   "recipe": {
     "source": "opensop/triage-bug-report",
     "install": "opensop pull opensop/triage-bug-report",
@@ -66,5 +12,67 @@
       "incident-response",
       "quality"
     ]
-  }
+  },
+  "inputs": {
+    "reporter": {
+      "type": "string",
+      "required": false,
+      "default": "unknown",
+      "description": "Who reported the bug."
+    },
+    "title": {
+      "type": "string",
+      "required": false,
+      "default": "(untitled)",
+      "description": "Short bug title."
+    },
+    "severity": {
+      "type": "string",
+      "required": false,
+      "default": "?",
+      "description": "Self-reported severity."
+    },
+    "description": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "What happened / repro."
+    },
+    "component": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Affected component."
+    }
+  },
+  "steps": [
+    {
+      "id": "assess-priority",
+      "type": "llm",
+      "model": "claude-haiku-4-5",
+      "prompt": "You are a senior engineer triaging a bug report. Output ONLY a JSON object with keys: \"priority\" (exactly one of P0, P1, P2, P3) and \"rationale\" (one sentence). No text outside the JSON.\n\nReport:\n- Title: {{title}}\n- Severity: {{severity}}\n- Description: {{description}}\n- Component: {{component}}",
+      "expected_output_schema": {
+        "priority": {
+          "type": "enum",
+          "values": [
+            "P0",
+            "P1",
+            "P2",
+            "P3"
+          ],
+          "required": true
+        },
+        "rationale": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    {
+      "id": "format-triage",
+      "type": "shell",
+      "description": "Format the triage summary.",
+      "run": "set -o pipefail; jq -r '\n  \"## Triage Summary\\n\" +\n  \"**Title:** \" + ((.title // \"(untitled)\") | tostring) + \"\\n\" +\n  \"**Reporter:** \" + ((.reporter // \"unknown\") | tostring) + \"\\n\" +\n  \"**Severity (self-reported):** \" + ((.severity // \"?\") | tostring) + \"\\n\" +\n  \"**Priority (triaged):** \" + ((.\"assess-priority\".priority // \"?\") | tostring) + \"\\n\" +\n  \"**Rationale:** \" + ((.\"assess-priority\".rationale // \"?\") | tostring) +\n  (if ((.component // \"\") | tostring) != \"\" then \"\\n**Component:** \" + ((.component // \"\") | tostring) else \"\" end)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{triage_summary: .}'"
+    }
+  ]
 }

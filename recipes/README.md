@@ -66,15 +66,16 @@ The `sha256` printed after every pull is for pinning and identification (both th
 | Slug | Description |
 |---|---|
 | `daily-standup-notes` | Collect standup answers (yesterday / today / blockers) and format a concise summary |
-| `triage-bug-report` | Walk through bug report fields with a judgment step; emit a prioritised triage summary |
+| `triage-bug-report` | Triage a bug report with an LLM: assign a P0–P3 priority + rationale, then format a triage summary (input-driven) |
 | `release-checklist` | Approval-gated release checklist: confirm each item before marking the release ready |
-| `lead-qualification` | Collect lead details, score and route via judgment, then format a qualification summary |
+| `lead-qualification` | Score and route a sales lead with an LLM (qualified/nurture + rationale), then format a qualification summary |
 | `meeting-action-items` | Paste meeting notes, extract structured action items with an LLM step, then format the list |
 | `incident-postmortem` | Collect incident details, gate on sign-off approval, then emit a postmortem Markdown doc |
 | `pr-review-gate` | Collect PR details, gate on reviewer approval or rejection, then emit a formal review record |
 | `customer-onboarding` | Collect customer details, gate on kickoff go/no-go, then emit an onboarding checklist |
 | `content-publish-approval` | Collect draft content details, gate on editorial approval, then emit a publish record |
 | `weekly-status-digest` | Collect weekly wins, risks, and next steps via form, then format a Markdown status digest |
+| `email-spam-filter` | ADVISORY LLM spam triage: classify (spam/ham + confidence) and recommend deliver vs quarantine — delivery only for high-confidence ham; injection-aware (advisory; LLM classifiers are susceptible to crafted-email prompt injection); not an authenticated gate |
 
 ## How to contribute
 
