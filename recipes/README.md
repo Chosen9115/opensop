@@ -75,7 +75,7 @@ The `sha256` printed after every pull is for pinning and identification (both th
 | `customer-onboarding` | Collect customer details, gate on kickoff go/no-go, then emit an onboarding checklist |
 | `content-publish-approval` | Collect draft content details, gate on editorial approval, then emit a publish record |
 | `weekly-status-digest` | Collect weekly wins, risks, and next steps via form, then format a Markdown status digest |
-| `email-spam-filter` | ADVISORY LLM spam triage: classify (spam/ham + confidence) and recommend deliver vs quarantine — delivery only for high-confidence ham; injection-resistant prompt; not an authenticated gate |
+| `email-spam-filter` | ADVISORY LLM spam triage: classify (spam/ham + confidence) and recommend deliver vs quarantine — delivery only for high-confidence ham; injection-aware (advisory; LLM classifiers are susceptible to crafted-email prompt injection); not an authenticated gate |
 
 ## How to contribute
 
