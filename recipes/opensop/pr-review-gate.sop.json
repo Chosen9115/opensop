@@ -53,7 +53,7 @@
       "id": "format-record",
       "type": "shell",
       "description": "Emit the formal PR review record.",
-      "run": "set -o pipefail; jq -r '\n  \"## PR Review Record\\n\" +\n  \"**Title:** \" + ((.\"collect-pr\".title // \"(untitled)\") | tostring) + \"\\n\" +\n  \"**Author:** \" + ((.\"collect-pr\".author // \"?\") | tostring) + \"\\n\" +\n  \"**Risk:** \" + ((.\"collect-pr\".risk // \"?\") | tostring) + \"\\n\" +\n  \"**Reviewer:** \" + ((.inputs.reviewer // \"?\") | tostring) + \"\\n\" +\n  \"**Decision:** \" + ((.\"gate-review\".decision // \"?\") | tostring) +\n  if ((.\"collect-pr\".url // \"\") | tostring) != \"\" then\n    \"\\n**URL:** \" + ((.\"collect-pr\".url // \"\") | tostring)\n  else \"\" end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{review_record: .}'"
+      "run": "set -o pipefail; jq -r '\n  \"## PR Review Record\\n\" +\n  \"**Title:** \" + ((.\"collect-pr\".title // \"(untitled)\") | tostring) + \"\\n\" +\n  \"**Author:** \" + ((.\"collect-pr\".author // \"?\") | tostring) + \"\\n\" +\n  \"**Risk:** \" + ((.\"collect-pr\".risk // \"?\") | tostring) + \"\\n\" +\n  \"**Reviewer (self-reported):** \" + ((.inputs.reviewer // \"?\") | tostring) + \"\\n\" +\n  \"**Decision:** \" + ((.\"gate-review\".decision // \"?\") | tostring) +\n  (if ((.\"collect-pr\".url // \"\") | tostring) != \"\" then\n    \"\\n**URL:** \" + ((.\"collect-pr\".url // \"\") | tostring)\n  else \"\" end) +\n  \"\\n\\n_Unauthenticated local record: OpenSOP does not verify approver identity — the actor is whoever ran this process (same trust boundary as a Makefile)._\"\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{review_record: .}'"
     }
   ],
   "recipe": {

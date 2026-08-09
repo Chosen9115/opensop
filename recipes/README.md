@@ -55,6 +55,8 @@ curl -fsSL <url> | opensop import -
 jq '(.process.steps // .steps)[] | {id, type, run}' <file>   # or just open the file
 ```
 
+**Approval steps are unauthenticated locally.** OpenSOP's local runtime does not verify *who* submits an approval/decision — the actor is whoever runs the process (same trust boundary as a `Makefile`). Recipes that record an approver identity (e.g. a reviewer) label it *self-reported*; do not treat a locally-produced approval record as an authenticated attestation.
+
 `opensop dry-run <file>` validates inputs and previews the step *flow*, but it does **not** print command bodies — so it is not a substitute for reading the steps above.
 
 The `sha256` printed after every pull is for pinning and identification (both the file and the hash come from the same GitHub origin — they confirm transfer integrity and help you reproduce exact versions, not authenticate against a third party). Supply `--verify <sha256>` to enforce a hash you obtained out-of-band.
