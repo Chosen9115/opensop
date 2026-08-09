@@ -1,0 +1,71 @@
+{
+  "name": "customer-onboarding",
+  "version": "1.0.0",
+  "description": "Collect new customer details via form, gate on a kickoff go/no-go approval, then emit a structured onboarding checklist.",
+  "inputs": {
+    "owner": "Customer Success"
+  },
+  "steps": [
+    {
+      "id": "collect-customer",
+      "type": "form",
+      "description": "Enter the new customer's details.",
+      "fields": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "Customer company name"
+        },
+        {
+          "name": "plan",
+          "type": "enum",
+          "required": true,
+          "values": [
+            "starter",
+            "growth",
+            "enterprise"
+          ],
+          "description": "Subscription plan"
+        },
+        {
+          "name": "primary_contact",
+          "type": "string",
+          "required": true,
+          "description": "Primary contact name and email (e.g. Alice — alice@example.com)"
+        },
+        {
+          "name": "launch_date",
+          "type": "string",
+          "required": false,
+          "description": "Target launch date (e.g. 2026-09-01)"
+        }
+      ]
+    },
+    {
+      "id": "kickoff-approval",
+      "type": "approval",
+      "description": "Customer Success lead must confirm the kickoff is ready to proceed.",
+      "prompt": "Review the new customer details collected in the previous step. Approve to confirm the kickoff is ready and begin onboarding, or reject if additional information is needed.",
+      "decision_field": "decision"
+    },
+    {
+      "id": "emit-checklist",
+      "type": "shell",
+      "description": "Emit the onboarding checklist.",
+      "run": "set -o pipefail; jq -r '\n  if (((.\"kickoff-approval\".decision) // \"reject\") | tostring) == \"approve\" then\n    \"## Onboarding Checklist — \" + ((.\"collect-customer\".name // \"New Customer\") | tostring) + \"\\n\" +\n    \"**Plan:** \" + ((.\"collect-customer\".plan // \"?\") | tostring) + \"\\n\" +\n    \"**Primary Contact:** \" + ((.\"collect-customer\".primary_contact // \"?\") | tostring) + \"\\n\" +\n    \"**Owner:** \" + ((.inputs.owner // \"Customer Success\") | tostring) + \"\\n\\n\" +\n    \"### Tasks\\n\" +\n    \"- [ ] Send welcome email to primary contact\\n\" +\n    \"- [ ] Provision account and set plan: \" + ((.\"collect-customer\".plan // \"?\") | tostring) + \"\\n\" +\n    \"- [ ] Schedule kickoff call\\n\" +\n    \"- [ ] Share onboarding guide\\n\" +\n    \"- [ ] Set up Slack / support channel\"\n  else\n    \"## Onboarding NOT STARTED — kickoff rejected\\n\" +\n    \"**Customer:** \" + ((.\"collect-customer\".name // \"New Customer\") | tostring) + \"\\n\" +\n    \"**Reason:** kickoff go/no-go was rejected; additional information required before onboarding.\\n\" +\n    \"No onboarding tasks generated.\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{onboarding_checklist: .}'"
+    }
+  ],
+  "recipe": {
+    "source": "opensop/customer-onboarding",
+    "install": "opensop pull opensop/customer-onboarding",
+    "tags": [
+      "onboarding",
+      "customer-success",
+      "approval",
+      "checklist",
+      "sales",
+      "agent-sellers"
+    ]
+  }
+}

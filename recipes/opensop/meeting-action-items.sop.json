@@ -1,0 +1,55 @@
+{
+  "name": "meeting-action-items",
+  "version": "1.1.0",
+  "description": "Extract structured action items from meeting notes with an LLM step, then format the list — showcasing OpenSOP's reliability story for agentic extraction. Pass notes as a process input; no interactive form required.",
+  "inputs": [
+    {
+      "name": "notes",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Raw meeting notes to extract action items from. Pass via --input notes=\"...\" (required for meaningful results)."
+    },
+    {
+      "name": "meeting_title",
+      "type": "string",
+      "required": false,
+      "default": "Meeting",
+      "description": "Optional title for the meeting (used in the output header)."
+    }
+  ],
+  "steps": [
+    {
+      "id": "extract-actions",
+      "type": "llm",
+      "description": "Extract action items with owner and task from the meeting notes.",
+      "model": "claude-haiku-4-5",
+      "prompt": "Extract all action items from the meeting notes below. Return a JSON object with a single key 'items' whose value is an array of objects, each with 'owner' (string — person responsible) and 'task' (string — what they need to do). If no action items are found, return {\"items\": []}.\n\nMeeting title: {{meeting_title}}\n\nMeeting notes:\n{{notes}}",
+      "expected_output_schema": {
+        "items": {
+          "type": "array",
+          "required": true
+        }
+      },
+      "max_retries": 2
+    },
+    {
+      "id": "format-list",
+      "type": "shell",
+      "description": "Format the action item list as a Markdown checklist.",
+      "run": "set -o pipefail; jq -r '\n  (if ((.\"extract-actions\".items) | type) == \"array\" then .\"extract-actions\".items else [] end) as $items |\n  \"## Action Items — \" + ((.meeting_title // \"Meeting\") | tostring) + \"\\n\" +\n  (if ($items | length) == 0 then\n    \"_No action items found._\"\n  else\n    [ $items[] |\n      if type == \"object\" then \"- [ ] **\" + ((.owner // \"(unassigned)\") | tostring) + \":** \" + ((.task // \"(no task)\") | tostring)\n      else \"- [ ] \" + (. | tostring) end\n    ] | join(\"\\n\")\n  end)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{action_items: .}'"
+    }
+  ],
+  "recipe": {
+    "source": "opensop/meeting-action-items",
+    "install": "opensop pull opensop/meeting-action-items",
+    "tags": [
+      "meetings",
+      "action-items",
+      "llm",
+      "productivity",
+      "reliability",
+      "ai-transformation"
+    ]
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "name": "lead-qualification",
+  "version": "1.1.0",
+  "description": "Score and route a sales lead with an LLM step, then format a qualification summary. Pass lead details as process inputs; no interactive form required.",
+  "inputs": [
+    {
+      "name": "company",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Company name. Pass via --input company=\"...\" (required for meaningful results)."
+    },
+    {
+      "name": "budget",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Estimated annual budget (e.g. $50k). Pass via --input budget=\"...\" (required for meaningful results)."
+    },
+    {
+      "name": "timeline",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Purchase timeline (e.g. Q3 2026). Pass via --input timeline=\"...\" (required for meaningful results)."
+    },
+    {
+      "name": "need",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Primary pain point or use case. Pass via --input need=\"...\" (required for meaningful results)."
+    },
+    {
+      "name": "owner",
+      "type": "string",
+      "required": false,
+      "default": "Sales",
+      "description": "Sales rep or team responsible for this lead."
+    }
+  ],
+  "steps": [
+    {
+      "id": "score-lead",
+      "type": "llm",
+      "description": "Score the lead and route to qualified or nurture track.",
+      "model": "claude-haiku-4-5",
+      "prompt": "You are a sales qualification analyst. Review the lead below and output a JSON object with two keys: 'outcome' (one of: qualified, nurture) and 'rationale' (one sentence explaining the decision).\n\nLead:\n- Company: {{company}}\n- Budget: {{budget}}\n- Timeline: {{timeline}}\n- Need: {{need}}",
+      "expected_output_schema": {
+        "outcome": {
+          "type": "enum",
+          "values": [
+            "qualified",
+            "nurture"
+          ],
+          "required": true
+        },
+        "rationale": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "max_retries": 2
+    },
+    {
+      "id": "format-summary",
+      "type": "shell",
+      "description": "Format the qualification summary.",
+      "run": "set -o pipefail; jq -r '\n  \"## Lead Qualification Summary\\n\" +\n  \"**Company:** \" + ((.company // \"(unknown)\") | tostring) + \"\\n\" +\n  \"**Budget:** \" + ((.budget // \"?\") | tostring) + \"\\n\" +\n  \"**Timeline:** \" + ((.timeline // \"?\") | tostring) + \"\\n\" +\n  \"**Need:** \" + ((.need // \"?\") | tostring) + \"\\n\" +\n  \"**Outcome:** \" + ((.[\"score-lead\"].outcome // \"?\") | tostring) + \"\\n\" +\n  \"**Rationale:** \" + ((.[\"score-lead\"].rationale // \"?\") | tostring) + \"\\n\" +\n  \"**Owner:** \" + ((.owner // \"Sales\") | tostring)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{qualification_summary: .}'"
+    }
+  ],
+  "recipe": {
+    "source": "opensop/lead-qualification",
+    "install": "opensop pull opensop/lead-qualification",
+    "tags": [
+      "sales",
+      "lead-qualification",
+      "crm",
+      "routing",
+      "agent-sellers"
+    ]
+  }
+}

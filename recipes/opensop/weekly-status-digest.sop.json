@@ -1,0 +1,68 @@
+{
+  "name": "weekly-status-digest",
+  "version": "1.0.0",
+  "description": "Collect weekly wins, risks, and next steps via form, then format a concise Markdown status digest.",
+  "inputs": {
+    "team": "Engineering",
+    "week": "current"
+  },
+  "steps": [
+    {
+      "id": "collect-wins",
+      "type": "form",
+      "description": "What were the key wins this week?",
+      "fields": [
+        {
+          "name": "wins",
+          "type": "string",
+          "required": true,
+          "description": "Key wins and accomplishments (one per line)"
+        }
+      ]
+    },
+    {
+      "id": "collect-risks",
+      "type": "form",
+      "description": "What are the current risks or blockers?",
+      "fields": [
+        {
+          "name": "risks",
+          "type": "string",
+          "required": true,
+          "description": "Risks, blockers, or concerns (one per line; write 'None' if clear)"
+        }
+      ]
+    },
+    {
+      "id": "collect-next",
+      "type": "form",
+      "description": "What are the priorities for next week?",
+      "fields": [
+        {
+          "name": "next",
+          "type": "string",
+          "required": true,
+          "description": "Planned priorities for next week (one per line)"
+        }
+      ]
+    },
+    {
+      "id": "format-digest",
+      "type": "shell",
+      "description": "Format the weekly status digest as a Markdown document.",
+      "run": "set -o pipefail; jq -r '\n  \"## Weekly Status Digest\\n\" +\n  \"**Team:** \" + ((.inputs.team // \"Engineering\") | tostring) + \"\\n\" +\n  \"**Week:** \" + ((.inputs.week // \"current\") | tostring) + \"\\n\\n\" +\n  \"### Wins\\n\\n\" + ((.\"collect-wins\".wins // \"(none reported)\") | tostring) + \"\\n\\n\" +\n  \"### Risks & Blockers\\n\\n\" + ((.\"collect-risks\".risks // \"None\") | tostring) + \"\\n\\n\" +\n  \"### Next Week\\n\\n\" + ((.\"collect-next\".next // \"(none reported)\") | tostring)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{weekly_digest: .}'"
+    }
+  ],
+  "recipe": {
+    "source": "opensop/weekly-status-digest",
+    "install": "opensop pull opensop/weekly-status-digest",
+    "tags": [
+      "status",
+      "reporting",
+      "weekly",
+      "productivity",
+      "team",
+      "ai-transformation"
+    ]
+  }
+}

@@ -11,45 +11,46 @@
       "id": "confirm-tests-pass",
       "type": "approval",
       "description": "All automated tests pass on the release branch.",
-      "prompt": "Confirm: all automated tests (unit, integration, E2E) pass on the release branch for {{inputs.component}} {{inputs.version}}?",
+      "prompt": "Confirm: all automated tests (unit, integration, E2E) pass on the release branch for the component and version specified in the process inputs.",
       "decision_field": "decision"
     },
     {
       "id": "confirm-changelog",
       "type": "approval",
       "description": "CHANGELOG is updated and the release entry is complete.",
-      "prompt": "Confirm: CHANGELOG.md for {{inputs.component}} {{inputs.version}} is updated with all notable changes, linked issues, and a date?",
+      "prompt": "Confirm: CHANGELOG.md for this release is updated with all notable changes, linked issues, and a date.",
       "decision_field": "decision"
     },
     {
       "id": "confirm-docs",
       "type": "approval",
       "description": "Documentation is updated to reflect any new or changed behaviour.",
-      "prompt": "Confirm: user-facing docs and API references are updated for {{inputs.component}} {{inputs.version}}?",
+      "prompt": "Confirm: user-facing docs and API references are updated for this release.",
       "decision_field": "decision"
     },
     {
       "id": "confirm-security",
       "type": "approval",
       "description": "No known security issues in the release artifact.",
-      "prompt": "Confirm: dependency audit and any security review have been completed for {{inputs.component}} {{inputs.version}} with no open blockers?",
+      "prompt": "Confirm: dependency audit and any security review have been completed for this release with no open blockers.",
       "decision_field": "decision"
-    },
-    {
-      "id": "mark-ready",
-      "type": "noop",
-      "description": "All checks approved — release is ready to ship."
     },
     {
       "id": "emit-summary",
       "type": "shell",
       "description": "Print a release-ready confirmation.",
-      "run": "jq -r '\"Release ready: \" + (.inputs.component // \"unknown\") + \" \" + (.inputs.version // \"?\")' <<< \"$OSL_CONTEXT\" | jq -Rs '{release_ready: true, message: (split(\"\\n\")[0])}'"
+      "run": "set -o pipefail; jq -c '\n  ([ .\"confirm-tests-pass\".decision, .\"confirm-changelog\".decision, .\"confirm-docs\".decision, .\"confirm-security\".decision ]\n    | all(. == \"approve\")) as $ready |\n  {\n    release_ready: $ready,\n    component: ((.inputs.component // \"unknown\") | tostring),\n    version:   ((.inputs.version // \"?\") | tostring),\n    message: (if $ready then \"All release gates approved — ready to release.\"\n              else \"Release BLOCKED — one or more gates were rejected.\" end),\n    gates: {\n      tests:     ((.\"confirm-tests-pass\".decision // \"?\") | tostring),\n      changelog: ((.\"confirm-changelog\".decision // \"?\") | tostring),\n      docs:      ((.\"confirm-docs\".decision // \"?\") | tostring),\n      security:  ((.\"confirm-security\".decision // \"?\") | tostring)\n    }\n  }\n' <<< \"$OSL_CONTEXT\""
     }
   ],
   "recipe": {
     "source": "opensop/release-checklist",
     "install": "opensop pull opensop/release-checklist",
-    "tags": ["release", "checklist", "devops", "ci-cd", "quality-gates"]
+    "tags": [
+      "release",
+      "checklist",
+      "devops",
+      "ci-cd",
+      "quality-gates"
+    ]
   }
 }

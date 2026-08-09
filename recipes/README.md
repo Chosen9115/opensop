@@ -55,6 +55,8 @@ curl -fsSL <url> | opensop import -
 jq '(.process.steps // .steps)[] | {id, type, run}' <file>   # or just open the file
 ```
 
+**Approval steps are unauthenticated locally.** OpenSOP's local runtime does not verify *who* submits an approval/decision — the actor is whoever runs the process (same trust boundary as a `Makefile`). Recipes that record an approver identity (e.g. a reviewer) label it *self-reported*; do not treat a locally-produced approval record as an authenticated attestation.
+
 `opensop dry-run <file>` validates inputs and previews the step *flow*, but it does **not** print command bodies — so it is not a substitute for reading the steps above.
 
 The `sha256` printed after every pull is for pinning and identification (both the file and the hash come from the same GitHub origin — they confirm transfer integrity and help you reproduce exact versions, not authenticate against a third party). Supply `--verify <sha256>` to enforce a hash you obtained out-of-band.
@@ -66,6 +68,13 @@ The `sha256` printed after every pull is for pinning and identification (both th
 | `daily-standup-notes` | Collect standup answers (yesterday / today / blockers) and format a concise summary |
 | `triage-bug-report` | Walk through bug report fields with a judgment step; emit a prioritised triage summary |
 | `release-checklist` | Approval-gated release checklist: confirm each item before marking the release ready |
+| `lead-qualification` | Collect lead details, score and route via judgment, then format a qualification summary |
+| `meeting-action-items` | Paste meeting notes, extract structured action items with an LLM step, then format the list |
+| `incident-postmortem` | Collect incident details, gate on sign-off approval, then emit a postmortem Markdown doc |
+| `pr-review-gate` | Collect PR details, gate on reviewer approval or rejection, then emit a formal review record |
+| `customer-onboarding` | Collect customer details, gate on kickoff go/no-go, then emit an onboarding checklist |
+| `content-publish-approval` | Collect draft content details, gate on editorial approval, then emit a publish record |
+| `weekly-status-digest` | Collect weekly wins, risks, and next steps via form, then format a Markdown status digest |
 
 ## How to contribute
 

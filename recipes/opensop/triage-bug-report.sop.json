@@ -11,10 +11,36 @@
       "type": "form",
       "description": "Enter the bug report details.",
       "fields": [
-        { "name": "title",       "type": "string",  "required": true,  "description": "One-line bug title" },
-        { "name": "description", "type": "string",  "required": true,  "description": "Steps to reproduce and observed behaviour" },
-        { "name": "severity",    "type": "enum",    "required": true,  "values": ["critical", "high", "medium", "low"], "description": "Reporter-assessed severity" },
-        { "name": "component",   "type": "string",  "required": false, "description": "Affected component or subsystem (optional)" }
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "One-line bug title"
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "required": true,
+          "description": "Steps to reproduce and observed behaviour"
+        },
+        {
+          "name": "severity",
+          "type": "enum",
+          "required": true,
+          "values": [
+            "critical",
+            "high",
+            "medium",
+            "low"
+          ],
+          "description": "Reporter-assessed severity"
+        },
+        {
+          "name": "component",
+          "type": "string",
+          "required": false,
+          "description": "Affected component or subsystem (optional)"
+        }
       ]
     },
     {
@@ -27,12 +53,18 @@
       "id": "format-triage",
       "type": "shell",
       "description": "Assemble the final triage summary.",
-      "run": "jq -r '\n  \"## Triage Summary\\n\" +\n  \"**Title:** \" + (.\"collect-report\".title // \"(untitled)\") + \"\\n\" +\n  \"**Reporter:** \" + (.inputs.reporter // \"unknown\") + \"\\n\" +\n  \"**Severity (self-reported):** \" + (.\"collect-report\".severity // \"?\") + \"\\n\" +\n  \"**Priority (triaged):** \" + (.\"assess-priority\".priority // \"?\") + \"\\n\" +\n  \"**Rationale:** \" + (.\"assess-priority\".rationale // \"?\") + \"\\n\" +\n  if (.\"collect-report\".component // \"\") != \"\" then\n    \"**Component:** \" + .\"collect-report\".component\n  else empty end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{triage_summary: .}'"
+      "run": "set -o pipefail; jq -r '\n  \"## Triage Summary\\n\" +\n  \"**Title:** \" + ((.\"collect-report\".title // \"(untitled)\") | tostring) + \"\\n\" +\n  \"**Reporter:** \" + ((.inputs.reporter // \"unknown\") | tostring) + \"\\n\" +\n  \"**Severity (self-reported):** \" + ((.\"collect-report\".severity // \"?\") | tostring) + \"\\n\" +\n  \"**Priority (triaged):** \" + ((.\"assess-priority\".priority // \"?\") | tostring) + \"\\n\" +\n  \"**Rationale:** \" + ((.\"assess-priority\".rationale // \"?\") | tostring) + \"\\n\" +\n  if ((.\"collect-report\".component // \"\") | tostring) != \"\" then\n    \"**Component:** \" + ((.\"collect-report\".component // \"\") | tostring)\n  else empty end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{triage_summary: .}'"
     }
   ],
   "recipe": {
     "source": "opensop/triage-bug-report",
     "install": "opensop pull opensop/triage-bug-report",
-    "tags": ["bugs", "triage", "engineering", "incident-response", "quality"]
+    "tags": [
+      "bugs",
+      "triage",
+      "engineering",
+      "incident-response",
+      "quality"
+    ]
   }
 }
