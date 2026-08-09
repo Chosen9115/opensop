@@ -6921,32 +6921,24 @@ echo "$_art_dsn" | grep -q "7" \
 rm -rf "$_rh_dsn"
 echo "PASS: daily-standup-notes — numeric yesterday coerced, artifact non-empty"
 
-# --- triage-bug-report: numeric title on form step — form pause must succeed;
-#     judgment step is unsupported for local execution, so we test only the form pause.
-#     (dry-run test already covers the full recipe shape above.) ---
+# --- triage-bug-report (input-driven llm): a numeric title must render via
+#     tostring (no crash), a valid priority completes, an out-of-enum priority
+#     fails (enum enforced). Runs locally — no judgment step. ---
 _rh_tbr="$(mktemp -d)"
-set +e
-_m_tbr="$(OPENSOP_LOCAL_HOME="$_rh_tbr" "$cli" run "$recipes_dir/triage-bug-report.sop.json" --json 2>/dev/null)"
-set -e
-[ "$(echo "$_m_tbr" | jq -r '.status')" = "waiting" ] \
-  || { echo "FAIL: triage-bug-report initial run should pause at collect-report, got $(echo "$_m_tbr"|jq -r '.status')"; exit 1; }
+_m_tbr="$(OSL_LLM_STUB='{"priority":"P1","rationale":"data loss on export"}' OPENSOP_LOCAL_HOME="$_rh_tbr" "$cli" run "$recipes_dir/triage-bug-report.sop.json" --inputs '{"title":7,"description":"rows dropped","severity":"high"}' --json 2>/dev/null)"
+[ "$(echo "$_m_tbr" | jq -r '.status')" = "completed" ] \
+  || { echo "FAIL: triage-bug-report with a numeric title should complete, got $(echo "$_m_tbr"|jq -r '.status')"; exit 1; }
 _rid_tbr="$(echo "$_m_tbr" | jq -r '.run_id')"
-set +e
-_m_tbr2="$(OPENSOP_LOCAL_HOME="$_rh_tbr" "$cli" submit "$_rid_tbr" collect-report \
-  --outputs '{"title":7,"description":"Something broke","severity":"high"}' \
-  --decided-by test-agent --json 2>/dev/null)"
-set -e
-# After form submit, run is waiting at judgment step (unsupported) or failed — either way
-# the numeric title must NOT have crashed the form submit itself
-_tbr2_status="$(echo "$_m_tbr2" | jq -r '.status')"
-[ "$_tbr2_status" = "waiting" ] || [ "$_tbr2_status" = "failed" ] \
-  || [ "$_tbr2_status" = "completed" ] \
-  || { echo "FAIL: triage-bug-report form submit with numeric title gave unexpected status: $_tbr2_status"; exit 1; }
-# The form outputs must have been accepted (not a submit-level validation error)
-echo "$_m_tbr2" | jq -e 'has("error") | not' >/dev/null \
-  || { echo "FAIL: triage-bug-report form submit with numeric title rejected at validation"; exit 1; }
+_tbr_out="$(jq -r 'to_entries[]|select(.value|type=="object" and has("triage_summary"))|.value.triage_summary' "$_rh_tbr/runs/$_rid_tbr/context.json" 2>/dev/null)"
 rm -rf "$_rh_tbr"
-echo "PASS: triage-bug-report — numeric title accepted at form submission (no type-error crash)"
+echo "$_tbr_out" | grep -q "P1" \
+  || { echo "FAIL: triage-bug-report output missing the triaged priority (P1): $_tbr_out"; exit 1; }
+set +e
+_tbr_bad="$(OSL_LLM_STUB='{"priority":"P9","rationale":"x"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$recipes_dir/triage-bug-report.sop.json" --input title=t --input description=d --json 2>/dev/null)"
+set -e
+[ "$(echo "$_tbr_bad" | jq -r '.status')" = "failed" ] \
+  || { echo "FAIL: triage-bug-report out-of-enum priority (P9) should fail the run, got $(echo "$_tbr_bad"|jq -r '.status')"; exit 1; }
+echo "PASS: triage-bug-report — input-driven llm: numeric title renders, valid priority completes, out-of-enum fails"
 
 # --------------------------------------------------------------------------- #
 # opensop pull — offline tests via OPENSOP_RECIPES_BASE=file://...            #
