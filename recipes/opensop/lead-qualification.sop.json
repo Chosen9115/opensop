@@ -1,0 +1,38 @@
+{
+  "name": "lead-qualification",
+  "version": "1.0.0",
+  "description": "Collect lead details via form, score and route the lead through a judgment step, then format a qualification summary.",
+  "inputs": {
+    "owner": "Sales"
+  },
+  "steps": [
+    {
+      "id": "collect-lead",
+      "type": "form",
+      "description": "Enter the lead's details.",
+      "fields": [
+        { "name": "company",  "type": "string", "required": true,  "description": "Company name" },
+        { "name": "budget",   "type": "string", "required": true,  "description": "Estimated annual budget (e.g. $50k)" },
+        { "name": "timeline", "type": "string", "required": true,  "description": "Purchase timeline (e.g. Q3 2026)" },
+        { "name": "need",     "type": "string", "required": true,  "description": "Primary pain point or use case" }
+      ]
+    },
+    {
+      "id": "score-lead",
+      "type": "judgment",
+      "description": "Score the lead and route to qualified or nurture track.",
+      "prompt": "You are a sales qualification analyst. Review the lead below and output a JSON object with two keys: 'outcome' (one of: qualified, nurture) and 'rationale' (one sentence explaining the decision).\n\nLead:\n- Company: {{collect-lead.company}}\n- Budget: {{collect-lead.budget}}\n- Timeline: {{collect-lead.timeline}}\n- Need: {{collect-lead.need}}"
+    },
+    {
+      "id": "format-summary",
+      "type": "shell",
+      "description": "Format the qualification summary.",
+      "run": "jq -r '\n  \"## Lead Qualification Summary\\n\" +\n  \"**Company:** \" + (.\"collect-lead\".company // \"(unknown)\") + \"\\n\" +\n  \"**Budget:** \" + (.\"collect-lead\".budget // \"?\") + \"\\n\" +\n  \"**Timeline:** \" + (.\"collect-lead\".timeline // \"?\") + \"\\n\" +\n  \"**Need:** \" + (.\"collect-lead\".need // \"?\") + \"\\n\" +\n  \"**Outcome:** \" + (.\"score-lead\".outcome // \"?\") + \"\\n\" +\n  \"**Rationale:** \" + (.\"score-lead\".rationale // \"?\") + \"\\n\" +\n  \"**Owner:** \" + (.inputs.owner // \"Sales\")\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{qualification_summary: .}'"
+    }
+  ],
+  "recipe": {
+    "source": "opensop/lead-qualification",
+    "install": "opensop pull opensop/lead-qualification",
+    "tags": ["sales", "lead-qualification", "crm", "routing", "agent-sellers"]
+  }
+}

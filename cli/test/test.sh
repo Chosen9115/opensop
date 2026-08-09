@@ -6599,7 +6599,14 @@ recipes_dir="$(cd "$(dirname "$0")/../.." && pwd)/recipes/opensop"
 for recipe_file in \
     "$recipes_dir/daily-standup-notes.sop.json" \
     "$recipes_dir/triage-bug-report.sop.json" \
-    "$recipes_dir/release-checklist.sop.json"; do
+    "$recipes_dir/release-checklist.sop.json" \
+    "$recipes_dir/lead-qualification.sop.json" \
+    "$recipes_dir/meeting-action-items.sop.json" \
+    "$recipes_dir/incident-postmortem.sop.json" \
+    "$recipes_dir/pr-review-gate.sop.json" \
+    "$recipes_dir/customer-onboarding.sop.json" \
+    "$recipes_dir/content-publish-approval.sop.json" \
+    "$recipes_dir/weekly-status-digest.sop.json"; do
   [ -f "$recipe_file" ] \
     || { echo "FAIL: seed recipe file missing: $recipe_file"; exit 1; }
   set +e

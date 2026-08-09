@@ -1,0 +1,40 @@
+{
+  "name": "meeting-action-items",
+  "version": "1.0.0",
+  "description": "Paste meeting notes via form, extract structured action items with an LLM step, then format the list — showcasing OpenSOP's reliability story for agentic extraction.",
+  "inputs": {
+    "meeting_title": "Team Meeting"
+  },
+  "steps": [
+    {
+      "id": "collect-notes",
+      "type": "form",
+      "description": "Paste the raw meeting notes.",
+      "fields": [
+        { "name": "notes", "type": "string", "required": true, "description": "Full meeting notes to extract action items from" }
+      ]
+    },
+    {
+      "id": "extract-actions",
+      "type": "llm",
+      "description": "Extract action items with owner and task from the meeting notes.",
+      "model": "claude-haiku-4-5",
+      "prompt": "Extract all action items from the meeting notes below. Return a JSON object with a single key 'items' whose value is an array of objects, each with 'owner' (string — person responsible) and 'task' (string — what they need to do). If no action items are found, return {\"items\": []}.\n\nMeeting notes:\n{{collect-notes.notes}}",
+      "expected_output_schema": [
+        { "name": "items", "type": "array", "required": true, "description": "Array of {owner, task} action items" }
+      ],
+      "max_retries": 2
+    },
+    {
+      "id": "format-list",
+      "type": "shell",
+      "description": "Format the action item list as a Markdown checklist.",
+      "run": "jq -r '\n  \"## Action Items — \" + (.inputs.meeting_title // \"Meeting\") + \"\\n\" +\n  (if (.\"extract-actions\".items | length) == 0 then\n    \"_No action items found._\"\n  else\n    [ .\"extract-actions\".items[] | \"- [ ] **\" + .owner + \":** \" + .task ] | join(\"\\n\")\n  end)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{action_items: .}'"
+    }
+  ],
+  "recipe": {
+    "source": "opensop/meeting-action-items",
+    "install": "opensop pull opensop/meeting-action-items",
+    "tags": ["meetings", "action-items", "llm", "productivity", "reliability", "ai-transformation"]
+  }
+}

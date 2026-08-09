@@ -11,6 +11,8 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Added
 
+- **7 new seed recipes** under `recipes/opensop/`: `lead-qualification`, `meeting-action-items`, `incident-postmortem`, `pr-review-gate`, `customer-onboarding`, `content-publish-approval`, `weekly-status-digest`. All pass `opensop dry-run` and use only safe step types (form, judgment, approval, llm, shell with echo/jq only).
+
 - **Slice 4 — agent-adoption docs + embedded skill update (content-only, no new commands).**
 
   - **Embedded SKILL.md** (`_skill_embedded_content` in `bin/opensop`): updated to document

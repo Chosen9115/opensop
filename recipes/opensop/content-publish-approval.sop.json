@@ -1,0 +1,39 @@
+{
+  "name": "content-publish-approval",
+  "version": "1.0.0",
+  "description": "Collect draft content details via form, gate on editorial approval, then emit a publish record.",
+  "inputs": {
+    "publisher": "Content Team"
+  },
+  "steps": [
+    {
+      "id": "collect-draft",
+      "type": "form",
+      "description": "Enter the draft content details.",
+      "fields": [
+        { "name": "title",   "type": "string", "required": true,  "description": "Content title" },
+        { "name": "channel", "type": "enum",   "required": true,  "values": ["blog", "newsletter", "social", "docs", "press"], "description": "Publication channel" },
+        { "name": "summary", "type": "string", "required": true,  "description": "One-paragraph summary of the content" },
+        { "name": "author",  "type": "string", "required": false, "description": "Content author (optional)" }
+      ]
+    },
+    {
+      "id": "editorial-approval",
+      "type": "approval",
+      "description": "Editor must approve the content before it is published.",
+      "prompt": "Review '{{collect-draft.title}}' for {{collect-draft.channel}}. Summary: {{collect-draft.summary}}. Approve to publish.",
+      "decision_field": "decision"
+    },
+    {
+      "id": "emit-publish-record",
+      "type": "shell",
+      "description": "Emit the publish record.",
+      "run": "jq -r '\n  \"## Publish Record\\n\" +\n  \"**Title:** \" + (.\"collect-draft\".title // \"(untitled)\") + \"\\n\" +\n  \"**Channel:** \" + (.\"collect-draft\".channel // \"?\") + \"\\n\" +\n  \"**Decision:** \" + (.\"editorial-approval\".decision // \"?\") + \"\\n\" +\n  \"**Publisher:** \" + (.inputs.publisher // \"Content Team\") +\n  if (.\"collect-draft\".author // \"\") != \"\" then\n    \"\\n**Author:** \" + .\"collect-draft\".author\n  else \"\" end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{publish_record: .}'"
+    }
+  ],
+  "recipe": {
+    "source": "opensop/content-publish-approval",
+    "install": "opensop pull opensop/content-publish-approval",
+    "tags": ["content", "publishing", "approval", "editorial", "marketing"]
+  }
+}

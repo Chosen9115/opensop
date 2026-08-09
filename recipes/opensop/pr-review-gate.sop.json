@@ -1,0 +1,39 @@
+{
+  "name": "pr-review-gate",
+  "version": "1.0.0",
+  "description": "Collect pull request details via form, gate on reviewer approval or rejection, then emit a formal review record.",
+  "inputs": {
+    "reviewer": "on-call-engineer"
+  },
+  "steps": [
+    {
+      "id": "collect-pr",
+      "type": "form",
+      "description": "Enter the pull request details.",
+      "fields": [
+        { "name": "title",  "type": "string", "required": true,  "description": "PR title" },
+        { "name": "author", "type": "string", "required": true,  "description": "PR author (e.g. alice)" },
+        { "name": "risk",   "type": "enum",   "required": true,  "values": ["low", "medium", "high"], "description": "Risk level of this change" },
+        { "name": "url",    "type": "string", "required": false, "description": "PR URL (optional)" }
+      ]
+    },
+    {
+      "id": "gate-review",
+      "type": "approval",
+      "description": "Reviewer must approve or reject the PR before the record is written.",
+      "prompt": "Review PR '{{collect-pr.title}}' by {{collect-pr.author}} (risk: {{collect-pr.risk}}). Approve or reject.",
+      "decision_field": "decision"
+    },
+    {
+      "id": "format-record",
+      "type": "shell",
+      "description": "Emit the formal PR review record.",
+      "run": "jq -r '\n  \"## PR Review Record\\n\" +\n  \"**Title:** \" + (.\"collect-pr\".title // \"(untitled)\") + \"\\n\" +\n  \"**Author:** \" + (.\"collect-pr\".author // \"?\") + \"\\n\" +\n  \"**Risk:** \" + (.\"collect-pr\".risk // \"?\") + \"\\n\" +\n  \"**Reviewer:** \" + (.inputs.reviewer // \"?\") + \"\\n\" +\n  \"**Decision:** \" + (.\"gate-review\".decision // \"?\") +\n  if (.\"collect-pr\".url // \"\") != \"\" then\n    \"\\n**URL:** \" + .\"collect-pr\".url\n  else \"\" end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{review_record: .}'"
+    }
+  ],
+  "recipe": {
+    "source": "opensop/pr-review-gate",
+    "install": "opensop pull opensop/pr-review-gate",
+    "tags": ["pull-requests", "code-review", "approval", "engineering", "quality-gates"]
+  }
+}
