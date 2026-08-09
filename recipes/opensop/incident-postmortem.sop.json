@@ -11,11 +11,42 @@
       "type": "form",
       "description": "Enter the incident details.",
       "fields": [
-        { "name": "title",    "type": "string", "required": true,  "description": "One-line incident title" },
-        { "name": "severity", "type": "enum",   "required": true,  "values": ["SEV1", "SEV2", "SEV3", "SEV4"], "description": "Incident severity level" },
-        { "name": "timeline", "type": "string", "required": true,  "description": "Chronological timeline of events (detection to resolution)" },
-        { "name": "impact",   "type": "string", "required": true,  "description": "Customer and business impact" },
-        { "name": "root_cause", "type": "string", "required": false, "description": "Root cause (if known)" }
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "One-line incident title"
+        },
+        {
+          "name": "severity",
+          "type": "enum",
+          "required": true,
+          "values": [
+            "SEV1",
+            "SEV2",
+            "SEV3",
+            "SEV4"
+          ],
+          "description": "Incident severity level"
+        },
+        {
+          "name": "timeline",
+          "type": "string",
+          "required": true,
+          "description": "Chronological timeline of events (detection to resolution)"
+        },
+        {
+          "name": "impact",
+          "type": "string",
+          "required": true,
+          "description": "Customer and business impact"
+        },
+        {
+          "name": "root_cause",
+          "type": "string",
+          "required": false,
+          "description": "Root cause (if known)"
+        }
       ]
     },
     {
@@ -29,12 +60,18 @@
       "id": "format-postmortem",
       "type": "shell",
       "description": "Emit the postmortem document (approved) or a rejection record (rejected).",
-      "run": "jq -r '\n  if .[\"sign-off\"].decision == \"approve\" then\n    \"# Postmortem: \" + (.[\"collect-incident\"].title // \"(untitled)\") + \"\\n\\n\" +\n    \"**Severity:** \" + (.[\"collect-incident\"].severity // \"?\") + \"\\n\" +\n    \"**Team:** \" + (.inputs.team // \"Platform\") + \"\\n\" +\n    \"**Status:** Approved\\n\\n\" +\n    \"## Timeline\\n\\n\" + (.[\"collect-incident\"].timeline // \"(none)\") + \"\\n\\n\" +\n    \"## Impact\\n\\n\" + (.[\"collect-incident\"].impact // \"(none)\") + \"\\n\\n\" +\n    if (.[\"collect-incident\"].root_cause // \"\") != \"\" then\n      \"## Root Cause\\n\\n\" + .[\"collect-incident\"].root_cause + \"\\n\"\n    else\n      \"## Root Cause\\n\\n_Under investigation._\\n\"\n    end\n  else\n    \"# Postmortem REJECTED — not published\\n\\n\" +\n    \"**Incident:** \" + (.[\"collect-incident\"].title // \"(untitled)\") + \"\\n\" +\n    \"**Severity:** \" + (.[\"collect-incident\"].severity // \"?\") + \"\\n\" +\n    \"**Team:** \" + (.inputs.team // \"Platform\") + \"\\n\" +\n    \"**Status:** Rejected — postmortem requires revision before publication.\\n\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{postmortem: .}'"
+      "run": "set -o pipefail; jq -r '\n  if (.[\"sign-off\"].decision // \"reject\") == \"approve\" then\n    \"# Postmortem: \" + ((.[\"collect-incident\"].title // \"(untitled)\") | tostring) + \"\\n\\n\" +\n    \"**Severity:** \" + ((.[\"collect-incident\"].severity // \"?\") | tostring) + \"\\n\" +\n    \"**Team:** \" + ((.inputs.team // \"Platform\") | tostring) + \"\\n\" +\n    \"**Status:** Approved\\n\\n\" +\n    \"## Timeline\\n\\n\" + ((.[\"collect-incident\"].timeline // \"(none)\") | tostring) + \"\\n\\n\" +\n    \"## Impact\\n\\n\" + ((.[\"collect-incident\"].impact // \"(none)\") | tostring) + \"\\n\\n\" +\n    if ((.[\"collect-incident\"].root_cause // \"\") | tostring) != \"\" then\n      \"## Root Cause\\n\\n\" + ((.[\"collect-incident\"].root_cause // \"\") | tostring) + \"\\n\"\n    else\n      \"## Root Cause\\n\\n_Under investigation._\\n\"\n    end\n  else\n    \"# Postmortem REJECTED — not published\\n\\n\" +\n    \"**Incident:** \" + ((.[\"collect-incident\"].title // \"(untitled)\") | tostring) + \"\\n\" +\n    \"**Severity:** \" + ((.[\"collect-incident\"].severity // \"?\") | tostring) + \"\\n\" +\n    \"**Team:** \" + ((.inputs.team // \"Platform\") | tostring) + \"\\n\" +\n    \"**Status:** Rejected — postmortem requires revision before publication.\\n\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{postmortem: .}'"
     }
   ],
   "recipe": {
     "source": "opensop/incident-postmortem",
     "install": "opensop pull opensop/incident-postmortem",
-    "tags": ["incidents", "postmortem", "engineering", "devops", "reliability"]
+    "tags": [
+      "incidents",
+      "postmortem",
+      "engineering",
+      "devops",
+      "reliability"
+    ]
   }
 }

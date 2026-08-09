@@ -11,7 +11,12 @@
       "type": "form",
       "description": "What did you complete yesterday?",
       "fields": [
-        { "name": "yesterday", "type": "string", "required": true, "description": "Work completed yesterday" }
+        {
+          "name": "yesterday",
+          "type": "string",
+          "required": true,
+          "description": "Work completed yesterday"
+        }
       ]
     },
     {
@@ -19,7 +24,12 @@
       "type": "form",
       "description": "What will you work on today?",
       "fields": [
-        { "name": "today", "type": "string", "required": true, "description": "Planned work for today" }
+        {
+          "name": "today",
+          "type": "string",
+          "required": true,
+          "description": "Planned work for today"
+        }
       ]
     },
     {
@@ -27,19 +37,30 @@
       "type": "form",
       "description": "Any blockers or help needed?",
       "fields": [
-        { "name": "blockers", "type": "string", "required": false, "description": "Blockers or impediments (leave blank if none)" }
+        {
+          "name": "blockers",
+          "type": "string",
+          "required": false,
+          "description": "Blockers or impediments (leave blank if none)"
+        }
       ]
     },
     {
       "id": "format-summary",
       "type": "shell",
       "description": "Format the collected answers into a Markdown standup note.",
-      "run": "jq -r '\n  \"## Standup — \" + (.inputs.team_name // \"Team\") + \"\\n\" +\n  \"**Yesterday:** \" + (.\"collect-yesterday\".yesterday // \"\") + \"\\n\" +\n  \"**Today:** \" + (.\"collect-today\".today // \"\") + \"\\n\" +\n  if (.\"collect-blockers\".blockers // \"\") != \"\" then\n    \"**Blockers:** \" + .\"collect-blockers\".blockers\n  else\n    \"**Blockers:** None\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{summary: .}'"
+      "run": "set -o pipefail; jq -r '\n  \"## Standup — \" + ((.inputs.team_name // \"Team\") | tostring) + \"\\n\" +\n  \"**Yesterday:** \" + ((.\"collect-yesterday\".yesterday // \"\") | tostring) + \"\\n\" +\n  \"**Today:** \" + ((.\"collect-today\".today // \"\") | tostring) + \"\\n\" +\n  if ((.\"collect-blockers\".blockers // \"\") | tostring) != \"\" then\n    \"**Blockers:** \" + ((.\"collect-blockers\".blockers // \"\") | tostring)\n  else\n    \"**Blockers:** None\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{summary: .}'"
     }
   ],
   "recipe": {
     "source": "opensop/daily-standup-notes",
     "install": "opensop pull opensop/daily-standup-notes",
-    "tags": ["standup", "meetings", "notes", "productivity", "team"]
+    "tags": [
+      "standup",
+      "meetings",
+      "notes",
+      "productivity",
+      "team"
+    ]
   }
 }

@@ -6674,6 +6674,206 @@ run_release_test() {  # args: 4 decisions (tests,changelog,docs,security) → ec
   || { echo "FAIL: release-checklist with a rejected gate must yield release_ready=false (false release-ready artifact)"; exit 1; }
 echo "PASS: release-checklist — release_ready gated on ALL approvals (any reject blocks it)"
 
+# --- release-checklist: mark-ready step must NOT exist in the recipe file ---
+jq -e '.steps|any(.id=="mark-ready")|not' "$rc_recipe" >/dev/null \
+  || { echo "FAIL: release-checklist still contains mark-ready noop step"; exit 1; }
+echo "PASS: release-checklist — mark-ready noop step is gone"
+
+# --------------------------------------------------------------------------- #
+# Shell formatter hardening: malformed numeric form outputs must NOT cause
+# a jq type error (empty artifact + silent success). set -o pipefail + tostring
+# coercion must surface real jq failures and render any value type as a string.
+# Tests: form-backed recipes submit a numeric value for a declared string field.
+# --------------------------------------------------------------------------- #
+
+# Helper: run a form recipe end-to-end given a form step + approval step, submitting
+# malformed numeric outputs on the form and a given decision on the approval (or
+# "none" if no approval step). Returns the final context.json path.
+_recipe_run() {
+  local rh sop form_step form_json appr_step decision
+  rh="$(mktemp -d)"
+  sop="$1" form_step="$2" form_json="$3" appr_step="$4" decision="${5:-approve}"
+  local m rid step
+  m="$(OPENSOP_LOCAL_HOME="$rh" "$cli" run "$sop" --json 2>/dev/null)"
+  rid="$(echo "$m" | jq -r '.run_id')"; step="$(echo "$m" | jq -r '.waiting.step // empty')"
+  if [ "$step" = "$form_step" ]; then
+    m="$(OPENSOP_LOCAL_HOME="$rh" "$cli" submit "$rid" "$form_step" \
+          --outputs "$form_json" --decided-by test-agent --json 2>/dev/null)"
+    step="$(echo "$m" | jq -r '.waiting.step // empty')"
+  fi
+  if [ -n "$appr_step" ] && [ "$step" = "$appr_step" ]; then
+    m="$(OPENSOP_LOCAL_HOME="$rh" "$cli" submit "$(echo "$m"|jq -r '.run_id')" "$appr_step" \
+          --output "decision=$decision" --decided-by human --json 2>/dev/null)"
+  fi
+  echo "$(echo "$m"|jq -r '.status')" "$(echo "$m"|jq -r '.run_id')" "$rh"
+}
+
+# --- incident-postmortem: numeric title ---
+for _dec in approve reject; do
+  read -r _st _rid _rh <<< "$(_recipe_run \
+    "$recipes_dir/incident-postmortem.sop.json" \
+    "collect-incident" \
+    '{"title":7,"severity":"SEV2","timeline":"5pm start","impact":"none"}' \
+    "sign-off" "$_dec")"
+  [ "$_st" = "completed" ] \
+    || { echo "FAIL: incident-postmortem ($( echo $_dec)) must complete with numeric title, got $_st"; exit 1; }
+  _art="$(jq -r '.["format-postmortem"].postmortem // ""' "$_rh/runs/$_rid/context.json" 2>/dev/null)"
+  [ -n "$_art" ] \
+    || { echo "FAIL: incident-postmortem ($( echo $_dec)) artifact empty on numeric title"; exit 1; }
+  if [ "$_dec" = "approve" ]; then
+    echo "$_art" | grep -qi "Approved" \
+      || { echo "FAIL: incident-postmortem approve path missing 'Approved'"; exit 1; }
+    echo "$_art" | grep -qi "REJECTED" \
+      && { echo "FAIL: incident-postmortem approve path wrongly shows REJECTED"; exit 1; } || true
+  else
+    echo "$_art" | grep -qi "REJECTED\|rejected" \
+      || { echo "FAIL: incident-postmortem reject path missing 'REJECTED'"; exit 1; }
+    echo "$_art" | grep -q "**Status:** Approved" \
+      && { echo "FAIL: incident-postmortem reject path claims Approved"; exit 1; } || true
+  fi
+  rm -rf "$_rh"
+done
+echo "PASS: incident-postmortem — numeric title coerced; approve shows Approved, reject shows REJECTED"
+
+# --- pr-review-gate: numeric title ---
+for _dec in approve reject; do
+  read -r _st _rid _rh <<< "$(_recipe_run \
+    "$recipes_dir/pr-review-gate.sop.json" \
+    "collect-pr" \
+    '{"title":7,"author":"alice","risk":"low"}' \
+    "gate-review" "$_dec")"
+  [ "$_st" = "completed" ] \
+    || { echo "FAIL: pr-review-gate ($_dec) must complete with numeric title, got $_st"; exit 1; }
+  _art="$(jq -r '.["format-record"].review_record // ""' "$_rh/runs/$_rid/context.json" 2>/dev/null)"
+  [ -n "$_art" ] \
+    || { echo "FAIL: pr-review-gate ($_dec) artifact empty on numeric title"; exit 1; }
+  echo "$_art" | grep -q "7" \
+    || { echo "FAIL: pr-review-gate ($_dec) numeric title not rendered"; exit 1; }
+  echo "$_art" | grep -qi "$_dec" \
+    || { echo "FAIL: pr-review-gate ($_dec) decision not in artifact"; exit 1; }
+  rm -rf "$_rh"
+done
+echo "PASS: pr-review-gate — numeric title coerced; approve and reject decisions recorded correctly"
+
+# --- customer-onboarding: numeric name ---
+for _dec in approve reject; do
+  read -r _st _rid _rh <<< "$(_recipe_run \
+    "$recipes_dir/customer-onboarding.sop.json" \
+    "collect-customer" \
+    '{"name":7,"plan":"starter","primary_contact":"alice@example.com"}' \
+    "kickoff-approval" "$_dec")"
+  [ "$_st" = "completed" ] \
+    || { echo "FAIL: customer-onboarding ($_dec) must complete with numeric name, got $_st"; exit 1; }
+  _art="$(jq -r '.["emit-checklist"].onboarding_checklist // ""' "$_rh/runs/$_rid/context.json" 2>/dev/null)"
+  [ -n "$_art" ] \
+    || { echo "FAIL: customer-onboarding ($_dec) artifact empty on numeric name"; exit 1; }
+  if [ "$_dec" = "approve" ]; then
+    echo "$_art" | grep -q "Tasks" \
+      || { echo "FAIL: customer-onboarding approve path missing Tasks section"; exit 1; }
+    echo "$_art" | grep -qi "NOT STARTED" \
+      && { echo "FAIL: customer-onboarding approve path wrongly shows NOT STARTED"; exit 1; } || true
+  else
+    echo "$_art" | grep -qi "NOT STARTED" \
+      || { echo "FAIL: customer-onboarding reject path missing NOT STARTED"; exit 1; }
+  fi
+  rm -rf "$_rh"
+done
+echo "PASS: customer-onboarding — numeric name coerced; approve shows Tasks, reject shows NOT STARTED"
+
+# --- content-publish-approval: numeric title ---
+for _dec in approve reject; do
+  read -r _st _rid _rh <<< "$(_recipe_run \
+    "$recipes_dir/content-publish-approval.sop.json" \
+    "collect-draft" \
+    '{"title":7,"channel":"blog","summary":"test summary"}' \
+    "editorial-approval" "$_dec")"
+  [ "$_st" = "completed" ] \
+    || { echo "FAIL: content-publish-approval ($_dec) must complete with numeric title, got $_st"; exit 1; }
+  _art="$(jq -r '.["emit-publish-record"].publish_record // ""' "$_rh/runs/$_rid/context.json" 2>/dev/null)"
+  [ -n "$_art" ] \
+    || { echo "FAIL: content-publish-approval ($_dec) artifact empty on numeric title"; exit 1; }
+  if [ "$_dec" = "approve" ]; then
+    echo "$_art" | grep -q "APPROVED" \
+      || { echo "FAIL: content-publish-approval approve path missing APPROVED"; exit 1; }
+    echo "$_art" | grep -q "REJECTED" \
+      && { echo "FAIL: content-publish-approval approve path wrongly shows REJECTED"; exit 1; } || true
+  else
+    echo "$_art" | grep -q "REJECTED" \
+      || { echo "FAIL: content-publish-approval reject path missing REJECTED"; exit 1; }
+    echo "$_art" | grep -q "Do NOT publish" \
+      || { echo "FAIL: content-publish-approval reject path missing Do NOT publish"; exit 1; }
+  fi
+  rm -rf "$_rh"
+done
+echo "PASS: content-publish-approval — numeric title coerced; approve APPROVED, reject REJECTED + Do NOT publish"
+
+# --- weekly-status-digest: numeric wins field (multi-step form, no approval) ---
+_rh_wsd="$(mktemp -d)"
+_m_wsd="$(OPENSOP_LOCAL_HOME="$_rh_wsd" "$cli" run "$recipes_dir/weekly-status-digest.sop.json" --json 2>/dev/null)"
+_rid_wsd="$(echo "$_m_wsd" | jq -r '.run_id')"
+_m_wsd="$(OPENSOP_LOCAL_HOME="$_rh_wsd" "$cli" submit "$_rid_wsd" collect-wins \
+  --outputs '{"wins":7}' --decided-by test-agent --json 2>/dev/null)"
+_m_wsd="$(OPENSOP_LOCAL_HOME="$_rh_wsd" "$cli" submit "$(echo "$_m_wsd"|jq -r '.run_id')" collect-risks \
+  --outputs '{"risks":"none"}' --decided-by test-agent --json 2>/dev/null)"
+_m_wsd="$(OPENSOP_LOCAL_HOME="$_rh_wsd" "$cli" submit "$(echo "$_m_wsd"|jq -r '.run_id')" collect-next \
+  --outputs '{"next":"plan"}' --decided-by test-agent --json 2>/dev/null)"
+[ "$(echo "$_m_wsd" | jq -r '.status')" = "completed" ] \
+  || { echo "FAIL: weekly-status-digest must complete with numeric wins, got $(echo "$_m_wsd"|jq -r '.status')"; exit 1; }
+_art_wsd="$(jq -r '.["format-digest"].weekly_digest // ""' "$_rh_wsd/runs/$(echo "$_m_wsd"|jq -r '.run_id')/context.json" 2>/dev/null)"
+[ -n "$_art_wsd" ] \
+  || { echo "FAIL: weekly-status-digest artifact empty on numeric wins"; exit 1; }
+echo "$_art_wsd" | grep -q "7" \
+  || { echo "FAIL: weekly-status-digest numeric wins not in artifact"; exit 1; }
+rm -rf "$_rh_wsd"
+echo "PASS: weekly-status-digest — numeric wins coerced, artifact non-empty"
+
+# --- daily-standup-notes: numeric yesterday field ---
+_rh_dsn="$(mktemp -d)"
+_m_dsn="$(OPENSOP_LOCAL_HOME="$_rh_dsn" "$cli" run "$recipes_dir/daily-standup-notes.sop.json" --json 2>/dev/null)"
+_rid_dsn="$(echo "$_m_dsn" | jq -r '.run_id')"
+_m_dsn="$(OPENSOP_LOCAL_HOME="$_rh_dsn" "$cli" submit "$_rid_dsn" collect-yesterday \
+  --outputs '{"yesterday":7}' --decided-by test-agent --json 2>/dev/null)"
+_m_dsn="$(OPENSOP_LOCAL_HOME="$_rh_dsn" "$cli" submit "$(echo "$_m_dsn"|jq -r '.run_id')" collect-today \
+  --outputs '{"today":"write code"}' --decided-by test-agent --json 2>/dev/null)"
+_m_dsn="$(OPENSOP_LOCAL_HOME="$_rh_dsn" "$cli" submit "$(echo "$_m_dsn"|jq -r '.run_id')" collect-blockers \
+  --outputs '{"blockers":"none"}' --decided-by test-agent --json 2>/dev/null)"
+[ "$(echo "$_m_dsn" | jq -r '.status')" = "completed" ] \
+  || { echo "FAIL: daily-standup-notes must complete with numeric yesterday, got $(echo "$_m_dsn"|jq -r '.status')"; exit 1; }
+_art_dsn="$(jq -r '.["format-summary"].summary // ""' "$_rh_dsn/runs/$(echo "$_m_dsn"|jq -r '.run_id')/context.json" 2>/dev/null)"
+[ -n "$_art_dsn" ] \
+  || { echo "FAIL: daily-standup-notes artifact empty on numeric yesterday"; exit 1; }
+echo "$_art_dsn" | grep -q "7" \
+  || { echo "FAIL: daily-standup-notes numeric yesterday not in artifact"; exit 1; }
+rm -rf "$_rh_dsn"
+echo "PASS: daily-standup-notes — numeric yesterday coerced, artifact non-empty"
+
+# --- triage-bug-report: numeric title on form step — form pause must succeed;
+#     judgment step is unsupported for local execution, so we test only the form pause.
+#     (dry-run test already covers the full recipe shape above.) ---
+_rh_tbr="$(mktemp -d)"
+set +e
+_m_tbr="$(OPENSOP_LOCAL_HOME="$_rh_tbr" "$cli" run "$recipes_dir/triage-bug-report.sop.json" --json 2>/dev/null)"
+set -e
+[ "$(echo "$_m_tbr" | jq -r '.status')" = "waiting" ] \
+  || { echo "FAIL: triage-bug-report initial run should pause at collect-report, got $(echo "$_m_tbr"|jq -r '.status')"; exit 1; }
+_rid_tbr="$(echo "$_m_tbr" | jq -r '.run_id')"
+set +e
+_m_tbr2="$(OPENSOP_LOCAL_HOME="$_rh_tbr" "$cli" submit "$_rid_tbr" collect-report \
+  --outputs '{"title":7,"description":"Something broke","severity":"high"}' \
+  --decided-by test-agent --json 2>/dev/null)"
+set -e
+# After form submit, run is waiting at judgment step (unsupported) or failed — either way
+# the numeric title must NOT have crashed the form submit itself
+_tbr2_status="$(echo "$_m_tbr2" | jq -r '.status')"
+[ "$_tbr2_status" = "waiting" ] || [ "$_tbr2_status" = "failed" ] \
+  || [ "$_tbr2_status" = "completed" ] \
+  || { echo "FAIL: triage-bug-report form submit with numeric title gave unexpected status: $_tbr2_status"; exit 1; }
+# The form outputs must have been accepted (not a submit-level validation error)
+echo "$_m_tbr2" | jq -e 'has("error") | not' >/dev/null \
+  || { echo "FAIL: triage-bug-report form submit with numeric title rejected at validation"; exit 1; }
+rm -rf "$_rh_tbr"
+echo "PASS: triage-bug-report — numeric title accepted at form submission (no type-error crash)"
+
 # --------------------------------------------------------------------------- #
 # opensop pull — offline tests via OPENSOP_RECIPES_BASE=file://...            #
 # --------------------------------------------------------------------------- #
