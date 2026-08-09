@@ -11,10 +11,37 @@
       "type": "form",
       "description": "Enter the draft content details.",
       "fields": [
-        { "name": "title",   "type": "string", "required": true,  "description": "Content title" },
-        { "name": "channel", "type": "enum",   "required": true,  "values": ["blog", "newsletter", "social", "docs", "press"], "description": "Publication channel" },
-        { "name": "summary", "type": "string", "required": true,  "description": "One-paragraph summary of the content" },
-        { "name": "author",  "type": "string", "required": false, "description": "Content author (optional)" }
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "description": "Content title"
+        },
+        {
+          "name": "channel",
+          "type": "enum",
+          "required": true,
+          "values": [
+            "blog",
+            "newsletter",
+            "social",
+            "docs",
+            "press"
+          ],
+          "description": "Publication channel"
+        },
+        {
+          "name": "summary",
+          "type": "string",
+          "required": true,
+          "description": "One-paragraph summary of the content"
+        },
+        {
+          "name": "author",
+          "type": "string",
+          "required": false,
+          "description": "Content author (optional)"
+        }
       ]
     },
     {
@@ -28,12 +55,18 @@
       "id": "emit-publish-record",
       "type": "shell",
       "description": "Emit the publish record.",
-      "run": "jq -r '\n  \"## Publish Record\\n\" +\n  \"**Title:** \" + (.\"collect-draft\".title // \"(untitled)\") + \"\\n\" +\n  \"**Channel:** \" + (.\"collect-draft\".channel // \"?\") + \"\\n\" +\n  \"**Decision:** \" + (.\"editorial-approval\".decision // \"?\") + \"\\n\" +\n  \"**Publisher:** \" + (.inputs.publisher // \"Content Team\") +\n  if (.\"collect-draft\".author // \"\") != \"\" then\n    \"\\n**Author:** \" + .\"collect-draft\".author\n  else \"\" end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{publish_record: .}'"
+      "run": "jq -r '\n  if ((.\"editorial-approval\".decision) // \"approve\") == \"approve\" then\n    \"## Publish Record — APPROVED\\n\" +\n    \"**Title:** \" + (.\"collect-draft\".title // \"(untitled)\") + \"\\n\" +\n    \"**Channel:** \" + (.\"collect-draft\".channel // \"?\") + \"\\n\" +\n    \"**Decision:** approve\\n\" +\n    \"**Publisher:** \" + (.inputs.publisher // \"Content Team\")\n  else\n    \"## Publish Record — REJECTED (not published)\\n\" +\n    \"**Title:** \" + (.\"collect-draft\".title // \"(untitled)\") + \"\\n\" +\n    \"**Channel:** \" + (.\"collect-draft\".channel // \"?\") + \"\\n\" +\n    \"**Decision:** reject\\n\" +\n    \"Do NOT publish — editorial approval was rejected.\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{publish_record: .}'"
     }
   ],
   "recipe": {
     "source": "opensop/content-publish-approval",
     "install": "opensop pull opensop/content-publish-approval",
-    "tags": ["content", "publishing", "approval", "editorial", "marketing"]
+    "tags": [
+      "content",
+      "publishing",
+      "approval",
+      "editorial",
+      "marketing"
+    ]
   }
 }

@@ -6653,6 +6653,27 @@ lq_ok="$(OSL_LLM_STUB='{"outcome":"qualified","rationale":"good fit"}' OPENSOP_L
   || { echo "FAIL: lead-qualification valid enum outcome should complete, got $(echo "$lq_ok" | jq -r '.status')"; exit 1; }
 echo "PASS: lead-qualification — outcome enum enforced (out-of-enum fails, valid completes)"
 
+# --- release-checklist: release_ready must be gated on ALL four approvals — a
+#     single rejected gate must NOT produce a release-ready artifact. ---
+rc_recipe="$recipes_dir/release-checklist.sop.json"
+run_release_test() {  # args: 4 decisions (tests,changelog,docs,security) → echoes release_ready
+  local decs=("$@") m rid step i=0 rh
+  rh="$(mktemp -d)"
+  m="$(OPENSOP_LOCAL_HOME="$rh" "$cli" run "$rc_recipe" --input component=api --input version=1.0.0 --json 2>/dev/null)"
+  rid="$(echo "$m" | jq -r '.run_id')"; step="$(echo "$m" | jq -r '.waiting.step // empty')"
+  while [ -n "$step" ] && [ "$i" -lt 4 ]; do
+    m="$(OPENSOP_LOCAL_HOME="$rh" "$cli" submit "$rid" "$step" --output decision="${decs[$i]}" --json 2>/dev/null)"
+    step="$(echo "$m" | jq -r '.waiting.step // empty')"; i=$((i+1))
+  done
+  jq -r 'to_entries[]|select(.value|type=="object" and has("release_ready"))|.value.release_ready' "$rh/runs/$rid/context.json" 2>/dev/null
+  rm -rf "$rh"
+}
+[ "$(run_release_test approve approve approve approve)" = "true" ] \
+  || { echo "FAIL: release-checklist all-approve should yield release_ready=true"; exit 1; }
+[ "$(run_release_test approve reject approve approve)" = "false" ] \
+  || { echo "FAIL: release-checklist with a rejected gate must yield release_ready=false (false release-ready artifact)"; exit 1; }
+echo "PASS: release-checklist — release_ready gated on ALL approvals (any reject blocks it)"
+
 # --------------------------------------------------------------------------- #
 # opensop pull — offline tests via OPENSOP_RECIPES_BASE=file://...            #
 # --------------------------------------------------------------------------- #

@@ -44,12 +44,18 @@
       "id": "emit-summary",
       "type": "shell",
       "description": "Print a release-ready confirmation.",
-      "run": "jq -r '\"Release ready: \" + (.inputs.component // \"unknown\") + \" \" + (.inputs.version // \"?\")' <<< \"$OSL_CONTEXT\" | jq -Rs '{release_ready: true, message: (split(\"\\n\")[0])}'"
+      "run": "jq -c '\n  ([ .\"confirm-tests-pass\".decision, .\"confirm-changelog\".decision, .\"confirm-docs\".decision, .\"confirm-security\".decision ]\n    | all(. == \"approve\")) as $ready |\n  {\n    release_ready: $ready,\n    component: (.inputs.component // \"unknown\"),\n    version:   (.inputs.version // \"?\"),\n    message: (if $ready then \"All release gates approved — ready to release.\"\n              else \"Release BLOCKED — one or more gates were rejected.\" end),\n    gates: {\n      tests:     (.\"confirm-tests-pass\".decision // \"?\"),\n      changelog: (.\"confirm-changelog\".decision // \"?\"),\n      docs:      (.\"confirm-docs\".decision // \"?\"),\n      security:  (.\"confirm-security\".decision // \"?\")\n    }\n  }\n' <<< \"$OSL_CONTEXT\""
     }
   ],
   "recipe": {
     "source": "opensop/release-checklist",
     "install": "opensop pull opensop/release-checklist",
-    "tags": ["release", "checklist", "devops", "ci-cd", "quality-gates"]
+    "tags": [
+      "release",
+      "checklist",
+      "devops",
+      "ci-cd",
+      "quality-gates"
+    ]
   }
 }
