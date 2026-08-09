@@ -5,12 +5,34 @@
   "recipe": {
     "source": "opensop/email-spam-filter",
     "install": "opensop pull opensop/email-spam-filter",
-    "tags": ["email", "spam", "classification", "filter", "llm", "moderation"]
+    "tags": [
+      "email",
+      "spam",
+      "classification",
+      "filter",
+      "llm",
+      "moderation"
+    ]
   },
   "inputs": {
-    "sender": { "type": "string", "required": true, "description": "The From: address of the email." },
-    "subject": { "type": "string", "required": false, "default": "(no subject)", "description": "The email subject line." },
-    "body": { "type": "string", "required": true, "description": "The plain-text email body." }
+    "sender": {
+      "type": "string",
+      "required": false,
+      "default": "(unknown)",
+      "description": "The From: address."
+    },
+    "subject": {
+      "type": "string",
+      "required": false,
+      "default": "(no subject)",
+      "description": "The email subject line."
+    },
+    "body": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "The plain-text email body."
+    }
   },
   "steps": [
     {
@@ -19,9 +41,22 @@
       "model": "claude-haiku-4-5",
       "prompt": "You are an email spam classifier. Classify the email below. Respond with ONLY a JSON object with keys: \"label\" (exactly \"spam\" or \"ham\"), \"confidence\" (a number 0.0-1.0), and \"reason\" (one short sentence). Do not add any text outside the JSON.\n\nFrom: {{sender}}\nSubject: {{subject}}\n\n{{body}}",
       "expected_output_schema": {
-        "label": { "type": "enum", "values": ["spam", "ham"], "required": true },
-        "confidence": { "type": "number", "required": true },
-        "reason": { "type": "string", "required": true }
+        "label": {
+          "type": "enum",
+          "values": [
+            "spam",
+            "ham"
+          ],
+          "required": true
+        },
+        "confidence": {
+          "type": "number",
+          "required": true
+        },
+        "reason": {
+          "type": "string",
+          "required": true
+        }
       }
     },
     {

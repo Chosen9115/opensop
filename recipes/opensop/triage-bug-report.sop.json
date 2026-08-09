@@ -22,7 +22,8 @@
     },
     "title": {
       "type": "string",
-      "required": true,
+      "required": false,
+      "default": "(untitled)",
       "description": "Short bug title."
     },
     "severity": {
@@ -33,7 +34,8 @@
     },
     "description": {
       "type": "string",
-      "required": true,
+      "required": false,
+      "default": "",
       "description": "What happened / repro."
     },
     "component": {
