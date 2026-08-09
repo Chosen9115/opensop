@@ -6619,6 +6619,40 @@ for recipe_file in \
   echo "PASS: seed recipe passes dry-run: $(basename "$recipe_file")"
 done
 
+# --- meeting-action-items: malformed LLM items (numeric/array/null/missing/scalar)
+#     must COMPLETE with a NON-EMPTY artifact — never crash, never silently empty
+#     (defensive tostring formatting + set -o pipefail). Dry-run can't catch this. ---
+mai="$recipes_dir/meeting-action-items.sop.json"
+for stub in \
+    '{"items":[{"owner":7,"task":"ship"}]}' \
+    '{"items":[{"owner":"Al","task":["a","b"]}]}' \
+    '{"items":[null,{"owner":"Al","task":"real"}]}' \
+    '{"items":[{"owner":"Al"}]}' \
+    '{"items":["a bare string"]}'; do
+  mh="$(mktemp -d)"
+  mm="$(OSL_LLM_STUB="$stub" OPENSOP_LOCAL_HOME="$mh" "$cli" run "$mai" --input notes=x --input meeting_title=T --json 2>/dev/null)"
+  st="$(echo "$mm" | jq -r '.status')"; rid="$(echo "$mm" | jq -r '.run_id')"
+  art="$(jq -r 'to_entries[]|select(.value|type=="object" and has("action_items"))|.value.action_items' "$mh/runs/$rid/context.json" 2>/dev/null)"
+  rm -rf "$mh"
+  [ "$st" = "completed" ] \
+    || { echo "FAIL: meeting-action-items must complete on malformed items ($stub), got $st"; exit 1; }
+  [ -n "$art" ] \
+    || { echo "FAIL: meeting-action-items produced an EMPTY artifact on malformed items ($stub)"; exit 1; }
+done
+echo "PASS: meeting-action-items — malformed LLM items render non-empty (never crash or silently empty)"
+
+# --- lead-qualification: the outcome enum is runtime-enforced ---
+lq="$recipes_dir/lead-qualification.sop.json"
+set +e
+lq_bad="$(OSL_LLM_STUB='{"outcome":"uncertain","rationale":"x"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$lq" --input company=Acme --input budget=100k --input timeline=Q3 --input need=x --json 2>/dev/null)"
+set -e
+[ "$(echo "$lq_bad" | jq -r '.status')" = "failed" ] \
+  || { echo "FAIL: lead-qualification out-of-enum outcome should fail the run, got $(echo "$lq_bad" | jq -r '.status')"; exit 1; }
+lq_ok="$(OSL_LLM_STUB='{"outcome":"qualified","rationale":"good fit"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$lq" --input company=Acme --input budget=100k --input timeline=Q3 --input need=x --json 2>/dev/null)"
+[ "$(echo "$lq_ok" | jq -r '.status')" = "completed" ] \
+  || { echo "FAIL: lead-qualification valid enum outcome should complete, got $(echo "$lq_ok" | jq -r '.status')"; exit 1; }
+echo "PASS: lead-qualification — outcome enum enforced (out-of-enum fails, valid completes)"
+
 # --------------------------------------------------------------------------- #
 # opensop pull — offline tests via OPENSOP_RECIPES_BASE=file://...            #
 # --------------------------------------------------------------------------- #
