@@ -564,6 +564,67 @@ runs_after=$(ls "$OPENSOP_LOCAL_HOME/runs" 2>/dev/null | wc -l | tr -d ' ')
 echo "PASS: executor — pre-validates ALL steps before creating a run dir (no partial runs)"
 
 # --------------------------------------------------------------------------- #
+# SPEC §3.3 (#74): automated steps honor the script shebang and resolve declared
+# inputs[] (from: refs), merged OVER the context.
+# --------------------------------------------------------------------------- #
+# (1) an EXECUTABLE non-bash script runs via its shebang interpreter, not bash.
+if command -v python3 >/dev/null 2>&1; then
+  _sb_dir="$(mktemp -d)"; _sb_home="$(mktemp -d)"
+  cat > "$_sb_dir/emit.py" <<'PY'
+#!/usr/bin/env python3
+import json
+print(json.dumps({"lang": "python", "ok": True}))
+PY
+  chmod +x "$_sb_dir/emit.py"
+  cat > "$_sb_dir/p.sop.json" <<JSON
+{ "name": "shebang", "inputs": {}, "steps": [ { "id": "emit", "type": "automated", "run": "$_sb_dir/emit.py" } ] }
+JSON
+  _sb_rid="$(OPENSOP_LOCAL_HOME="$_sb_home" "$cli" run "$_sb_dir/p.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+  [ "$(jq -r '.emit.lang' "$_sb_home/runs/$_sb_rid/context.json" 2>/dev/null)" = "python" ] \
+    || { echo "FAIL: automated step did not honor the python shebang (forced through bash?)"; exit 1; }
+  rm -rf "$_sb_dir" "$_sb_home"
+  echo "PASS: automated — executable script runs via its shebang interpreter (SPEC §3.3)"
+else
+  echo "SKIP: shebang test — python3 not installed"
+fi
+
+# A non-executable shell script (no +x) still runs via bash (backward compat).
+_bx_dir="$(mktemp -d)"; _bx_home="$(mktemp -d)"
+echo 'echo "{\"ran\":\"bash\"}"' > "$_bx_dir/plain.sh"   # deliberately NOT chmod +x
+cat > "$_bx_dir/b.sop.json" <<JSON
+{ "name": "plainsh", "inputs": {}, "steps": [ { "id": "s", "type": "automated", "run": "$_bx_dir/plain.sh" } ] }
+JSON
+_bx_rid="$(OPENSOP_LOCAL_HOME="$_bx_home" "$cli" run "$_bx_dir/b.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+[ "$(jq -r '.s.ran' "$_bx_home/runs/$_bx_rid/context.json" 2>/dev/null)" = "bash" ] \
+  || { echo "FAIL: non-executable script should still run via bash"; exit 1; }
+rm -rf "$_bx_dir" "$_bx_home"
+echo "PASS: automated — non-executable script still runs via bash (backward compat)"
+
+# (2) declared inputs[] (from: refs) reach the script BY NAME, merged over the
+# context (a script that reaches .<step-id>.<output> still works).
+_di_dir="$(mktemp -d)"; _di_home="$(mktemp -d)"
+echo 'echo "{\"token\":\"secret\"}"' > "$_di_dir/emit.sh"
+echo "jq -c '{by_name: .token, by_step: .emit.token, city: .city}'" > "$_di_dir/consume.sh"
+cat > "$_di_dir/d.sop.json" <<JSON
+{ "name": "declared", "inputs": { "city": "Springfield" },
+  "steps": [
+    { "id": "emit", "type": "automated", "run": "$_di_dir/emit.sh" },
+    { "id": "consume", "type": "automated", "run": "$_di_dir/consume.sh",
+      "inputs": [ { "name": "token", "from": "steps.emit.outputs.token" },
+                  { "name": "city",  "from": "process.inputs.city" } ] } ] }
+JSON
+_di_rid="$(OPENSOP_LOCAL_HOME="$_di_home" "$cli" run "$_di_dir/d.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+_di_out="$(jq -c '.consume' "$_di_home/runs/$_di_rid/context.json" 2>/dev/null)"
+rm -rf "$_di_dir" "$_di_home"
+[ "$(echo "$_di_out" | jq -r '.by_name')" = "secret" ] \
+  || { echo "FAIL: declared input 'token' (steps.emit.outputs.token) not resolved by name: $_di_out"; exit 1; }
+[ "$(echo "$_di_out" | jq -r '.city')" = "Springfield" ] \
+  || { echo "FAIL: declared input 'city' (process.inputs.city) not resolved: $_di_out"; exit 1; }
+[ "$(echo "$_di_out" | jq -r '.by_step')" = "secret" ] \
+  || { echo "FAIL: merge dropped the step output (.emit.token) — existing scripts would break: $_di_out"; exit 1; }
+echo "PASS: automated — declared from: inputs resolve by name and merge over context (SPEC §3.3)"
+
+# --------------------------------------------------------------------------- #
 # `opensop list --conflicts` (post-v0.6 polish): when inside a cell, mark
 # the first occurrence of each filename as active and subsequent ones as
 # shadowed by the nearest cell that has it (PATH-style resolution preview).

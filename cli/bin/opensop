@@ -3199,6 +3199,38 @@ _local_step_loop() {
     s_started="$(_local_now)"; s_started_ms="$(_local_now_ms)"
     # C1a: per-step metrics; llm-specific fields are set inside the llm case below.
     local s_llm_model="" s_llm_tokens_in=0 s_llm_tokens_out=0 s_llm_token_source="none"
+
+    # SPEC §3.3: a script step receives its DECLARED inputs (resolved from prior
+    # step outputs / process inputs via each entry's `from:` reference). The local
+    # engine pipes the full accumulated context; we additionally resolve the
+    # declared inputs[] and merge them OVER that context, so a script can read its
+    # input by name (e.g. `.token`) while scripts that reach into
+    # `.<step-id>.<output>` keep working unchanged. Only applies to script steps.
+    local step_input_ctx="$ctx"
+    if [[ "$stype" == "automated" || "$stype" == "shell" ]]; then
+      local _decl_inputs; _decl_inputs="$(jq -c '.inputs // []' <<<"$step" 2>/dev/null || echo '[]')"
+      if [[ "$(jq 'if type=="array" then length else 0 end' <<<"$_decl_inputs" 2>/dev/null || echo 0)" -gt 0 ]]; then
+        step_input_ctx="$(jq -cn --argjson ctx "$ctx" --argjson inp "$_decl_inputs" '
+          # Resolve a from: reference against the run context. Supports
+          # steps.<id>.outputs.<field>, process.inputs.<field>, <id>.<field>
+          # shorthand, a bare ctx key, else the literal string.
+          def resolve_ref(ref; pctx):
+            if (ref | startswith("steps.")) and ((ref | split(".") | length) >= 4) then
+              (ref | split(".")) as $p | pctx[$p[1]][$p[3]]
+            elif (ref | startswith("process.inputs.")) then
+              (ref | split(".")) as $p | pctx[$p[2]]
+            elif (ref | test("^[a-zA-Z_][a-zA-Z0-9_-]*\\.[a-zA-Z_][a-zA-Z0-9_-]*$")) then
+              (ref | split(".")) as $p | pctx[$p[0]][$p[1]]
+            elif pctx[ref] != null then pctx[ref]
+            else ref end;
+          ($inp | map(select(.name != null and .from != null)
+                      | {key: .name, value: resolve_ref(.from; $ctx)})
+                | from_entries) as $resolved
+          | $ctx * $resolved
+        ' 2>/dev/null || echo "$ctx")"
+      fi
+    fi
+
     case "$stype" in
       automated)
         local script="$srun"
@@ -3209,10 +3241,18 @@ _local_step_loop() {
         # `|| rc=$?` is load-bearing: under `set -e` a bare `out_raw=$(failing)`
         # would abort the whole CLI here, before rc is read — killing the failure
         # receipt, manifest finalize, and continue_on_error. The `||` exempts it.
+        # SPEC §3.3: a script's interpreter is selected by its shebang. If the
+        # file is executable, invoke it directly so the shebang applies (Ruby,
+        # Python, etc.); otherwise fall back to bash (so shell scripts committed
+        # without +x keep working).
         if [ ! -f "$script" ]; then out_raw="step script not found: $script"; rc=127
-        else out_raw="$(OSL_CONTEXT="$ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" bash "$script" <<<"$ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$?; fi ;;
+        elif [ -x "$script" ]; then
+          out_raw="$(OSL_CONTEXT="$step_input_ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" "$script" <<<"$step_input_ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$?
+        else
+          out_raw="$(OSL_CONTEXT="$step_input_ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" bash "$script" <<<"$step_input_ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$?
+        fi ;;
       shell)
-        out_raw="$(OSL_CONTEXT="$ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" bash -c "$srun" <<<"$ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$? ;;
+        out_raw="$(OSL_CONTEXT="$step_input_ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" bash -c "$srun" <<<"$step_input_ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$? ;;
       noop) out_raw="{}"; rc=0 ;;
       form)
         # Pause — append a "waiting" receipt and return the waiting signal.
