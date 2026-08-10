@@ -3210,18 +3210,14 @@ _local_step_loop() {
     if [[ "$stype" == "automated" || "$stype" == "shell" ]]; then
       local _decl_inputs; _decl_inputs="$(jq -c '.inputs // []' <<<"$step" 2>/dev/null || echo '[]')"
       if [[ "$(jq 'if type=="array" then length else 0 end' <<<"$_decl_inputs" 2>/dev/null || echo 0)" -gt 0 ]]; then
-        # process.inputs.* must resolve against the run's INITIAL inputs (declared
-        # defaults over provided values), NOT the accumulated context — where a
-        # completed step is stored under its step id and could shadow or forge a
-        # process input. Recompute the initial-inputs namespace from the process
-        # file + the provided inputs recorded in the manifest (stable on resume).
+        # process.inputs.* resolves against the run's INITIAL inputs, NOT the
+        # accumulated context — where a completed step is stored under its step id
+        # and could shadow or forge a process input. The manifest records the
+        # normalized initial inputs (declared defaults over provided values) as an
+        # IMMUTABLE snapshot at run creation; read it directly. Never recompute
+        # from the process file, which can drift while a run is paused.
         local _proc_inputs
-        _proc_inputs="$(jq -c --argjson i "$(jq -c '.inputs // {}' "$run_dir/manifest.json" 2>/dev/null || echo '{}')" '
-          ((.inputs // {}) as $decl
-           | if ($decl | type) == "array"
-             then ($decl | map(select(.name != null and has("default"))) | map({(.name): .default}) | add // {})
-             else $decl end) * $i
-        ' "$proc_file" 2>/dev/null || echo '{}')"
+        _proc_inputs="$(jq -c '.inputs // {}' "$run_dir/manifest.json" 2>/dev/null || echo '{}')"
         local _resolved_pkg
         _resolved_pkg="$(jq -cn --argjson ctx "$ctx" --argjson proc_inp "$_proc_inputs" --argjson inp "$_decl_inputs" '
           # Resolve a from: reference against the run context. A FORMAL reference

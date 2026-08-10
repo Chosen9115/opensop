@@ -705,6 +705,28 @@ _ns_rid="$(OPENSOP_LOCAL_HOME="$_ns_home" "$cli" run "$_ns_dir/real.sop.json" --
 rm -rf "$_ns_dir" "$_ns_home"
 echo "PASS: automated — process.inputs.* resolves from initial inputs, isolated from step-id namespace"
 
+# (6) The initial-inputs namespace is an IMMUTABLE snapshot recorded in the manifest
+# at run creation. If a run pauses and its process FILE gains/changes a declared
+# default before resume, process.inputs.* must still resolve to the ORIGINAL value —
+# not the drifted file value. (Guards against recomputing inputs from the mutable
+# process file on resume.)
+_rz_dir="$(mktemp -d)"; _rz_home="$(mktemp -d)"
+echo 'jq -c "{val: .thing}"' > "$_rz_dir/use.sh"
+cat > "$_rz_dir/drift.sop.json" <<JSON
+{ "name": "resume-drift", "inputs": { "thing": "ORIGINAL" }, "steps": [
+  { "id": "gate", "type": "form", "inputs": [ { "name": "ok", "type": "string", "required": true } ] },
+  { "id": "use",  "type": "automated", "run": "$_rz_dir/use.sh",
+    "inputs": [ { "name": "thing", "from": "process.inputs.thing" } ] } ] }
+JSON
+_rz_rid="$(OPENSOP_LOCAL_HOME="$_rz_home" "$cli" run "$_rz_dir/drift.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+# process-file drift while the run is paused at 'gate'
+sed -i 's/"ORIGINAL"/"CHANGED"/' "$_rz_dir/drift.sop.json"
+OPENSOP_LOCAL_HOME="$_rz_home" "$cli" submit "$_rz_rid" gate --output ok=go --json >/dev/null 2>&1
+[ "$(jq -r '.use.val' "$_rz_home/runs/$_rz_rid/context.json" 2>/dev/null)" = "ORIGINAL" ] \
+  || { echo "FAIL: resumed process.inputs.thing must use the immutable manifest snapshot (ORIGINAL), not the drifted process-file value"; exit 1; }
+rm -rf "$_rz_dir" "$_rz_home"
+echo "PASS: automated — process.inputs.* uses the immutable manifest snapshot across pause/resume (no process-file drift)"
+
 # --------------------------------------------------------------------------- #
 # `opensop list --conflicts` (post-v0.6 polish): when inside a cell, mark
 # the first occurrence of each filename as active and subsequent ones as
