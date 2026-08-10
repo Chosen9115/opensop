@@ -3199,8 +3199,70 @@ _local_step_loop() {
     s_started="$(_local_now)"; s_started_ms="$(_local_now_ms)"
     # C1a: per-step metrics; llm-specific fields are set inside the llm case below.
     local s_llm_model="" s_llm_tokens_in=0 s_llm_tokens_out=0 s_llm_token_source="none"
+
+    # SPEC §3.3: a script step receives its DECLARED inputs (resolved from prior
+    # step outputs / process inputs via each entry's `from:` reference). The local
+    # engine pipes the full accumulated context; we additionally resolve the
+    # declared inputs[] and merge them OVER that context, so a script can read its
+    # input by name (e.g. `.token`) while scripts that reach into
+    # `.<step-id>.<output>` keep working unchanged. Only applies to script steps.
+    local step_input_ctx="$ctx" _decl_input_error=""
+    if [[ "$stype" == "automated" || "$stype" == "shell" ]]; then
+      local _decl_inputs; _decl_inputs="$(jq -c '.inputs // []' <<<"$step" 2>/dev/null || echo '[]')"
+      if [[ "$(jq 'if type=="array" then length else 0 end' <<<"$_decl_inputs" 2>/dev/null || echo 0)" -gt 0 ]]; then
+        # process.inputs.* resolves against the run's INITIAL inputs, NOT the
+        # accumulated context — where a completed step is stored under its step id
+        # and could shadow or forge a process input. The manifest records the
+        # normalized initial inputs (declared defaults over provided values) as an
+        # IMMUTABLE snapshot at run creation; read it directly. Never recompute
+        # from the process file, which can drift while a run is paused.
+        local _proc_inputs
+        _proc_inputs="$(jq -c '.inputs // {}' "$run_dir/manifest.json" 2>/dev/null || echo '{}')"
+        local _resolved_pkg
+        _resolved_pkg="$(jq -cn --argjson ctx "$ctx" --argjson proc_inp "$_proc_inputs" --argjson inp "$_decl_inputs" '
+          # Resolve a from: reference against the run context. A FORMAL reference
+          # (steps.<id>.outputs.<field>, process.inputs.<field>, <id>.<field>)
+          # must resolve to an EXISTING path — an absent path (forward reference,
+          # misspelled id, missing field/input) is unresolved and FAILS the step.
+          # An explicit null at a path that exists is a valid resolved value.
+          # A ref matching no formal shape is treated as a string literal.
+          def resolve(ref; pctx; pinp):
+            if (ref | startswith("steps.")) and ((ref|split(".")|length) >= 4) then
+              (ref|split(".")) as $p
+              | if (pctx|has($p[1])) and ((pctx[$p[1]]|type)=="object") and (pctx[$p[1]]|has($p[3]))
+                then {found:true, value: pctx[$p[1]][$p[3]]} else {found:false} end
+            elif (ref | startswith("process.inputs.")) and ((ref|split(".")|length) == 3) then
+              (ref|split(".")) as $p
+              | if (pinp|has($p[2])) then {found:true, value: pinp[$p[2]]} else {found:false} end
+            elif (ref | test("^[a-zA-Z_][a-zA-Z0-9_-]*\\.[a-zA-Z_][a-zA-Z0-9_-]*$")) then
+              (ref|split(".")) as $p
+              | if (pctx|has($p[0])) and ((pctx[$p[0]]|type)=="object") and (pctx[$p[0]]|has($p[1]))
+                then {found:true, value: pctx[$p[0]][$p[1]]} else {found:false} end
+            elif (pctx|has(ref)) then {found:true, value: pctx[ref]}
+            else {found:true, value: ref} end;
+          ($inp | map(select(.name != null and .from != null)
+                      | {name: .name, from: .from, r: resolve(.from; $ctx; $proc_inp)})) as $rs
+          | ($rs | map(select(.r.found | not) | .from)) as $unresolved
+          | if ($unresolved | length) > 0
+            then {error: ("unresolved input reference(s): " + ($unresolved | join(", ")))}
+            # Shallow overlay (+, not *): each declared input REPLACES the
+            # colliding top-level context key atomically — no deep merge that
+            # would leak stale nested fields from the context.
+            else {ctx: ($ctx + ($rs | map({key:.name, value:.r.value}) | from_entries))} end
+        ' 2>/dev/null || echo '{"ctx":null}')"
+        if [[ "$(jq -r 'has("error")' <<<"$_resolved_pkg" 2>/dev/null)" == "true" ]]; then
+          _decl_input_error="$(jq -r '.error' <<<"$_resolved_pkg")"
+        else
+          local _new_ctx; _new_ctx="$(jq -c '.ctx' <<<"$_resolved_pkg" 2>/dev/null)"
+          [[ -n "$_new_ctx" && "$_new_ctx" != "null" ]] && step_input_ctx="$_new_ctx"
+        fi
+      fi
+    fi
+
     case "$stype" in
       automated)
+        if [[ -n "$_decl_input_error" ]]; then out_raw="$_decl_input_error"; rc=1
+        else
         local script="$srun"
         if [[ "$script" = /* ]]; then :
         elif [ -f "$proc_dir/$script" ]; then script="$proc_dir/$script"
@@ -3209,10 +3271,20 @@ _local_step_loop() {
         # `|| rc=$?` is load-bearing: under `set -e` a bare `out_raw=$(failing)`
         # would abort the whole CLI here, before rc is read — killing the failure
         # receipt, manifest finalize, and continue_on_error. The `||` exempts it.
+        # SPEC §3.3: a script's interpreter is selected by its shebang. If the
+        # file is executable, invoke it directly so the shebang applies (Ruby,
+        # Python, etc.); otherwise fall back to bash (so shell scripts committed
+        # without +x keep working).
         if [ ! -f "$script" ]; then out_raw="step script not found: $script"; rc=127
-        else out_raw="$(OSL_CONTEXT="$ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" bash "$script" <<<"$ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$?; fi ;;
+        elif [ -x "$script" ]; then
+          out_raw="$(OSL_CONTEXT="$step_input_ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" "$script" <<<"$step_input_ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$?
+        else
+          out_raw="$(OSL_CONTEXT="$step_input_ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" bash "$script" <<<"$step_input_ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$?
+        fi
+        fi ;;
       shell)
-        out_raw="$(OSL_CONTEXT="$ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" bash -c "$srun" <<<"$ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$? ;;
+        if [[ -n "$_decl_input_error" ]]; then out_raw="$_decl_input_error"; rc=1
+        else out_raw="$(OSL_CONTEXT="$step_input_ctx" OSL_RUN_DIR="$run_dir" OSL_STEP="$sid" bash -c "$srun" <<<"$step_input_ctx" 2>>"$run_dir/$sid.stderr.log")" || rc=$?; fi ;;
       noop) out_raw="{}"; rc=0 ;;
       form)
         # Pause — append a "waiting" receipt and return the waiting signal.

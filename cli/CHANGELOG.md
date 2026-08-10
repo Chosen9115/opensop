@@ -9,6 +9,10 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Fixed
+
+- **Local `automated` steps now match SPEC §3.3 (#74).** (1) The script shebang is honored: an executable step script runs via its own interpreter (Ruby, Python, …) instead of being forced through `bash` — the repo's own `.rb` example steps (`processes/examples/steps/*.rb`) now run locally. Non-executable scripts still run via `bash` (backward compatible). (2) A step's declared `inputs[]` (`from:` references to `steps.<id>.outputs.<field>` or `process.inputs.<field>`) are now resolved and merged OVER the accumulated context before piping, so a script can read its declared input by name while scripts that reach into `.<step-id>.<output>` keep working unchanged. +3 regression tests.
+
 ### Added
 
 - **7 new seed recipes** under `recipes/opensop/`: `lead-qualification`, `meeting-action-items`, `incident-postmortem`, `pr-review-gate`, `customer-onboarding`, `content-publish-approval`, `weekly-status-digest`. All pass `opensop dry-run` and use only safe step types (form, judgment, approval, llm, shell with echo/jq only).

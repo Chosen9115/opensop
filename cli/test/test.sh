@@ -564,6 +564,170 @@ runs_after=$(ls "$OPENSOP_LOCAL_HOME/runs" 2>/dev/null | wc -l | tr -d ' ')
 echo "PASS: executor — pre-validates ALL steps before creating a run dir (no partial runs)"
 
 # --------------------------------------------------------------------------- #
+# SPEC §3.3 (#74): automated steps honor the script shebang and resolve declared
+# inputs[] (from: refs), merged OVER the context.
+# --------------------------------------------------------------------------- #
+# (1) an EXECUTABLE non-bash script runs via its shebang interpreter, not bash.
+if command -v python3 >/dev/null 2>&1; then
+  _sb_dir="$(mktemp -d)"; _sb_home="$(mktemp -d)"
+  cat > "$_sb_dir/emit.py" <<'PY'
+#!/usr/bin/env python3
+import json
+print(json.dumps({"lang": "python", "ok": True}))
+PY
+  chmod +x "$_sb_dir/emit.py"
+  cat > "$_sb_dir/p.sop.json" <<JSON
+{ "name": "shebang", "inputs": {}, "steps": [ { "id": "emit", "type": "automated", "run": "$_sb_dir/emit.py" } ] }
+JSON
+  _sb_rid="$(OPENSOP_LOCAL_HOME="$_sb_home" "$cli" run "$_sb_dir/p.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+  [ "$(jq -r '.emit.lang' "$_sb_home/runs/$_sb_rid/context.json" 2>/dev/null)" = "python" ] \
+    || { echo "FAIL: automated step did not honor the python shebang (forced through bash?)"; exit 1; }
+  rm -rf "$_sb_dir" "$_sb_home"
+  echo "PASS: automated — executable script runs via its shebang interpreter (SPEC §3.3)"
+else
+  echo "SKIP: shebang test — python3 not installed"
+fi
+
+# A non-executable shell script (no +x) still runs via bash (backward compat).
+_bx_dir="$(mktemp -d)"; _bx_home="$(mktemp -d)"
+echo 'echo "{\"ran\":\"bash\"}"' > "$_bx_dir/plain.sh"   # deliberately NOT chmod +x
+cat > "$_bx_dir/b.sop.json" <<JSON
+{ "name": "plainsh", "inputs": {}, "steps": [ { "id": "s", "type": "automated", "run": "$_bx_dir/plain.sh" } ] }
+JSON
+_bx_rid="$(OPENSOP_LOCAL_HOME="$_bx_home" "$cli" run "$_bx_dir/b.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+[ "$(jq -r '.s.ran' "$_bx_home/runs/$_bx_rid/context.json" 2>/dev/null)" = "bash" ] \
+  || { echo "FAIL: non-executable script should still run via bash"; exit 1; }
+rm -rf "$_bx_dir" "$_bx_home"
+echo "PASS: automated — non-executable script still runs via bash (backward compat)"
+
+# (2) declared inputs[] (from: refs) reach the script BY NAME, merged over the
+# context (a script that reaches .<step-id>.<output> still works).
+_di_dir="$(mktemp -d)"; _di_home="$(mktemp -d)"
+echo 'echo "{\"token\":\"secret\"}"' > "$_di_dir/emit.sh"
+echo "jq -c '{by_name: .token, by_step: .emit.token, city: .city}'" > "$_di_dir/consume.sh"
+cat > "$_di_dir/d.sop.json" <<JSON
+{ "name": "declared", "inputs": { "city": "Springfield" },
+  "steps": [
+    { "id": "emit", "type": "automated", "run": "$_di_dir/emit.sh" },
+    { "id": "consume", "type": "automated", "run": "$_di_dir/consume.sh",
+      "inputs": [ { "name": "token", "from": "steps.emit.outputs.token" },
+                  { "name": "city",  "from": "process.inputs.city" } ] } ] }
+JSON
+_di_rid="$(OPENSOP_LOCAL_HOME="$_di_home" "$cli" run "$_di_dir/d.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+_di_out="$(jq -c '.consume' "$_di_home/runs/$_di_rid/context.json" 2>/dev/null)"
+rm -rf "$_di_dir" "$_di_home"
+[ "$(echo "$_di_out" | jq -r '.by_name')" = "secret" ] \
+  || { echo "FAIL: declared input 'token' (steps.emit.outputs.token) not resolved by name: $_di_out"; exit 1; }
+[ "$(echo "$_di_out" | jq -r '.city')" = "Springfield" ] \
+  || { echo "FAIL: declared input 'city' (process.inputs.city) not resolved: $_di_out"; exit 1; }
+[ "$(echo "$_di_out" | jq -r '.by_step')" = "secret" ] \
+  || { echo "FAIL: merge dropped the step output (.emit.token) — existing scripts would break: $_di_out"; exit 1; }
+echo "PASS: automated — declared from: inputs resolve by name and merge over context (SPEC §3.3)"
+
+# (3) an UNRESOLVED formal reference (typo / forward ref / missing input) FAILS
+# the step — the script is NOT executed with a null value.
+_ur_dir="$(mktemp -d)"; _ur_home="$(mktemp -d)"
+echo 'echo "{\"token\":\"secret\"}"' > "$_ur_dir/emit.sh"
+# side-effecting script: if it runs, it drops a marker file
+printf 'echo "{\\"ran\\":true}" > "%s/MARKER"; echo "{\\"did\\":\\"run\\"}"\n' "$_ur_dir" > "$_ur_dir/side.sh"
+cat > "$_ur_dir/bad.sop.json" <<JSON
+{ "name": "unresolved", "inputs": {}, "steps": [
+  { "id": "emit", "type": "automated", "run": "$_ur_dir/emit.sh" },
+  { "id": "consume", "type": "automated", "run": "$_ur_dir/side.sh",
+    "inputs": [ { "name": "t", "from": "steps.emit.outputs.tokne" } ] } ] }
+JSON
+set +e
+_ur_status="$(OPENSOP_LOCAL_HOME="$_ur_home" "$cli" run "$_ur_dir/bad.sop.json" --json 2>/dev/null | jq -r '.status')"
+set -e
+[ "$_ur_status" = "failed" ] \
+  || { echo "FAIL: an unresolved from: reference (typo) should FAIL the step, got $_ur_status"; exit 1; }
+[ ! -f "$_ur_dir/MARKER" ] \
+  || { echo "FAIL: the step's script ran despite an unresolved input reference (side effect occurred)"; exit 1; }
+# a missing process input also fails
+cat > "$_ur_dir/miss.sop.json" <<JSON
+{ "name": "missinp", "inputs": {}, "steps": [ { "id": "c", "type": "automated", "run": "$_ur_dir/emit.sh",
+  "inputs": [ { "name": "x", "from": "process.inputs.nope" } ] } ] }
+JSON
+set +e
+_miss_status="$(OPENSOP_LOCAL_HOME="$_ur_home" "$cli" run "$_ur_dir/miss.sop.json" --json 2>/dev/null | jq -r '.status')"
+set -e
+[ "$_miss_status" = "failed" ] \
+  || { echo "FAIL: a missing process.inputs reference should FAIL the step, got $_miss_status"; exit 1; }
+rm -rf "$_ur_dir" "$_ur_home"
+echo "PASS: automated — unresolved from: reference fails the step (no null-value execution)"
+
+# (4) a declared input that resolves to an object REPLACES the colliding context
+# key (shallow overlay) — no stale nested field leaks through.
+_ov_dir="$(mktemp -d)"; _ov_home="$(mktemp -d)"
+echo 'echo "{\"cfg\":{\"safe\":\"new\"}}"' > "$_ov_dir/newcfg.sh"
+echo 'jq -c "{cfg: .cfg}"' > "$_ov_dir/read.sh"
+cat > "$_ov_dir/o.sop.json" <<JSON
+{ "name": "overlay", "inputs": { "cfg": { "secret": "leaked", "safe": "old" } },
+  "steps": [
+    { "id": "newcfg", "type": "automated", "run": "$_ov_dir/newcfg.sh" },
+    { "id": "use", "type": "automated", "run": "$_ov_dir/read.sh",
+      "inputs": [ { "name": "cfg", "from": "steps.newcfg.outputs.cfg" } ] } ] }
+JSON
+_ov_rid="$(OPENSOP_LOCAL_HOME="$_ov_home" "$cli" run "$_ov_dir/o.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+jq -e '.use.cfg == {"safe":"new"}' "$_ov_home/runs/$_ov_rid/context.json" >/dev/null 2>&1 \
+  || { echo "FAIL: declared object input should REPLACE the colliding context key (shallow), got $(jq -c '.use.cfg' "$_ov_home/runs/$_ov_rid/context.json" 2>/dev/null)"; exit 1; }
+rm -rf "$_ov_dir" "$_ov_home"
+echo "PASS: automated — declared object input replaces the context key (shallow overlay, no stale-field leak)"
+
+# (5) process.inputs.* resolves from the run's INITIAL inputs, not the accumulated
+# context: a step whose id matches an input name must not shadow/forge a process
+# input, and a real process input still resolves even if a later step reuses the name.
+_ns_dir="$(mktemp -d)"; _ns_home="$(mktemp -d)"
+echo 'echo "{\"token\":\"STEP-OUTPUT\"}"' > "$_ns_dir/token.sh"
+echo 'jq -c "{x: .x}"' > "$_ns_dir/use.sh"
+# (a) no such process input; a step named 'token' must NOT satisfy process.inputs.token
+cat > "$_ns_dir/collide.sop.json" <<JSON
+{ "name": "collide", "inputs": {}, "steps": [
+  { "id": "token", "type": "automated", "run": "$_ns_dir/token.sh" },
+  { "id": "use", "type": "automated", "run": "$_ns_dir/use.sh",
+    "inputs": [ { "name": "x", "from": "process.inputs.token" } ] } ] }
+JSON
+set +e
+_ns_status="$(OPENSOP_LOCAL_HOME="$_ns_home" "$cli" run "$_ns_dir/collide.sop.json" --json 2>/dev/null | jq -r '.status')"
+set -e
+[ "$_ns_status" = "failed" ] \
+  || { echo "FAIL: process.inputs.token must not resolve to a step named 'token' (namespace leak), got $_ns_status"; exit 1; }
+# (b) a real process input of the same name still resolves to the INPUT
+cat > "$_ns_dir/real.sop.json" <<JSON
+{ "name": "real", "inputs": { "token": "REAL-INPUT" }, "steps": [
+  { "id": "token", "type": "automated", "run": "$_ns_dir/token.sh" },
+  { "id": "use", "type": "automated", "run": "$_ns_dir/use.sh",
+    "inputs": [ { "name": "x", "from": "process.inputs.token" } ] } ] }
+JSON
+_ns_rid="$(OPENSOP_LOCAL_HOME="$_ns_home" "$cli" run "$_ns_dir/real.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+[ "$(jq -r '.use.x' "$_ns_home/runs/$_ns_rid/context.json" 2>/dev/null)" = "REAL-INPUT" ] \
+  || { echo "FAIL: process.inputs.token should resolve to the process input, not the step output"; exit 1; }
+rm -rf "$_ns_dir" "$_ns_home"
+echo "PASS: automated — process.inputs.* resolves from initial inputs, isolated from step-id namespace"
+
+# (6) The initial-inputs namespace is an IMMUTABLE snapshot recorded in the manifest
+# at run creation. If a run pauses and its process FILE gains/changes a declared
+# default before resume, process.inputs.* must still resolve to the ORIGINAL value —
+# not the drifted file value. (Guards against recomputing inputs from the mutable
+# process file on resume.)
+_rz_dir="$(mktemp -d)"; _rz_home="$(mktemp -d)"
+echo 'jq -c "{val: .thing}"' > "$_rz_dir/use.sh"
+cat > "$_rz_dir/drift.sop.json" <<JSON
+{ "name": "resume-drift", "inputs": { "thing": "ORIGINAL" }, "steps": [
+  { "id": "gate", "type": "form", "inputs": [ { "name": "ok", "type": "string", "required": true } ] },
+  { "id": "use",  "type": "automated", "run": "$_rz_dir/use.sh",
+    "inputs": [ { "name": "thing", "from": "process.inputs.thing" } ] } ] }
+JSON
+_rz_rid="$(OPENSOP_LOCAL_HOME="$_rz_home" "$cli" run "$_rz_dir/drift.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+# process-file drift while the run is paused at 'gate'
+sed -i 's/"ORIGINAL"/"CHANGED"/' "$_rz_dir/drift.sop.json"
+OPENSOP_LOCAL_HOME="$_rz_home" "$cli" submit "$_rz_rid" gate --output ok=go --json >/dev/null 2>&1
+[ "$(jq -r '.use.val' "$_rz_home/runs/$_rz_rid/context.json" 2>/dev/null)" = "ORIGINAL" ] \
+  || { echo "FAIL: resumed process.inputs.thing must use the immutable manifest snapshot (ORIGINAL), not the drifted process-file value"; exit 1; }
+rm -rf "$_rz_dir" "$_rz_home"
+echo "PASS: automated — process.inputs.* uses the immutable manifest snapshot across pause/resume (no process-file drift)"
+
+# --------------------------------------------------------------------------- #
 # `opensop list --conflicts` (post-v0.6 polish): when inside a cell, mark
 # the first occurrence of each filename as active and subsequent ones as
 # shadowed by the nearest cell that has it (PATH-style resolution preview).
