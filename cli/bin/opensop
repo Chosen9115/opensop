@@ -3210,22 +3210,34 @@ _local_step_loop() {
     if [[ "$stype" == "automated" || "$stype" == "shell" ]]; then
       local _decl_inputs; _decl_inputs="$(jq -c '.inputs // []' <<<"$step" 2>/dev/null || echo '[]')"
       if [[ "$(jq 'if type=="array" then length else 0 end' <<<"$_decl_inputs" 2>/dev/null || echo 0)" -gt 0 ]]; then
+        # process.inputs.* must resolve against the run's INITIAL inputs (declared
+        # defaults over provided values), NOT the accumulated context — where a
+        # completed step is stored under its step id and could shadow or forge a
+        # process input. Recompute the initial-inputs namespace from the process
+        # file + the provided inputs recorded in the manifest (stable on resume).
+        local _proc_inputs
+        _proc_inputs="$(jq -c --argjson i "$(jq -c '.inputs // {}' "$run_dir/manifest.json" 2>/dev/null || echo '{}')" '
+          ((.inputs // {}) as $decl
+           | if ($decl | type) == "array"
+             then ($decl | map(select(.name != null and has("default"))) | map({(.name): .default}) | add // {})
+             else $decl end) * $i
+        ' "$proc_file" 2>/dev/null || echo '{}')"
         local _resolved_pkg
-        _resolved_pkg="$(jq -cn --argjson ctx "$ctx" --argjson inp "$_decl_inputs" '
+        _resolved_pkg="$(jq -cn --argjson ctx "$ctx" --argjson proc_inp "$_proc_inputs" --argjson inp "$_decl_inputs" '
           # Resolve a from: reference against the run context. A FORMAL reference
           # (steps.<id>.outputs.<field>, process.inputs.<field>, <id>.<field>)
           # must resolve to an EXISTING path — an absent path (forward reference,
           # misspelled id, missing field/input) is unresolved and FAILS the step.
           # An explicit null at a path that exists is a valid resolved value.
           # A ref matching no formal shape is treated as a string literal.
-          def resolve(ref; pctx):
+          def resolve(ref; pctx; pinp):
             if (ref | startswith("steps.")) and ((ref|split(".")|length) >= 4) then
               (ref|split(".")) as $p
               | if (pctx|has($p[1])) and ((pctx[$p[1]]|type)=="object") and (pctx[$p[1]]|has($p[3]))
                 then {found:true, value: pctx[$p[1]][$p[3]]} else {found:false} end
             elif (ref | startswith("process.inputs.")) and ((ref|split(".")|length) == 3) then
               (ref|split(".")) as $p
-              | if (pctx|has($p[2])) then {found:true, value: pctx[$p[2]]} else {found:false} end
+              | if (pinp|has($p[2])) then {found:true, value: pinp[$p[2]]} else {found:false} end
             elif (ref | test("^[a-zA-Z_][a-zA-Z0-9_-]*\\.[a-zA-Z_][a-zA-Z0-9_-]*$")) then
               (ref|split(".")) as $p
               | if (pctx|has($p[0])) and ((pctx[$p[0]]|type)=="object") and (pctx[$p[0]]|has($p[1]))
@@ -3233,7 +3245,7 @@ _local_step_loop() {
             elif (pctx|has(ref)) then {found:true, value: pctx[ref]}
             else {found:true, value: ref} end;
           ($inp | map(select(.name != null and .from != null)
-                      | {name: .name, from: .from, r: resolve(.from; $ctx)})) as $rs
+                      | {name: .name, from: .from, r: resolve(.from; $ctx; $proc_inp)})) as $rs
           | ($rs | map(select(.r.found | not) | .from)) as $unresolved
           | if ($unresolved | length) > 0
             then {error: ("unresolved input reference(s): " + ($unresolved | join(", ")))}

@@ -674,6 +674,37 @@ jq -e '.use.cfg == {"safe":"new"}' "$_ov_home/runs/$_ov_rid/context.json" >/dev/
 rm -rf "$_ov_dir" "$_ov_home"
 echo "PASS: automated — declared object input replaces the context key (shallow overlay, no stale-field leak)"
 
+# (5) process.inputs.* resolves from the run's INITIAL inputs, not the accumulated
+# context: a step whose id matches an input name must not shadow/forge a process
+# input, and a real process input still resolves even if a later step reuses the name.
+_ns_dir="$(mktemp -d)"; _ns_home="$(mktemp -d)"
+echo 'echo "{\"token\":\"STEP-OUTPUT\"}"' > "$_ns_dir/token.sh"
+echo 'jq -c "{x: .x}"' > "$_ns_dir/use.sh"
+# (a) no such process input; a step named 'token' must NOT satisfy process.inputs.token
+cat > "$_ns_dir/collide.sop.json" <<JSON
+{ "name": "collide", "inputs": {}, "steps": [
+  { "id": "token", "type": "automated", "run": "$_ns_dir/token.sh" },
+  { "id": "use", "type": "automated", "run": "$_ns_dir/use.sh",
+    "inputs": [ { "name": "x", "from": "process.inputs.token" } ] } ] }
+JSON
+set +e
+_ns_status="$(OPENSOP_LOCAL_HOME="$_ns_home" "$cli" run "$_ns_dir/collide.sop.json" --json 2>/dev/null | jq -r '.status')"
+set -e
+[ "$_ns_status" = "failed" ] \
+  || { echo "FAIL: process.inputs.token must not resolve to a step named 'token' (namespace leak), got $_ns_status"; exit 1; }
+# (b) a real process input of the same name still resolves to the INPUT
+cat > "$_ns_dir/real.sop.json" <<JSON
+{ "name": "real", "inputs": { "token": "REAL-INPUT" }, "steps": [
+  { "id": "token", "type": "automated", "run": "$_ns_dir/token.sh" },
+  { "id": "use", "type": "automated", "run": "$_ns_dir/use.sh",
+    "inputs": [ { "name": "x", "from": "process.inputs.token" } ] } ] }
+JSON
+_ns_rid="$(OPENSOP_LOCAL_HOME="$_ns_home" "$cli" run "$_ns_dir/real.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+[ "$(jq -r '.use.x' "$_ns_home/runs/$_ns_rid/context.json" 2>/dev/null)" = "REAL-INPUT" ] \
+  || { echo "FAIL: process.inputs.token should resolve to the process input, not the step output"; exit 1; }
+rm -rf "$_ns_dir" "$_ns_home"
+echo "PASS: automated — process.inputs.* resolves from initial inputs, isolated from step-id namespace"
+
 # --------------------------------------------------------------------------- #
 # `opensop list --conflicts` (post-v0.6 polish): when inside a cell, mark
 # the first occurrence of each filename as active and subsequent ones as
