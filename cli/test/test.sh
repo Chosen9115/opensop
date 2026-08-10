@@ -624,6 +624,56 @@ rm -rf "$_di_dir" "$_di_home"
   || { echo "FAIL: merge dropped the step output (.emit.token) — existing scripts would break: $_di_out"; exit 1; }
 echo "PASS: automated — declared from: inputs resolve by name and merge over context (SPEC §3.3)"
 
+# (3) an UNRESOLVED formal reference (typo / forward ref / missing input) FAILS
+# the step — the script is NOT executed with a null value.
+_ur_dir="$(mktemp -d)"; _ur_home="$(mktemp -d)"
+echo 'echo "{\"token\":\"secret\"}"' > "$_ur_dir/emit.sh"
+# side-effecting script: if it runs, it drops a marker file
+printf 'echo "{\\"ran\\":true}" > "%s/MARKER"; echo "{\\"did\\":\\"run\\"}"\n' "$_ur_dir" > "$_ur_dir/side.sh"
+cat > "$_ur_dir/bad.sop.json" <<JSON
+{ "name": "unresolved", "inputs": {}, "steps": [
+  { "id": "emit", "type": "automated", "run": "$_ur_dir/emit.sh" },
+  { "id": "consume", "type": "automated", "run": "$_ur_dir/side.sh",
+    "inputs": [ { "name": "t", "from": "steps.emit.outputs.tokne" } ] } ] }
+JSON
+set +e
+_ur_status="$(OPENSOP_LOCAL_HOME="$_ur_home" "$cli" run "$_ur_dir/bad.sop.json" --json 2>/dev/null | jq -r '.status')"
+set -e
+[ "$_ur_status" = "failed" ] \
+  || { echo "FAIL: an unresolved from: reference (typo) should FAIL the step, got $_ur_status"; exit 1; }
+[ ! -f "$_ur_dir/MARKER" ] \
+  || { echo "FAIL: the step's script ran despite an unresolved input reference (side effect occurred)"; exit 1; }
+# a missing process input also fails
+cat > "$_ur_dir/miss.sop.json" <<JSON
+{ "name": "missinp", "inputs": {}, "steps": [ { "id": "c", "type": "automated", "run": "$_ur_dir/emit.sh",
+  "inputs": [ { "name": "x", "from": "process.inputs.nope" } ] } ] }
+JSON
+set +e
+_miss_status="$(OPENSOP_LOCAL_HOME="$_ur_home" "$cli" run "$_ur_dir/miss.sop.json" --json 2>/dev/null | jq -r '.status')"
+set -e
+[ "$_miss_status" = "failed" ] \
+  || { echo "FAIL: a missing process.inputs reference should FAIL the step, got $_miss_status"; exit 1; }
+rm -rf "$_ur_dir" "$_ur_home"
+echo "PASS: automated — unresolved from: reference fails the step (no null-value execution)"
+
+# (4) a declared input that resolves to an object REPLACES the colliding context
+# key (shallow overlay) — no stale nested field leaks through.
+_ov_dir="$(mktemp -d)"; _ov_home="$(mktemp -d)"
+echo 'echo "{\"cfg\":{\"safe\":\"new\"}}"' > "$_ov_dir/newcfg.sh"
+echo 'jq -c "{cfg: .cfg}"' > "$_ov_dir/read.sh"
+cat > "$_ov_dir/o.sop.json" <<JSON
+{ "name": "overlay", "inputs": { "cfg": { "secret": "leaked", "safe": "old" } },
+  "steps": [
+    { "id": "newcfg", "type": "automated", "run": "$_ov_dir/newcfg.sh" },
+    { "id": "use", "type": "automated", "run": "$_ov_dir/read.sh",
+      "inputs": [ { "name": "cfg", "from": "steps.newcfg.outputs.cfg" } ] } ] }
+JSON
+_ov_rid="$(OPENSOP_LOCAL_HOME="$_ov_home" "$cli" run "$_ov_dir/o.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+jq -e '.use.cfg == {"safe":"new"}' "$_ov_home/runs/$_ov_rid/context.json" >/dev/null 2>&1 \
+  || { echo "FAIL: declared object input should REPLACE the colliding context key (shallow), got $(jq -c '.use.cfg' "$_ov_home/runs/$_ov_rid/context.json" 2>/dev/null)"; exit 1; }
+rm -rf "$_ov_dir" "$_ov_home"
+echo "PASS: automated — declared object input replaces the context key (shallow overlay, no stale-field leak)"
+
 # --------------------------------------------------------------------------- #
 # `opensop list --conflicts` (post-v0.6 polish): when inside a cell, mark
 # the first occurrence of each filename as active and subsequent ones as
