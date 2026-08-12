@@ -4289,31 +4289,21 @@ $llm_rendered_prompt"
 
 # _local_continue_parent <child_run_dir>
 #
-# Called after a child run reaches a terminal state (completed or failed).
-# If the child manifest has a parent_run_id, drives the parent forward:
-#   - On child completed: merges child's final context into parent context under
-#     the parent_step_id, appends a completed audit receipt for that step, then
-#     re-enters _local_step_loop from (parent_step_index + 1) onward.
-#   - On child failed: appends a failed audit receipt for the parent step and
-#     flips the parent manifest to failed (no downstream steps run).
-#   - Recursion: when the resumed parent itself reaches a terminal state and the
-#     parent has its own parent_run_id, recurses so failures and completions walk
-#     all the way up to the root (grandparent→greatgrandparent, etc.).
-#   - Idempotency: a durable completion marker file (.sp-cont-<step>.done) is
-#     written ONLY after ALL state is committed.  A concurrent short-lived lock
-#     dir serialises concurrent calls; it is released on function return.
-#     Partial failures (lock released, no .done) are re-attempted on next submit.
-#   - Snapshot required: the parent's process.snapshot.json MUST exist.  If it is
-#     absent or unreadable the parent is failed closed — the mutable process_file
-#     is never executed here.
-#   - Durability boundary: the .done marker + waiting-step guard provide
-#     normal-operation idempotency (duplicate submits, concurrent calls).
-#     A SIGKILL between the manifest flip and the .done write can leave a run
-#     in 'running' state with no live worker — recoverable only by the same
-#     means as any other interrupted local run (i.e. re-submitting or using
-#     `opensop heal`).  The local engine is best-effort, same posture as a
-#     Makefile; full crash-consistency across all mutation points would require
-#     an engine-wide explicit resumable state machine (out of scope here).
+# Public entry point.  Acquires the per-step concurrency lock for ONE
+# (parent_step) continuation, delegates all logic to _local_continue_parent_body,
+# then releases the lock explicitly — on both success and failure — so the lock
+# is NEVER leaked across recursive calls.
+#
+# Recursion flows through this wrapper (not the body directly), so each level of
+# the grandparent→greatgrandparent chain acquires and releases its OWN lock with
+# its own path.  The inner lock is therefore always released before the outer
+# invocation exits, which means the outer RETURN trap is NOT needed and is NOT
+# used.  This eliminates the bash RETURN-trap replacement bug: in bash the RETURN
+# trap is a single global string — a recursive call overwrites the outer
+# invocation's trap, causing the outer lock to leak.
+#
+# See _local_continue_parent_body for behavioral contract (Cases A/B/C, .done
+# marker, idempotency, fail-closed-on-missing-snapshot, failure cascade).
 #
 _local_continue_parent() {
   local child_run_dir="$1"
@@ -4334,31 +4324,75 @@ _local_continue_parent() {
   local parent_mf="$parent_run_dir/manifest.json"
   [ -f "$parent_mf" ] || return 0
 
-  # --- Durable idempotency guard (fix #2) ---
+  # --- Durable idempotency guard ---
   # Written ONLY after all mutations are committed (at the very end of each
-  # terminal path).  If present, this continuation already fully completed.
+  # terminal path in the body).  If present, this continuation already fully
+  # completed — skip without acquiring the lock.
   local _done_marker="$parent_run_dir/.sp-cont-$parent_step_id.done"
   [[ -f "$_done_marker" ]] && return 0
 
-  # --- Short-lived concurrency lock (fix #2) ---
-  # Serialises concurrent calls; released via trap on RETURN regardless of how
-  # this function exits.  A second concurrent caller sees the lock and returns;
-  # after the first finishes it either wrote .done (skip on next retry) or not
-  # (re-attempt is safe because all mutations are idempotent or guarded).
+  # --- Short-lived concurrency lock ---
+  # Serialises concurrent calls for this specific (parent_run_id, parent_step_id)
+  # pair.  Acquired here in the wrapper; released explicitly after the body
+  # returns.  No trap — explicit release guarantees the lock is freed even under
+  # recursion without clobbering another invocation's trap.
   local _lock_dir="$parent_run_dir/.sp-cont-$parent_step_id.lock"
   mkdir "$_lock_dir" 2>/dev/null || return 0
-  # shellcheck disable=SC2064
-  trap "rmdir '$_lock_dir' 2>/dev/null || true" RETURN
 
-  # Three-way precondition branch (Fix 1 — cascade-retry-safe):
-  #
-  #   A) parent is waiting at this step   → full continuation (normal path).
-  #   B) parent is already terminal       → .done was absent, meaning a prior
-  #      attempt finalized this level but its grandparent cascade did not
-  #      durably complete.  Re-run ONLY the cascade so the grandparent is
-  #      walked and .done is written; do NOT re-merge/re-append/re-resume
-  #      (the parent is already terminal and those mutations must not repeat).
-  #   C) anything else (running, etc.)    → deferred crash case; leave as-is.
+  local _body_rc=0
+  _local_continue_parent_body \
+    "$child_run_dir" "$parent_run_dir" "$parent_run_id" \
+    "$parent_step_id" "$parent_step_index" \
+    "$parent_mf" "$_done_marker" || _body_rc=$?
+
+  rmdir "$_lock_dir" 2>/dev/null || true   # ALWAYS release, every exit path
+  return "$_body_rc"
+}
+
+# _local_continue_parent_body <child_run_dir> <parent_run_dir> <parent_run_id>
+#                              <parent_step_id> <parent_step_index>
+#                              <parent_mf> <done_marker>
+#
+# Implements the continuation logic.  Called only from _local_continue_parent
+# (the wrapper), which owns the concurrency lock.  Recursion uses the PUBLIC
+# wrapper so each ancestor level gets its own acquire/release.
+#
+# Behavioral contract (unchanged from before the lock restructure):
+#   - Idempotency: a durable completion marker file (.sp-cont-<step>.done) is
+#     written ONLY after ALL state is committed.
+#   - Snapshot required: the parent's process.snapshot.json MUST exist.  If it is
+#     absent or unreadable the parent is failed closed — the mutable process_file
+#     is never executed here.
+#   - Durability boundary: the .done marker + waiting-step guard provide
+#     normal-operation idempotency (duplicate submits, concurrent calls).
+#     A SIGKILL between the manifest flip and the .done write can leave a run
+#     in 'running' state with no live worker — recoverable only by the same
+#     means as any other interrupted local run (i.e. re-submitting or using
+#     `opensop heal`).  The local engine is best-effort, same posture as a
+#     Makefile; full crash-consistency across all mutation points would require
+#     an engine-wide explicit resumable state machine (out of scope here).
+#
+# Three-way precondition branch (Fix 1 — cascade-retry-safe):
+#
+#   A) parent is waiting at this step   → full continuation (normal path).
+#   B) parent is already terminal       → .done was absent, meaning a prior
+#      attempt finalized this level but its grandparent cascade did not
+#      durably complete.  Re-run ONLY the cascade so the grandparent is
+#      walked and .done is written; do NOT re-merge/re-append/re-resume
+#      (the parent is already terminal and those mutations must not repeat).
+#   C) anything else (running, etc.)    → deferred crash case; leave as-is.
+#
+_local_continue_parent_body() {
+  local child_run_dir="$1"
+  local parent_run_dir="$2"
+  local parent_run_id="$3"
+  local parent_step_id="$4"
+  local parent_step_index="$5"
+  local parent_mf="$6"
+  local _done_marker="$7"
+
+  local child_mf="$child_run_dir/manifest.json"
+
   local parent_status; parent_status="$(jq -r '.status' "$parent_mf")"
   local parent_waiting_step; parent_waiting_step="$(jq -r '.waiting.step // ""' "$parent_mf")"
 
@@ -4575,6 +4609,7 @@ _local_continue_parent() {
 
       # Fix #1: cascade terminal state upward — failed OR completed must both recurse.
       # Fix A: if cascade fails, leave no .done so caller retries.
+      # Recursion goes through the PUBLIC wrapper so the grandparent gets its own lock.
       _local_continue_parent "$parent_run_dir" || return 1
 
       # Write .done only after cascade returns successfully, so grandparent cascade is
@@ -4605,6 +4640,7 @@ _local_continue_parent() {
 
     # Cascade: walk failure up to any grandparent (#107 fix #1).
     # Fix A: if cascade fails, leave no .done so caller retries.
+    # Recursion goes through the PUBLIC wrapper so the grandparent gets its own lock.
     _local_continue_parent "$parent_run_dir" || return 1
 
     touch "$_done_marker" || true  # best-effort

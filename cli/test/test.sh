@@ -3461,6 +3461,159 @@ u8c6_receipts_2="$(jq -s '[.[] | select(.step=="call_child" and (.status=="compl
   || { echo "FAIL: u8c-6 — duplicate receipt after retry! expected 1, got $u8c6_receipts_2"; exit 1; }
 echo "PASS: u8c-6 — fail-closed idempotent receipt: exactly 1 terminal receipt after retry (Fix 2 guard active)"
 
+# -----------------------------------------------------------------------
+# U8c-7: No .sp-cont-*.lock leaks under recursion (#107 structural fix).
+#
+# Background: the original _local_continue_parent used a bash RETURN trap
+# to release the concurrency lock.  Bash's RETURN trap is a single global
+# string — a recursive call overwrites the outer invocation's trap so the
+# outer lock path is never cleaned up.  The fix splits the function into a
+# wrapper (acquires/releases lock explicitly, no trap) and a body (does the
+# work; recurses through the wrapper so each level gets its own lock).
+#
+# This test verifies the fix: after a full 3-level cascade runs through
+# recursion, NO .sp-cont-*.lock directories remain at any level, and
+# a subsequent submit (retry of an artificially stranded grandparent) still
+# drives the root to completed.
+#
+# Scenario:
+#   grandparent: [subprocess(parent), gp_noop]
+#     parent:    [subprocess(child), p_noop]
+#       child:   [gate(form), done(noop)]
+#
+# Step 1: full cascade — submit child gate → all 3 levels complete.
+# Step 2: assert no .sp-cont-*.lock dirs at any level.
+# Step 3: simulate stranded grandparent (remove .done files, reset GP
+#         manifest to waiting) and re-drive via a trampoline — assert GP
+#         completes and still no locks leak.
+# -----------------------------------------------------------------------
+u8c7_dir="$OPENSOP_LOCAL_HOME/u8c7-no-lock-leak"
+mkdir -p "$u8c7_dir"
+
+cat > "$u8c7_dir/u8c7_child.sop.json" <<'JSON'
+{
+  "name": "u8c7-child",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "val", "type": "string", "required": true }] },
+    { "id": "done", "type": "noop" }
+  ]
+}
+JSON
+
+jq -n --arg d "$u8c7_dir" '{
+  "name": "u8c7-parent",
+  "inputs": {},
+  "steps": [
+    { "id": "call_child", "type": "subprocess",
+      "process": ($d + "/u8c7_child.sop.json") },
+    { "id": "p_noop", "type": "noop" }
+  ]
+}' > "$u8c7_dir/u8c7_parent.sop.json"
+
+jq -n --arg d "$u8c7_dir" '{
+  "name": "u8c7-grandparent",
+  "inputs": {},
+  "steps": [
+    { "id": "call_parent", "type": "subprocess",
+      "process": ($d + "/u8c7_parent.sop.json") },
+    { "id": "gp_noop", "type": "noop" }
+  ]
+}' > "$u8c7_dir/u8c7_grandparent.sop.json"
+
+# --- Step 1: run grandparent, submit child gate, drive full 3-level cascade ---
+set +e
+u8c7_gp_out="$("$cli" run "$u8c7_dir/u8c7_grandparent.sop.json" --local --json)"; u8c7_gp_rc=$?
+set -e
+[ "$u8c7_gp_rc" -eq 0 ] \
+  || { echo "FAIL: u8c-7 — grandparent initial run should exit 0, got $u8c7_gp_rc"; exit 1; }
+
+u8c7_gprid="$(jq -r '.run_id' <<<"$u8c7_gp_out")"
+u8c7_p_run_dir="$(readlink -f "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid/subprocess/call_parent/"* 2>/dev/null | head -1)"
+u8c7_prid="$(basename "$u8c7_p_run_dir")"
+u8c7_c_run_dir="$(readlink -f "$OPENSOP_LOCAL_HOME/runs/$u8c7_prid/subprocess/call_child/"* 2>/dev/null | head -1)"
+u8c7_crid="$(basename "$u8c7_c_run_dir")"
+
+set +e
+"$cli" submit "$u8c7_crid" gate --local --output val=ok --json >/dev/null 2>&1; u8c7_sub_rc=$?
+set -e
+[ "$u8c7_sub_rc" -eq 0 ] \
+  || { echo "FAIL: u8c-7 — child gate submit should exit 0, got $u8c7_sub_rc"; exit 1; }
+
+# All 3 levels must be completed.
+u8c7_gp_final="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid/manifest.json")"
+u8c7_p_final="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$u8c7_prid/manifest.json")"
+[ "$u8c7_gp_final" = "completed" ] \
+  || { echo "FAIL: u8c-7 — grandparent should be completed, got $u8c7_gp_final"; exit 1; }
+[ "$u8c7_p_final" = "completed" ] \
+  || { echo "FAIL: u8c-7 — parent should be completed, got $u8c7_p_final"; exit 1; }
+echo "PASS: u8c-7 — 3-level cascade completes normally"
+
+# --- Step 2: assert NO .sp-cont-*.lock dirs exist at any level after normal cascade ---
+# The wrapper releases the lock explicitly (no trap), so none should remain.
+u8c7_locks_after_cascade="$(find "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid" \
+    "$OPENSOP_LOCAL_HOME/runs/$u8c7_prid" \
+    "$OPENSOP_LOCAL_HOME/runs/$u8c7_crid" \
+  -name '.sp-cont-*.lock' -type d 2>/dev/null | wc -l | tr -d ' ')"
+[ "$u8c7_locks_after_cascade" -eq 0 ] \
+  || { echo "FAIL: u8c-7 — lock leak after normal cascade: $u8c7_locks_after_cascade lock dir(s) remain"; \
+       find "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid" \
+            "$OPENSOP_LOCAL_HOME/runs/$u8c7_prid" \
+            "$OPENSOP_LOCAL_HOME/runs/$u8c7_crid" \
+         -name '.sp-cont-*.lock' -type d 2>/dev/null; exit 1; }
+echo "PASS: u8c-7 — no .sp-cont-*.lock dirs remain after normal 3-level cascade (no trap leak)"
+
+# --- Step 3: simulate stranded grandparent + re-drive via trampoline; assert no lock leak ---
+# Remove parent-level .done and GP-level .done, reset GP manifest to waiting.
+u8c7_p_done="$OPENSOP_LOCAL_HOME/runs/$u8c7_prid/.sp-cont-call_child.done"
+u8c7_gp_done="$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid/.sp-cont-call_parent.done"
+rm -f "$u8c7_p_done" "$u8c7_gp_done"
+jq -c '.status="waiting"
+  | .waiting={"step":"call_parent","index":0,"reason":"waiting_for_callback",
+               "since":"2000-01-01T00:00:00Z","expects":{"outputs":[],"schema":[]}}' \
+  "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid/manifest.json" \
+  > "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid/manifest.json.tmp" \
+  && mv "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid/manifest.json.tmp" \
+        "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid/manifest.json"
+
+u8c7_bin_nosrc="$u8c7_dir/opensop_nosrc"
+grep -v '^main "\$@"$' "$cli" > "$u8c7_bin_nosrc"
+
+u8c7_trampoline="$u8c7_dir/u8c7_trampoline.sh"
+cat > "$u8c7_trampoline" <<TRAMP7
+#!/usr/bin/env bash
+set -euo pipefail
+export OPENSOP_LOCAL_HOME="$OPENSOP_LOCAL_HOME"
+# shellcheck disable=SC1090
+source "$u8c7_bin_nosrc"
+_local_continue_parent "$u8c7_c_run_dir"
+TRAMP7
+chmod +x "$u8c7_trampoline"
+
+set +e
+bash "$u8c7_trampoline" >/dev/null 2>&1; u8c7_tramp_rc=$?
+set -e
+
+# Assert grandparent is completed after the re-drive.
+u8c7_gp_retry="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid/manifest.json")"
+[ "$u8c7_gp_retry" = "completed" ] \
+  || { echo "FAIL: u8c-7 — grandparent should be completed after retry, got $u8c7_gp_retry"; exit 1; }
+echo "PASS: u8c-7 — grandparent completed after stranded-GP retry via trampoline"
+
+# The critical check: NO lock dirs remain after the recursive re-drive.
+u8c7_locks_after_retry="$(find "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid" \
+    "$OPENSOP_LOCAL_HOME/runs/$u8c7_prid" \
+    "$OPENSOP_LOCAL_HOME/runs/$u8c7_crid" \
+  -name '.sp-cont-*.lock' -type d 2>/dev/null | wc -l | tr -d ' ')"
+[ "$u8c7_locks_after_retry" -eq 0 ] \
+  || { echo "FAIL: u8c-7 — lock leak after recursive re-drive: $u8c7_locks_after_retry lock dir(s) remain"; \
+       find "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid" \
+            "$OPENSOP_LOCAL_HOME/runs/$u8c7_prid" \
+            "$OPENSOP_LOCAL_HOME/runs/$u8c7_crid" \
+         -name '.sp-cont-*.lock' -type d 2>/dev/null; exit 1; }
+echo "PASS: u8c-7 — no .sp-cont-*.lock dirs remain after recursive re-drive (wrapper/body lock fix verified)"
+
 # --------------------------------------------------------------------------- #
 # U9: Webhook punch-list fixes (HIGH/SECURITY assertions)
 # --------------------------------------------------------------------------- #
