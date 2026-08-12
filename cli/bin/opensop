@@ -4091,6 +4091,9 @@ $llm_rendered_prompt"
           # process_dir is recorded so resume/heal can resolve relative scripts
           # even if the original child file is later moved or deleted (#101 gap 3).
           # started_at_ms provides millisecond precision for total wall-time computation.
+          # parent_run_id / parent_step_id / parent_step_index are stamped so that
+          # _local_continue_parent can walk back to the parent after the child
+          # completes, driving the parent forward automatically (#107).
           jq -nc \
             --arg n "$sp_child_name" \
             --arg p "$sp_child_file" \
@@ -4099,7 +4102,11 @@ $llm_rendered_prompt"
             --arg t "$sp_child_started" \
             --argjson sms "$sp_child_started_ms" \
             --argjson inp "$sp_child_ctx" \
-            '{run_id:$id, process:$n, process_file:$p, process_dir:$d, started_at:$t, started_at_ms:$sms, status:"running", inputs:$inp}' \
+            --arg prid "$run_id" \
+            --arg psid "$sid" \
+            --argjson pidx "$i" \
+            '{run_id:$id, process:$n, process_file:$p, process_dir:$d, started_at:$t, started_at_ms:$sms, status:"running", inputs:$inp,
+              parent_run_id:$prid, parent_step_id:$psid, parent_step_index:$pidx}' \
             > "$sp_child_run_dir/manifest.json"
 
           # Run the child step loop directly (reuse _local_step_loop, no subshell overhead).
@@ -4278,6 +4285,378 @@ $llm_rendered_prompt"
   done
 
   echo "completed"
+}
+
+# _local_continue_parent <child_run_dir>
+#
+# Public entry point.  Acquires the per-step concurrency lock for ONE
+# (parent_step) continuation, delegates all logic to _local_continue_parent_body,
+# then releases the lock explicitly — on both success and failure — so the lock
+# is NEVER leaked across recursive calls.
+#
+# Recursion flows through this wrapper (not the body directly), so each level of
+# the grandparent→greatgrandparent chain acquires and releases its OWN lock with
+# its own path.  The inner lock is therefore always released before the outer
+# invocation exits, which means the outer RETURN trap is NOT needed and is NOT
+# used.  This eliminates the bash RETURN-trap replacement bug: in bash the RETURN
+# trap is a single global string — a recursive call overwrites the outer
+# invocation's trap, causing the outer lock to leak.
+#
+# See _local_continue_parent_body for behavioral contract (Cases A/B/C, .done
+# marker, idempotency, fail-closed-on-missing-snapshot, failure cascade).
+#
+_local_continue_parent() {
+  local child_run_dir="$1"
+  local child_mf="$child_run_dir/manifest.json"
+  [ -f "$child_mf" ] || return 0
+
+  # If no parent linkage, nothing to do (this is a top-level run).
+  local parent_run_id; parent_run_id="$(jq -r '.parent_run_id // ""' "$child_mf")"
+  [[ -n "$parent_run_id" ]] || return 0
+
+  local parent_step_id; parent_step_id="$(jq -r '.parent_step_id // ""' "$child_mf")"
+  local parent_step_index; parent_step_index="$(jq -r '.parent_step_index // ""' "$child_mf")"
+  [[ -n "$parent_step_id" && -n "$parent_step_index" ]] || return 0
+
+  local parent_run_dir="$OPENSOP_LOCAL_HOME/runs/$parent_run_id"
+  [ -d "$parent_run_dir" ] || return 0
+
+  local parent_mf="$parent_run_dir/manifest.json"
+  [ -f "$parent_mf" ] || return 0
+
+  # --- Durable idempotency guard ---
+  # Written ONLY after all mutations are committed (at the very end of each
+  # terminal path in the body).  If present, this continuation already fully
+  # completed — skip without acquiring the lock.
+  local _done_marker="$parent_run_dir/.sp-cont-$parent_step_id.done"
+  [[ -f "$_done_marker" ]] && return 0
+
+  # --- Short-lived concurrency lock ---
+  # Serialises concurrent calls for this specific (parent_run_id, parent_step_id)
+  # pair.  Acquired here in the wrapper; released explicitly after the body
+  # returns.  No trap — explicit release guarantees the lock is freed even under
+  # recursion without clobbering another invocation's trap.
+  local _lock_dir="$parent_run_dir/.sp-cont-$parent_step_id.lock"
+  if ! mkdir "$_lock_dir" 2>/dev/null; then
+    # Distinguish EXPECTED contention (the lock dir already exists → another
+    # continuation for this exact (parent_run, step) is in flight; safe no-op)
+    # from a GENUINE acquisition error (permission / missing path / fs) — the
+    # latter must not be silently swallowed as success, or the parent could be
+    # left waiting with no surfaced error. (Concurrent-owner-fails recovery is a
+    # best-effort-durability concern tracked engine-wide in #109.)
+    [[ -d "$_lock_dir" ]] && return 0
+    warn "subprocess continuation: cannot acquire lock at $_lock_dir — parent run $parent_run_id may remain waiting"
+    return 1
+  fi
+
+  local _body_rc=0
+  _local_continue_parent_body \
+    "$child_run_dir" "$parent_run_dir" "$parent_run_id" \
+    "$parent_step_id" "$parent_step_index" \
+    "$parent_mf" "$_done_marker" || _body_rc=$?
+
+  rmdir "$_lock_dir" 2>/dev/null || true   # ALWAYS release, every exit path
+  return "$_body_rc"
+}
+
+# _local_continue_parent_body <child_run_dir> <parent_run_dir> <parent_run_id>
+#                              <parent_step_id> <parent_step_index>
+#                              <parent_mf> <done_marker>
+#
+# Implements the continuation logic.  Called only from _local_continue_parent
+# (the wrapper), which owns the concurrency lock.  Recursion uses the PUBLIC
+# wrapper so each ancestor level gets its own acquire/release.
+#
+# Behavioral contract (unchanged from before the lock restructure):
+#   - Idempotency: a durable completion marker file (.sp-cont-<step>.done) is
+#     written ONLY after ALL state is committed.
+#   - Snapshot required: the parent's process.snapshot.json MUST exist.  If it is
+#     absent or unreadable the parent is failed closed — the mutable process_file
+#     is never executed here.
+#   - Durability boundary: the .done marker + waiting-step guard provide
+#     normal-operation idempotency (duplicate submits, concurrent calls).
+#     A SIGKILL between the manifest flip and the .done write can leave a run
+#     in 'running' state with no live worker — recoverable only by the same
+#     means as any other interrupted local run (i.e. re-submitting or using
+#     `opensop heal`).  The local engine is best-effort, same posture as a
+#     Makefile; full crash-consistency across all mutation points would require
+#     an engine-wide explicit resumable state machine (out of scope here).
+#
+# Three-way precondition branch (Fix 1 — cascade-retry-safe):
+#
+#   A) parent is waiting at this step   → full continuation (normal path).
+#   B) parent is already terminal       → .done was absent, meaning a prior
+#      attempt finalized this level but its grandparent cascade did not
+#      durably complete.  Re-run ONLY the cascade so the grandparent is
+#      walked and .done is written; do NOT re-merge/re-append/re-resume
+#      (the parent is already terminal and those mutations must not repeat).
+#   C) anything else (running, etc.)    → deferred crash case; leave as-is.
+#
+_local_continue_parent_body() {
+  local child_run_dir="$1"
+  local parent_run_dir="$2"
+  local parent_run_id="$3"
+  local parent_step_id="$4"
+  local parent_step_index="$5"
+  local parent_mf="$6"
+  local _done_marker="$7"
+
+  local child_mf="$child_run_dir/manifest.json"
+
+  local parent_status; parent_status="$(jq -r '.status' "$parent_mf")"
+  local parent_waiting_step; parent_waiting_step="$(jq -r '.waiting.step // ""' "$parent_mf")"
+
+  if [[ "$parent_status" == "waiting" && "$parent_waiting_step" == "$parent_step_id" ]]; then
+    : # Case A — fall through to the full continuation logic below.
+  elif [[ "$parent_status" == "completed" || "$parent_status" == "failed" ]]; then
+    # Case B — parent is terminal but .done is absent: a previous attempt
+    # finalized this level and then the grandparent cascade failed.  Re-drive
+    # the cascade only; the parent itself must not be touched again.
+    _local_continue_parent "$parent_run_dir" || return 1  # cascade failed — leave no .done
+    touch "$_done_marker" || true  # best-effort
+    return 0
+  else
+    # Case C — parent is in an unexpected transient state (e.g. running).
+    return 0
+  fi
+
+  local child_status; child_status="$(jq -r '.status' "$child_mf")"
+  local parent_audit="$parent_run_dir/audit.jsonl"
+  local cont_now; cont_now="$(_local_now)"
+  local cont_now_ms; cont_now_ms="$(_local_now_ms)"
+
+  # --- Helper: finalize parent manifest to a terminal state ---
+  # Sets status, ended_at, duration_ms; strips waiting/cursor on failure.
+  _cont_finalize_manifest() {
+    local _status="$1" _strip_waiting="${2:-}"
+    local _p_ended; _p_ended="$(_local_now)"
+    local _p_now_ms; _p_now_ms="$(_local_now_ms)"
+    local _p_total_ms
+    _p_total_ms="$(jq -r --argjson now_ms "$_p_now_ms" '
+      if .started_at_ms != null and (.started_at_ms | type) == "number" then
+        ($now_ms - .started_at_ms) | if . < 0 then 0 else . end
+      elif .started_at != null and (.started_at | type) == "string" and (.started_at | . != "") then
+        ($now_ms - ((.started_at | fromdateiso8601) * 1000 | floor)) | if . < 0 then 0 else . end
+      else
+        null
+      end
+    ' "$parent_mf" 2>/dev/null)" || _p_total_ms="null"
+    [[ -z "$_p_total_ms" ]] && _p_total_ms="null"
+    local _jq_expr='.status=$s | .ended_at=$e | .duration_ms=$dur'
+    [[ -n "$_strip_waiting" ]] && _jq_expr+=' | del(.waiting) | del(.cursor)'
+    jq -c --arg s "$_status" --arg e "$_p_ended" --argjson dur "$_p_total_ms" \
+       "$_jq_expr" \
+       "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf"
+  }
+
+  if [[ "$child_status" == "completed" ]]; then
+    # --- Fix #3: require process.snapshot.json; fail closed if absent. ---
+    local parent_snap_file="$parent_run_dir/process.snapshot.json"
+    if [[ ! -f "$parent_snap_file" ]]; then
+      # Snapshot missing — fail the parent closed; never fall back to mutable process_file.
+      # Fix A: check every required write; do NOT write .done if any write fails.
+      # Fix 2 — idempotent receipt: apply the same terminal-receipt guard used by
+      # the completed and child-failed branches so a retry after a partial write
+      # does not produce a duplicate failed receipt.
+      local _snap_existing_terminal
+      _snap_existing_terminal="$(jq -s --arg sid "$parent_step_id" \
+        'any(.[]; .step==$sid and (.status=="completed" or .status=="failed"))' \
+        "$parent_audit" 2>/dev/null)" || _snap_existing_terminal="false"
+      if [[ "$_snap_existing_terminal" != "true" ]]; then
+        jq -nc \
+          --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
+          --arg a "$cont_now" --arg b "$cont_now" \
+          '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"failed",
+            exit_code:1, started_at:$a, ended_at:$b, duration_ms:0, result_hash:"unavailable",
+            output:{error:"process.snapshot.json missing — cannot resume parent (fail-closed)"}}' \
+          >> "$parent_audit" || return 1  # write failed — leave no .done
+      fi
+      _cont_finalize_manifest "failed" "strip" || return 1  # write failed — leave no .done
+      # Cascade failure upward before writing .done.
+      _local_continue_parent "$parent_run_dir" || return 1  # cascade failed — leave no .done
+      touch "$_done_marker" || true  # best-effort; idempotency guard may miss on next call but safe
+      return 0
+    fi
+
+    # --- Read child's final context — that whole object is the subprocess step output ---
+    local child_final_ctx
+    if [[ -f "$child_run_dir/context.json" ]]; then
+      child_final_ctx="$(cat "$child_run_dir/context.json")"
+    else
+      child_final_ctx="$(jq -c '.inputs // {}' "$child_mf")"
+    fi
+
+    # Normalise (must be an object, not a scalar).
+    local child_out_json
+    if jq -e 'type=="object"' <<<"$child_final_ctx" >/dev/null 2>&1; then
+      child_out_json="$child_final_ctx"
+    else
+      child_out_json="$(jq -nc --argjson v "$child_final_ctx" '{value:$v}')"
+    fi
+
+    # Merge child output into parent context under parent_step_id (atomic write).
+    local parent_ctx
+    if [[ -f "$parent_run_dir/context.json" ]]; then
+      parent_ctx="$(cat "$parent_run_dir/context.json")"
+    else
+      parent_ctx="$(jq -c '.inputs // {}' "$parent_mf")"
+    fi
+    parent_ctx="$(jq -c --arg id "$parent_step_id" --argjson o "$child_out_json" '.[$id]=$o' <<<"$parent_ctx")"
+    printf '%s' "$parent_ctx" > "$parent_run_dir/context.json.tmp" \
+      && mv "$parent_run_dir/context.json.tmp" "$parent_run_dir/context.json" \
+      || return 1  # write failed — leave no .done so a retry can recover
+
+    # Compute result_hash for the audit receipt.
+    local _cont_canon cont_result_hash
+    _cont_canon="$(jq -Sc . <<<"$child_out_json" 2>/dev/null)" || _cont_canon=""
+    cont_result_hash="$(printf '%s' "$_cont_canon" | _sha256 2>/dev/null || true)"
+    cont_result_hash="${cont_result_hash:0:64}"
+    [[ -z "$cont_result_hash" ]] && cont_result_hash="unavailable"
+
+    # Append a completed audit receipt for the subprocess step in the parent run.
+    # Guard: only append when the parent is still waiting at this step (idempotency
+    # on retry — if .done is absent but manifest already progressed, skip the append).
+    local _cur_status; _cur_status="$(jq -r '.status' "$parent_mf")"
+    local _cur_waiting; _cur_waiting="$(jq -r '.waiting.step // ""' "$parent_mf")"
+    # Fix B: idempotent receipt — skip append if a terminal receipt already exists for this
+    # parent_step_id (prevents duplicate receipts on retry when .done is absent but
+    # manifest already advanced past this step).
+    local _existing_completed
+    _existing_completed="$(jq -s --arg sid "$parent_step_id" \
+      'any(.[]; .step==$sid and (.status=="completed" or .status=="failed"))' \
+      "$parent_audit" 2>/dev/null)" || _existing_completed="false"
+    if [[ "$_cur_status" == "waiting" && "$_cur_waiting" == "$parent_step_id" && "$_existing_completed" != "true" ]]; then
+      jq -nc \
+        --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
+        --arg a "$cont_now" --arg b "$cont_now" \
+        --argjson out "$child_out_json" \
+        --arg rh "$cont_result_hash" \
+        '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"completed",
+          exit_code:0, started_at:$a, ended_at:$b, duration_ms:0, result_hash:$rh, output:$out}' \
+        >> "$parent_audit" || return 1  # write failed — leave no .done
+    fi
+
+    # Flip parent manifest back to running (clear waiting/cursor) so _local_step_loop
+    # can re-enter it cleanly.
+    jq -c '.status="running" | del(.waiting) | del(.cursor)' \
+      "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf" \
+      || return 1  # write failed — leave no .done
+
+    # Resolve proc_dir from snapshot (snapshot is guaranteed present at this point — fix #3).
+    local parent_proc_file parent_proc_dir
+    parent_proc_file="$parent_snap_file"
+    local _pmdir; _pmdir="$(jq -r '.process_dir // ""' "$parent_mf")"
+    local parent_orig_proc_file; parent_orig_proc_file="$(jq -r '.process_file // ""' "$parent_mf")"
+    if [[ -n "$_pmdir" && -d "$_pmdir" ]]; then
+      parent_proc_dir="$_pmdir"
+    else
+      parent_proc_dir="$(cd "$(dirname "$parent_orig_proc_file")" 2>/dev/null && pwd \
+        || dirname "$parent_orig_proc_file")"
+    fi
+
+    local resume_from=$(( parent_step_index + 1 ))
+
+    # Re-enter the parent step loop from the step after the subprocess.
+    local parent_loop_status
+    parent_loop_status="$(_local_step_loop \
+      "$parent_run_dir" "$parent_proc_file" "$resume_from" "$parent_ctx" "$parent_proc_dir")"
+
+    local parent_run_status
+    case "$parent_loop_status" in
+      completed) parent_run_status="completed" ;;
+      failed)    parent_run_status="failed" ;;
+      waiting:*) parent_run_status="waiting" ;;
+      *)         parent_run_status="failed" ;;
+    esac
+
+    [ -f "$parent_run_dir/context.json" ] || printf '%s' "$parent_ctx" > "$parent_run_dir/context.json"
+
+    if [[ "$parent_run_status" == "waiting" ]]; then
+      # Parent paused again at another step — finalize its manifest as waiting.
+      local p_wait_idx2; p_wait_idx2="${parent_loop_status#waiting:}"
+      local p_wait_step2 p_wait_since2
+      p_wait_step2="$(jq -r ".steps[$p_wait_idx2].id // \"step-$p_wait_idx2\"" "$parent_proc_file")"
+      p_wait_since2="$(_local_now)"
+      local p_wait_expects2
+      p_wait_expects2="$(jq -c --argjson idx "$p_wait_idx2" '
+        .steps[$idx] as $s |
+        ($s.inputs // $s.outputs // null) as $decl |
+        if $decl != null and ($decl | length) > 0 then
+          { outputs: [$decl[].name // empty],
+            schema:  $decl }
+        elif $s.type == "approval" then
+          { outputs: ["decision"],
+            schema:  [{"name":"decision","type":"enum","values":["approve","reject"],"required":true}] }
+        else
+          { outputs: [], schema: [] }
+        end
+      ' "$parent_proc_file")"
+      local p_wait_stype2 p_wait_reason2
+      p_wait_stype2="$(jq -r ".steps[$p_wait_idx2].type // \"automated\"" "$parent_proc_file")"
+      case "$p_wait_stype2" in
+        form)     p_wait_reason2="waiting_for_input" ;;
+        approval) p_wait_reason2="waiting_for_approval" ;;
+        *)        p_wait_reason2="waiting_for_callback" ;;
+      esac
+      jq -c --arg s "waiting" \
+            --argjson idx "$((p_wait_idx2 + 1))" \
+            --argjson widx "$p_wait_idx2" \
+            --arg step "$p_wait_step2" \
+            --arg reason "$p_wait_reason2" \
+            --arg since "$p_wait_since2" \
+            --argjson expects "$p_wait_expects2" \
+         '.status=$s
+          | .cursor={next_index:$idx}
+          | .waiting={step:$step, index:$widx, reason:$reason, expects:$expects, since:$since}' \
+         "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf" \
+         || return 1  # write failed — leave no .done so a retry can recover
+      # Waiting state is stable — write .done so idempotency guard fires on retry.
+      touch "$_done_marker" || true  # best-effort
+    else
+      # Terminal state (completed or failed): finalize manifest.
+      # Fix A: check every required write; do NOT write .done if any fails.
+      _cont_finalize_manifest "$parent_run_status" || return 1  # write failed — leave no .done
+
+      # Fix #1: cascade terminal state upward — failed OR completed must both recurse.
+      # Fix A: if cascade fails, leave no .done so caller retries.
+      # Recursion goes through the PUBLIC wrapper so the grandparent gets its own lock.
+      _local_continue_parent "$parent_run_dir" || return 1
+
+      # Write .done only after cascade returns successfully, so grandparent cascade is
+      # re-attempted on retry if it failed.
+      touch "$_done_marker" || true  # best-effort
+    fi
+
+  elif [[ "$child_status" == "failed" ]]; then
+    # --- Fix #1: child failed — propagate upward; recurse after finalizing parent. ---
+    # Fix B: idempotent receipt — skip append if a terminal receipt already exists
+    # for this parent_step_id (prevents duplicate receipts on retry when .done is absent).
+    local _existing_terminal
+    _existing_terminal="$(jq -s --arg sid "$parent_step_id" \
+      'any(.[]; .step==$sid and (.status=="completed" or .status=="failed"))' \
+      "$parent_audit" 2>/dev/null)" || _existing_terminal="false"
+    if [[ "$_existing_terminal" != "true" ]]; then
+      jq -nc \
+        --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
+        --arg a "$cont_now" --arg b "$cont_now" \
+        '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"failed",
+          exit_code:1, started_at:$a, ended_at:$b, duration_ms:0, result_hash:"unavailable",
+          output:{error:"subprocess failed — see child run"}}' \
+        >> "$parent_audit" || return 1  # write failed — leave no .done
+    fi
+
+    # Fix A: check every required write; do NOT write .done if any fails.
+    _cont_finalize_manifest "failed" "strip" || return 1  # write failed — leave no .done
+
+    # Cascade: walk failure up to any grandparent (#107 fix #1).
+    # Fix A: if cascade fails, leave no .done so caller retries.
+    # Recursion goes through the PUBLIC wrapper so the grandparent gets its own lock.
+    _local_continue_parent "$parent_run_dir" || return 1
+
+    touch "$_done_marker" || true  # best-effort
+  fi
+
+  return 0
 }
 
 # opensop submit <run_id> <step-id> --local [--output k=v ...] [--outputs '<json>'] [--decided-by WHO]
@@ -4570,6 +4949,12 @@ local_submit() {
      '.status=$s | .ended_at=$e | .duration_ms=$dur' \
      "$mf" > "$mf.tmp" && mv "$mf.tmp" "$mf"
   trap - EXIT
+
+  # Auto-continue the parent run if this run is a subprocess child (#107).
+  # Only fires on terminal states (completed or failed); waiting runs don't trigger.
+  if [[ "$run_status" == "completed" || "$run_status" == "failed" ]]; then
+    _local_continue_parent "$run_dir"
+  fi
 
   if is_tty && [[ "$OUTPUT_MODE" != "json" ]]; then
     local proc_name; proc_name="$(jq -r '.process' "$mf")"
