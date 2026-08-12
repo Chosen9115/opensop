@@ -3055,13 +3055,25 @@ local_run() {
   # local_submit can compute total wall time without the 0–999 ms rounding error
   # that fromdateiso8601 introduces.  Old manifests without this field are handled
   # by local_submit's backward-compat fallback.
-  jq -nc --arg n "$name" --arg p "$proc_file" --arg id "$run_id" --arg t "$started" \
+  # process_dir is recorded so that resume/heal can resolve relative scripts even
+  # if the original process file is later moved or deleted (#101 gap 3).
+  jq -nc --arg n "$name" --arg p "$proc_file" --arg d "$proc_dir" --arg id "$run_id" --arg t "$started" \
         --argjson sms "$started_ms" --argjson inp "$ctx" \
-    '{run_id:$id, process:$n, process_file:$p, started_at:$t, started_at_ms:$sms, status:"running", inputs:$inp}' \
+    '{run_id:$id, process:$n, process_file:$p, process_dir:$d, started_at:$t, started_at_ms:$sms, status:"running", inputs:$inp}' \
     > "$run_dir/manifest.json"
 
+  # Snapshot the normalized process definition at run creation (#101).
+  # The engine and local_submit read from this immutable copy — not from the
+  # on-disk .sop.json — so edits to the process file while a run is paused
+  # cannot alter which steps run or what code executes.  manifest.process_file
+  # is retained for provenance/reference only.
+  jq -c . "$proc_file" > "$run_dir/process.snapshot.json"
+  local snap_file="$run_dir/process.snapshot.json"
+
   local loop_status
-  loop_status="$(_local_step_loop "$run_dir" "$proc_file" 0 "$ctx")"
+  # Pass proc_dir as 5th arg so the step loop resolves scripts relative to the
+  # original process directory, not to the snapshot's location in the run dir.
+  loop_status="$(_local_step_loop "$run_dir" "$snap_file" 0 "$ctx" "$proc_dir")"
   local run_status
   case "$loop_status" in
     completed)    run_status="completed" ;;
@@ -3079,7 +3091,7 @@ local_run() {
     # No ended_at — the run is still in flight, paused at a form/approval/wait step.
     local wait_index; wait_index="${loop_status#waiting:}"
     local wait_step wait_since
-    wait_step="$(jq -r ".steps[$wait_index].id // \"step-$wait_index\"" "$proc_file")"
+    wait_step="$(jq -r ".steps[$wait_index].id // \"step-$wait_index\"" "$snap_file")"
     wait_since="$(_local_now)"
     # Build expects: field names + schema from the step's inputs/outputs array.
     # For approval steps, default to decision:enum(approve,reject) when neither
@@ -3097,10 +3109,10 @@ local_run() {
       else
         { outputs: [], schema: [] }
       end
-    ' "$proc_file")"
+    ' "$snap_file")"
     # Determine reason from step type (byte-parity with runtime sub_state strings).
     local wait_stype wait_reason
-    wait_stype="$(jq -r ".steps[$wait_index].type // \"automated\"" "$proc_file")"
+    wait_stype="$(jq -r ".steps[$wait_index].type // \"automated\"" "$snap_file")"
     case "$wait_stype" in
       form)     wait_reason="waiting_for_input" ;;
       approval) wait_reason="waiting_for_approval" ;;
@@ -3151,7 +3163,7 @@ local_run() {
   [ "$run_status" = completed ]
 }
 
-# _local_step_loop <run_dir> <proc_file> <start_index> <ctx_json>
+# _local_step_loop <run_dir> <proc_file> <start_index> <ctx_json> [<proc_dir_override>]
 #
 # Shared step-execution kernel. Iterates steps from <start_index>, dispatches
 # by type (automated/shell/noop/form), threads context, writes audit receipts
@@ -3165,11 +3177,18 @@ local_run() {
 #                       receipt is appended to audit.jsonl before returning
 #
 # The run_id is derived from run_dir's basename so it matches manifest records.
-# proc_dir is derived from proc_file for automated-step script resolution.
+# proc_dir is derived from proc_file for automated-step script resolution UNLESS
+# proc_dir_override (5th arg) is provided — used when proc_file is a snapshot
+# that lives outside the original process directory (#101).
 _local_step_loop() {
   local run_dir="$1" proc_file="$2" start_index="$3" ctx="$4"
   local run_id; run_id="$(basename "$run_dir")"
-  local proc_dir; proc_dir="$(cd "$(dirname "$proc_file")" && pwd)"
+  local proc_dir
+  if [[ -n "${5:-}" ]]; then
+    proc_dir="$5"
+  else
+    proc_dir="$(cd "$(dirname "$proc_file")" && pwd)"
+  fi
   local audit="$run_dir/audit.jsonl"
   local n_steps; n_steps="$(jq '(.steps // []) | length' "$proc_file")"
 
@@ -4060,23 +4079,36 @@ $llm_rendered_prompt"
           local sp_child_started_ms; sp_child_started_ms="$(_local_now_ms)"
           local sp_depth_next; sp_depth_next=$(( ${OSL_DEPTH:-0} + 1 ))
 
+          # Snapshot the child process definition into the child run dir (#101 gap 2).
+          # If the child pauses (waiting:*) and is later resumed via local_submit,
+          # it will find process.snapshot.json and execute the ORIGINAL child plan —
+          # not whatever the on-disk child file looks like at resume time.
+          local sp_child_dir; sp_child_dir="$(cd "$(dirname "$sp_child_file")" && pwd)"
+          local sp_child_snap="$sp_child_run_dir/process.snapshot.json"
+          jq -c . "$sp_child_file" > "$sp_child_snap"
+
           # Write child manifest (mirrors local_run's initial manifest write).
+          # process_dir is recorded so resume/heal can resolve relative scripts
+          # even if the original child file is later moved or deleted (#101 gap 3).
           # started_at_ms provides millisecond precision for total wall-time computation.
           jq -nc \
             --arg n "$sp_child_name" \
             --arg p "$sp_child_file" \
+            --arg d "$sp_child_dir" \
             --arg id "$sp_child_run_id" \
             --arg t "$sp_child_started" \
             --argjson sms "$sp_child_started_ms" \
             --argjson inp "$sp_child_ctx" \
-            '{run_id:$id, process:$n, process_file:$p, started_at:$t, started_at_ms:$sms, status:"running", inputs:$inp}' \
+            '{run_id:$id, process:$n, process_file:$p, process_dir:$d, started_at:$t, started_at_ms:$sms, status:"running", inputs:$inp}' \
             > "$sp_child_run_dir/manifest.json"
 
           # Run the child step loop directly (reuse _local_step_loop, no subshell overhead).
+          # Execute from the snapshot; pass child's original dir as 5th-arg override so
+          # relative scripts (steps/build.sh etc.) resolve correctly (#101 gap 2).
           # Override OSL_DEPTH for any nested subprocess calls.
           local sp_loop_status
           sp_loop_status="$(OSL_DEPTH="$sp_depth_next" \
-            _local_step_loop "$sp_child_run_dir" "$sp_child_file" 0 "$sp_child_ctx")"
+            _local_step_loop "$sp_child_run_dir" "$sp_child_snap" 0 "$sp_child_ctx" "$sp_child_dir")"
 
           case "$sp_loop_status" in
             completed)
@@ -4106,7 +4138,7 @@ $llm_rendered_prompt"
               # Child paused — propagate as a parent waiting_for_callback pause.
               # Record the child run_id and the child run dir so the operator can inspect.
               local sp_wait_index; sp_wait_index="${sp_loop_status#waiting:}"
-              local sp_wait_step; sp_wait_step="$(jq -r ".steps[$sp_wait_index].id // \"step-$sp_wait_index\"" "$sp_child_file")"
+              local sp_wait_step; sp_wait_step="$(jq -r ".steps[$sp_wait_index].id // \"step-$sp_wait_index\"" "$sp_child_snap")"
               local sp_wait_since; sp_wait_since="$(_local_now)"
 
               # Finalize child manifest as waiting.
@@ -4329,9 +4361,40 @@ local_submit() {
     die "validation failed: $first_err" "usage_error" "$(jq -r '.[].message' <<<"$errors_json" | head -5 | tr '\n' '; ')"
   fi
 
-  # Locate the process file so we can resume execution.
-  local proc_file; proc_file="$(jq -r '.process_file' "$mf")"
-  [ -f "$proc_file" ] || die "process file not found: $proc_file (was the run created on another machine?)" "file_not_found"
+  # Locate the execution plan for this run.
+  # Prefer the per-run process snapshot (written at run creation, #101) so that
+  # edits to the on-disk .sop.json while a run is paused cannot alter execution.
+  # Fall back to manifest.process_file for runs created before the snapshot was
+  # introduced (backward-compat with existing run dirs).
+  #
+  # proc_dir is the ORIGINAL process directory — not the snapshot location — so
+  # relative scripts (steps/build.sh etc.) resolve correctly even when proc_file
+  # points to the per-run snapshot (#101 gap 3).
+  #
+  # Resolution order:
+  #   1. manifest.process_dir  — recorded at run creation (new manifests, gap 3 fix)
+  #   2. dirname(manifest.process_file) without requiring the file to exist (legacy)
+  # Never silently fall back to the run dir; that would silently mis-resolve scripts.
+  local proc_file snap_file orig_proc_file proc_dir
+  snap_file="$run_dir/process.snapshot.json"
+  orig_proc_file="$(jq -r '.process_file' "$mf")"
+  if [ -f "$snap_file" ]; then
+    proc_file="$snap_file"
+    # Prefer manifest.process_dir (written at run creation; works even if the
+    # original file was deleted).  Fall back to dirname(process_file) for legacy
+    # manifests — derive it without requiring the file to exist.
+    local _manifest_proc_dir; _manifest_proc_dir="$(jq -r '.process_dir // ""' "$mf")"
+    if [[ -n "$_manifest_proc_dir" && -d "$_manifest_proc_dir" ]]; then
+      proc_dir="$_manifest_proc_dir"
+    else
+      # Legacy manifest: derive from process_file path without cd (file may be gone).
+      proc_dir="$(cd "$(dirname "$orig_proc_file")" 2>/dev/null && pwd || dirname "$orig_proc_file")"
+    fi
+  else
+    proc_file="$orig_proc_file"
+    [ -f "$proc_file" ] || die "process file not found: $proc_file (was the run created on another machine?)" "file_not_found"
+    proc_dir="$(cd "$(dirname "$proc_file")" && pwd)"
+  fi
 
   # Resolve the cursor: cursor.next_index already points to the first step to run
   # on resume (it was stored as wait_index + 1 when the run paused). Read it
@@ -4414,8 +4477,10 @@ local_submit() {
   trap '_local_finalize_trap "$run_dir"' EXIT
 
   # Re-enter the step loop at resume_index (NEVER re-runs steps < resume_index).
+  # Pass proc_dir as 5th arg so script paths resolve against the original process
+  # directory even when proc_file is the per-run snapshot (#101).
   local loop_status
-  loop_status="$(_local_step_loop "$run_dir" "$proc_file" "$resume_index" "$ctx")"
+  loop_status="$(_local_step_loop "$run_dir" "$proc_file" "$resume_index" "$ctx" "$proc_dir")"
 
   local run_status
   case "$loop_status" in
@@ -5519,12 +5584,32 @@ local_heal() {
 
   # ── apply mode (--apply) ──────────────────────────────────────────────────
   # Re-run the previously-failed step and continue the run from there.
-  local proc_file; proc_file="$(jq -r '.process_file // ""' "$mf")"
-  [ -f "$proc_file" ] || die "process file not found: $proc_file (was the run created on another machine?)" "file_not_found"
+  #
+  # Prefer the per-run process snapshot (written at run creation, #101) so that
+  # edits to the on-disk .sop.json after the failure cannot change what gets
+  # retried.  Fall back to manifest.process_file for legacy runs (no snapshot).
+  # proc_dir uses manifest.process_dir when present (gap 3), falling back to
+  # dirname(process_file) derived without requiring the file to still exist.
+  local proc_file proc_dir orig_proc_file
+  local _heal_snap="$run_dir/process.snapshot.json"
+  orig_proc_file="$(jq -r '.process_file // ""' "$mf")"
+  if [ -f "$_heal_snap" ]; then
+    proc_file="$_heal_snap"
+    local _heal_mdir; _heal_mdir="$(jq -r '.process_dir // ""' "$mf")"
+    if [[ -n "$_heal_mdir" && -d "$_heal_mdir" ]]; then
+      proc_dir="$_heal_mdir"
+    else
+      proc_dir="$(cd "$(dirname "$orig_proc_file")" 2>/dev/null && pwd || dirname "$orig_proc_file")"
+    fi
+  else
+    proc_file="$orig_proc_file"
+    [ -f "$proc_file" ] || die "process file not found: $proc_file (was the run created on another machine?)" "file_not_found"
+    proc_dir="$(cd "$(dirname "$proc_file")" && pwd)"
+  fi
 
   local failed_step_id; failed_step_id="$(jq -r '.step.id' <<<"$fault_json")"
 
-  # Find the index of the failed step in the process file.
+  # Find the index of the failed step in the process file (snapshot or fallback).
   local n_steps; n_steps="$(jq '(.steps // []) | length' "$proc_file")"
   local heal_index=-1 _hi=0
   while [ "$_hi" -lt "$n_steps" ]; do
@@ -5586,8 +5671,10 @@ local_heal() {
   trap '_local_finalize_trap "$run_dir"' EXIT
 
   # Re-run the step loop starting at heal_index.
+  # Pass proc_dir as 5th arg so scripts resolve against the original process
+  # directory even when proc_file is the per-run snapshot (#101).
   local loop_status
-  loop_status="$(_local_step_loop "$run_dir" "$proc_file" "$heal_index" "$ctx")"
+  loop_status="$(_local_step_loop "$run_dir" "$proc_file" "$heal_index" "$ctx" "$proc_dir")"
   trap - EXIT
 
   # Determine outcome.
