@@ -1200,6 +1200,193 @@ set -e
 echo "PASS: required_if — field with required_if is treated as optional locally (never more restrictive than server)"
 
 # --------------------------------------------------------------------------- #
+# U4b: process definition pinning (#101) — paused run resumes from the snapshot
+#      written at run creation, not from the mutable on-disk .sop.json.
+#
+# Four drift scenarios (modify / insert / reorder / delete) plus a
+# multiple-pause/resume-cycle test. Each asserts the ORIGINAL plan is used.
+# --------------------------------------------------------------------------- #
+
+pd_dir="$(mktemp -d)"; pd_home="$(mktemp -d)"
+
+# Helper: a two-step process that pauses at 'gate' (form) then echoes a marker.
+# The marker in 'report' is the literal word embedded in the run: string so we
+# can verify which code actually executed after resume.
+cat > "$pd_dir/pd.sop.json" <<'JSON'
+{
+  "name": "pd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] },
+    { "id": "report", "type": "shell", "run": "echo marker=ORIGINAL" }
+  ]
+}
+JSON
+
+# --- (1) Modify step run: while paused → resume executes ORIGINAL code ---
+set +e
+pd1_mid="$(OPENSOP_LOCAL_HOME="$pd_home" "$cli" run "$pd_dir/pd.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+# Drift: change the marker in the on-disk file
+sed -i 's/marker=ORIGINAL/marker=DRIFTED/' "$pd_dir/pd.sop.json"
+OPENSOP_LOCAL_HOME="$pd_home" "$cli" submit "$pd1_mid" gate --output ok=go --json >/dev/null 2>&1
+set -e
+pd1_out="$(jq -r '.report.stdout // ""' "$pd_home/runs/$pd1_mid/context.json" 2>/dev/null)"
+[[ "$pd1_out" == *"marker=ORIGINAL"* ]] \
+  || { echo "FAIL: process drift (modify run:) — resume should use snapshot, got: $pd1_out"; exit 1; }
+echo "PASS: process drift — modifying step run: while paused does not affect resume (original code runs)"
+
+# Restore the file for subsequent drift tests
+cat > "$pd_dir/pd.sop.json" <<'JSON'
+{
+  "name": "pd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] },
+    { "id": "report", "type": "shell", "run": "echo marker=ORIGINAL" }
+  ]
+}
+JSON
+
+# --- (2) Insert a step while paused → resume doesn't misalign ---
+# After inserting, the on-disk file has [gate, injected, report].
+# The snapshot still has [gate, report]; resume should run report at index 1.
+set +e
+pd2_mid="$(OPENSOP_LOCAL_HOME="$pd_home" "$cli" run "$pd_dir/pd.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+# Drift: insert a step between gate and report
+cat > "$pd_dir/pd.sop.json" <<'JSON'
+{
+  "name": "pd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "gate",     "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] },
+    { "id": "injected", "type": "shell", "run": "echo injected=YES" },
+    { "id": "report",   "type": "shell", "run": "echo marker=ORIGINAL" }
+  ]
+}
+JSON
+OPENSOP_LOCAL_HOME="$pd_home" "$cli" submit "$pd2_mid" gate --output ok=go --json >/dev/null 2>&1
+set -e
+pd2_ctx="$(cat "$pd_home/runs/$pd2_mid/context.json" 2>/dev/null)"
+pd2_out="$(jq -r '.report.stdout // ""' <<<"$pd2_ctx")"
+pd2_inj="$(jq -r '.injected.stdout // "not-run"' <<<"$pd2_ctx")"
+[[ "$pd2_out" == *"marker=ORIGINAL"* ]] \
+  || { echo "FAIL: process drift (insert step) — report should run with original code, got: $pd2_out"; exit 1; }
+[[ "$pd2_inj" == "not-run" ]] \
+  || { echo "FAIL: process drift (insert step) — injected step should NOT have run, got: $pd2_inj"; exit 1; }
+echo "PASS: process drift — inserting a step while paused does not misalign resume (injected step did not run)"
+
+# Restore
+cat > "$pd_dir/pd.sop.json" <<'JSON'
+{
+  "name": "pd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] },
+    { "id": "report", "type": "shell", "run": "echo marker=ORIGINAL" }
+  ]
+}
+JSON
+
+# --- (3) Reorder steps while paused → resume uses original order ---
+# Drift: swap gate and report (report becomes index 0, gate index 1).
+# With the snapshot, the run still resumes at index 1 = report (ORIGINAL).
+set +e
+pd3_mid="$(OPENSOP_LOCAL_HOME="$pd_home" "$cli" run "$pd_dir/pd.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+cat > "$pd_dir/pd.sop.json" <<'JSON'
+{
+  "name": "pd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "report", "type": "shell", "run": "echo marker=REORDERED" },
+    { "id": "gate",   "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] }
+  ]
+}
+JSON
+OPENSOP_LOCAL_HOME="$pd_home" "$cli" submit "$pd3_mid" gate --output ok=go --json >/dev/null 2>&1
+set -e
+pd3_out="$(jq -r '.report.stdout // ""' "$pd_home/runs/$pd3_mid/context.json" 2>/dev/null)"
+[[ "$pd3_out" == *"marker=ORIGINAL"* ]] \
+  || { echo "FAIL: process drift (reorder) — resume should use snapshot order, got: $pd3_out"; exit 1; }
+echo "PASS: process drift — reordering steps while paused does not change resume behavior (original order)"
+
+# Restore
+cat > "$pd_dir/pd.sop.json" <<'JSON'
+{
+  "name": "pd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] },
+    { "id": "report", "type": "shell", "run": "echo marker=ORIGINAL" }
+  ]
+}
+JSON
+
+# --- (4) Delete the post-gate step while paused → resume unaffected ---
+# Drift: remove report from the file entirely.
+# The snapshot still has it; resume should run report successfully.
+set +e
+pd4_mid="$(OPENSOP_LOCAL_HOME="$pd_home" "$cli" run "$pd_dir/pd.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+cat > "$pd_dir/pd.sop.json" <<'JSON'
+{
+  "name": "pd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] }
+  ]
+}
+JSON
+OPENSOP_LOCAL_HOME="$pd_home" "$cli" submit "$pd4_mid" gate --output ok=go --json >/dev/null 2>&1
+set -e
+pd4_out="$(jq -r '.report.stdout // ""' "$pd_home/runs/$pd4_mid/context.json" 2>/dev/null)"
+[[ "$pd4_out" == *"marker=ORIGINAL"* ]] \
+  || { echo "FAIL: process drift (delete step) — report should still run from snapshot, got: $pd4_out"; exit 1; }
+echo "PASS: process drift — deleting post-gate step while paused does not affect resume (runs from snapshot)"
+
+# Restore for multi-cycle test
+cat > "$pd_dir/pd.sop.json" <<'JSON'
+{
+  "name": "pd-multicycle",
+  "inputs": {},
+  "steps": [
+    { "id": "gate1",  "type": "form",
+      "inputs": [{ "name": "a", "type": "string", "required": true }] },
+    { "id": "middle", "type": "shell", "run": "echo mid=ORIGINAL" },
+    { "id": "gate2",  "type": "form",
+      "inputs": [{ "name": "b", "type": "string", "required": true }] },
+    { "id": "final",  "type": "shell", "run": "echo fin=ORIGINAL" }
+  ]
+}
+JSON
+
+# --- (5) Multiple pause/resume cycles — snapshot persists across both pauses ---
+set +e
+pd5_mid="$(OPENSOP_LOCAL_HOME="$pd_home" "$cli" run "$pd_dir/pd.sop.json" --json 2>/dev/null | jq -r '.run_id')"
+# Drift between first and second resume
+sed -i 's/mid=ORIGINAL/mid=DRIFTED/; s/fin=ORIGINAL/fin=DRIFTED/' "$pd_dir/pd.sop.json"
+# First resume (gate1 → middle → pauses at gate2)
+OPENSOP_LOCAL_HOME="$pd_home" "$cli" submit "$pd5_mid" gate1 --output a=first --json >/dev/null 2>&1
+# Second resume (gate2 → final)
+OPENSOP_LOCAL_HOME="$pd_home" "$cli" submit "$pd5_mid" gate2 --output b=second --json >/dev/null 2>&1
+set -e
+pd5_ctx="$(cat "$pd_home/runs/$pd5_mid/context.json" 2>/dev/null)"
+pd5_mid_out="$(jq -r '.middle.stdout // ""' <<<"$pd5_ctx")"
+pd5_fin_out="$(jq -r '.final.stdout  // ""' <<<"$pd5_ctx")"
+[[ "$pd5_mid_out" == *"mid=ORIGINAL"* ]] \
+  || { echo "FAIL: multi-cycle drift — middle step should use snapshot (mid=ORIGINAL), got: $pd5_mid_out"; exit 1; }
+[[ "$pd5_fin_out" == *"fin=ORIGINAL"* ]] \
+  || { echo "FAIL: multi-cycle drift — final step should use snapshot (fin=ORIGINAL), got: $pd5_fin_out"; exit 1; }
+echo "PASS: process drift — multiple pause/resume cycles both use the snapshot (not the drifted file)"
+
+rm -rf "$pd_dir" "$pd_home"
+
+# --------------------------------------------------------------------------- #
 # U5: wait step type — sync (seconds), async pause/resume (until), bare (neither)
 # --------------------------------------------------------------------------- #
 
