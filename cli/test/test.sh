@@ -4174,35 +4174,93 @@ echo "PASS: upgrade -- --pin with no value exits non-zero"
 
 # (4) upgrade targets BASH_SOURCE[0], not PATH.
 #     Regression: the old impl used `command -v opensop` — if a decoy `opensop`
-#     is on PATH, the wrong binary would be "upgraded".  With BASH_SOURCE[0],
+#     is on PATH, the WRONG binary would be "upgraded".  With BASH_SOURCE[0],
 #     the running script is always the upgrade target, independent of PATH.
 #
-#     We simulate the attack: place a decoy `opensop` wrapper earlier on PATH
-#     that writes a canary file if it's ever treated as the upgrade target.
-#     Then run upgrade (we'll abort at the checksum-missing stage, which is
-#     fine — we just need to confirm the decoy's install dir is NOT the target).
+#     This test is HERMETIC and EFFECTIVE (issue #104):
+#     - Hermetic: a stub `curl` serves a CONTROLLED fixture binary + its
+#       checksum from local temp files, so no real network call is made and the
+#       repo's own cli/bin/opensop is never a candidate target (we run a
+#       throwaway COPY as BASH_SOURCE[0]).  Nothing outside the temp dirs is
+#       touched regardless of connectivity.
+#     - Effective: we let the controlled upgrade SUCCEED and then assert WHICH
+#       file it replaced.  The upgrade must replace the throwaway copy
+#       (BASH_SOURCE[0]) and must NOT replace the PATH decoy.  A `command -v
+#       opensop` regression would resolve+replace the decoy (first on PATH)
+#       instead of the throwaway — failing both assertions below.  (An
+#       abort-early/curl-fails design cannot distinguish the two, which is why
+#       we drive a real controlled replacement here.)
+# Portable SHA-256 (Linux sha256sum → macOS shasum → openssl), matching the
+# production _portable_sha256 fallback so this test also runs on stock macOS.
+_upg_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else openssl dgst -sha256 "$1" | awk '{print $NF}'; fi
+}
+
 upg_decoy_dir="$(mktemp -d)"
-# The decoy must be executable and write a canary when invoked.
-printf '#!/usr/bin/env bash\ntouch "%s/decoy-was-targeted"\necho decoy' "$upg_decoy_dir" \
-  > "${upg_decoy_dir}/opensop"
+# The decoy carries a distinctive original marker so we can prove it was NOT
+# overwritten by the upgrade (a PATH-targeting bug would replace this file).
+printf '#!/usr/bin/env bash\n# DECOY-ORIGINAL-MARKER\necho decoy\n' > "${upg_decoy_dir}/opensop"
 chmod +x "${upg_decoy_dir}/opensop"
 
-# Run upgrade with the decoy first on PATH; expect it to fail (no checksum file
-# in the test environment / network unavailable is OK — we just need the
-# resolved path NOT to be the decoy dir's file).
+# Throwaway copy of the binary in its own temp dir = the intended BASH_SOURCE[0].
+upg_throwaway_dir="$(mktemp -d)"
+cp "$cli" "${upg_throwaway_dir}/opensop"
+chmod +x "${upg_throwaway_dir}/opensop"
+
+# Controlled fixture: a fake "new" binary (distinct version so the upgrade
+# proceeds past the same-version short-circuit) + its matching sha256.
+upg_fix_dir="$(mktemp -d)"
+printf '#!/usr/bin/env bash\n# UPGRADE-FIXTURE-9.9.9\nreadonly OPENSOP_CLI_VERSION="9.9.9"\necho fixture\n' \
+  > "${upg_fix_dir}/opensop.fixture"
+_upg_sha256 "${upg_fix_dir}/opensop.fixture" > "${upg_fix_dir}/opensop.sha256.fixture"
+
+# Stub curl: serve the fixture checksum for *.sha256 URLs, the fixture binary
+# otherwise. No network, deterministic.
+upg_curl_stub_dir="$(mktemp -d)"
+cat > "${upg_curl_stub_dir}/curl" <<CURLSTUB
+#!/usr/bin/env bash
+dest=""; url=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -o) dest="\$2"; shift 2 ;;
+    -*) shift ;;
+    *)  url="\$1"; shift ;;
+  esac
+done
+case "\$url" in
+  *.sha256) cp "${upg_fix_dir}/opensop.sha256.fixture" "\$dest" ;;
+  *)        cp "${upg_fix_dir}/opensop.fixture"        "\$dest" ;;
+esac
+exit 0
+CURLSTUB
+chmod +x "${upg_curl_stub_dir}/curl"
+
+upg_cli_sha_before="$(_upg_sha256 "$cli")"
+
+# Run the upgrade from the throwaway copy with the decoy FIRST on PATH.
 set +e
-upg_src_out="$(PATH="${upg_decoy_dir}:${PATH}" "$cli" upgrade --json 2>&1)"; upg_src_rc=$?
+upg_src_out="$(PATH="${upg_decoy_dir}:${upg_curl_stub_dir}:${PATH}" \
+  "${upg_throwaway_dir}/opensop" upgrade --json 2>&1)"; upg_src_rc=$?
 set -e
 
-# The decoy must not have been treated as the upgrade target
-[ ! -f "${upg_decoy_dir}/decoy-was-targeted" ] \
-  || { echo "FAIL: upgrade targeted the PATH-decoy opensop instead of BASH_SOURCE[0]"; exit 1; }
-# The error should mention the real script's directory, not the decoy dir
-# (We can't predict the exact error, but the decoy path must NOT appear.)
-echo "$upg_src_out" | grep -q "${upg_decoy_dir}" \
-  && { echo "FAIL: upgrade error mentions decoy dir — wrong target resolved; output: $upg_src_out"; exit 1; }
-rm -rf "$upg_decoy_dir"
-echo "PASS: upgrade — targets BASH_SOURCE[0], not PATH (decoy opensop on PATH is ignored)"
+# The controlled upgrade must succeed…
+[ "$upg_src_rc" -eq 0 ] \
+  || { echo "FAIL: controlled upgrade should exit 0, got $upg_src_rc — output: $upg_src_out"; exit 1; }
+# …and it must have replaced the THROWAWAY copy (BASH_SOURCE[0]).
+grep -q 'UPGRADE-FIXTURE-9.9.9' "${upg_throwaway_dir}/opensop" \
+  || { echo "FAIL: upgrade did not replace BASH_SOURCE[0] (throwaway copy) — targeting broken"; exit 1; }
+# The PATH decoy must be UNTOUCHED — a `command -v opensop` bug would replace it.
+grep -q 'DECOY-ORIGINAL-MARKER' "${upg_decoy_dir}/opensop" \
+  || { echo "FAIL: PATH decoy was modified — upgrade resolved its target via PATH, not BASH_SOURCE[0]"; exit 1; }
+grep -q 'UPGRADE-FIXTURE' "${upg_decoy_dir}/opensop" \
+  && { echo "FAIL: PATH decoy was replaced by the upgrade — wrong (PATH-resolved) target"; exit 1; }
+# The repo's own binary must never be a candidate — verify byte-for-byte unchanged.
+[ "$(_upg_sha256 "$cli")" = "$upg_cli_sha_before" ] \
+  || { echo "FAIL: repo cli/bin/opensop was modified by the upgrade test (should be impossible)"; exit 1; }
+rm -rf "$upg_decoy_dir" "$upg_throwaway_dir" "$upg_fix_dir" "$upg_curl_stub_dir"
+echo "PASS: upgrade — replaces BASH_SOURCE[0] (throwaway), never the PATH decoy or the repo binary"
 
 # (5) help output: `opensop help upgrade` must succeed and include the command name.
 set +e
