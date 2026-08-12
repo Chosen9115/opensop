@@ -4350,11 +4350,29 @@ _local_continue_parent() {
   # shellcheck disable=SC2064
   trap "rmdir '$_lock_dir' 2>/dev/null || true" RETURN
 
-  # Verify the parent is still paused at this exact step (guard against races
-  # or repeated submit calls after the parent already progressed).
+  # Three-way precondition branch (Fix 1 — cascade-retry-safe):
+  #
+  #   A) parent is waiting at this step   → full continuation (normal path).
+  #   B) parent is already terminal       → .done was absent, meaning a prior
+  #      attempt finalized this level but its grandparent cascade did not
+  #      durably complete.  Re-run ONLY the cascade so the grandparent is
+  #      walked and .done is written; do NOT re-merge/re-append/re-resume
+  #      (the parent is already terminal and those mutations must not repeat).
+  #   C) anything else (running, etc.)    → deferred crash case; leave as-is.
   local parent_status; parent_status="$(jq -r '.status' "$parent_mf")"
   local parent_waiting_step; parent_waiting_step="$(jq -r '.waiting.step // ""' "$parent_mf")"
-  if [[ "$parent_status" != "waiting" || "$parent_waiting_step" != "$parent_step_id" ]]; then
+
+  if [[ "$parent_status" == "waiting" && "$parent_waiting_step" == "$parent_step_id" ]]; then
+    : # Case A — fall through to the full continuation logic below.
+  elif [[ "$parent_status" == "completed" || "$parent_status" == "failed" ]]; then
+    # Case B — parent is terminal but .done is absent: a previous attempt
+    # finalized this level and then the grandparent cascade failed.  Re-drive
+    # the cascade only; the parent itself must not be touched again.
+    _local_continue_parent "$parent_run_dir" || return 1  # cascade failed — leave no .done
+    touch "$_done_marker" || true  # best-effort
+    return 0
+  else
+    # Case C — parent is in an unexpected transient state (e.g. running).
     return 0
   fi
 
@@ -4393,13 +4411,22 @@ _local_continue_parent() {
     if [[ ! -f "$parent_snap_file" ]]; then
       # Snapshot missing — fail the parent closed; never fall back to mutable process_file.
       # Fix A: check every required write; do NOT write .done if any write fails.
-      jq -nc \
-        --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
-        --arg a "$cont_now" --arg b "$cont_now" \
-        '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"failed",
-          exit_code:1, started_at:$a, ended_at:$b, duration_ms:0, result_hash:"unavailable",
-          output:{error:"process.snapshot.json missing — cannot resume parent (fail-closed)"}}' \
-        >> "$parent_audit" || return 1  # write failed — leave no .done
+      # Fix 2 — idempotent receipt: apply the same terminal-receipt guard used by
+      # the completed and child-failed branches so a retry after a partial write
+      # does not produce a duplicate failed receipt.
+      local _snap_existing_terminal
+      _snap_existing_terminal="$(jq -s --arg sid "$parent_step_id" \
+        'any(.[]; .step==$sid and (.status=="completed" or .status=="failed"))' \
+        "$parent_audit" 2>/dev/null)" || _snap_existing_terminal="false"
+      if [[ "$_snap_existing_terminal" != "true" ]]; then
+        jq -nc \
+          --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
+          --arg a "$cont_now" --arg b "$cont_now" \
+          '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"failed",
+            exit_code:1, started_at:$a, ended_at:$b, duration_ms:0, result_hash:"unavailable",
+            output:{error:"process.snapshot.json missing — cannot resume parent (fail-closed)"}}' \
+          >> "$parent_audit" || return 1  # write failed — leave no .done
+      fi
       _cont_finalize_manifest "failed" "strip" || return 1  # write failed — leave no .done
       # Cascade failure upward before writing .done.
       _local_continue_parent "$parent_run_dir" || return 1  # cascade failed — leave no .done

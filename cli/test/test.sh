@@ -3184,6 +3184,283 @@ u8c4_receipts_after="$(jq -s '[.[] | select(.step=="call_child" and (.status=="c
   || { echo "FAIL: u8c-4 — duplicate receipt! expected 1 terminal receipt for call_child, got $u8c4_receipts_after"; exit 1; }
 echo "PASS: u8c-4 — idempotent receipt: exactly 1 terminal receipt for call_child (no duplicate appended)"
 
+# -----------------------------------------------------------------------
+# U8c-5: cascade-retry-safe — re-driving an absent .done re-walks the
+#         grandparent cascade (Fix 1).
+#
+# Scenario:
+#   grandparent: [subprocess(parent), gp_after(noop)]
+#     parent:    [subprocess(child),  p_after(noop)]
+#       child:   [gate(form), done(noop)]
+#
+# Full 3-level chain completes normally.  We then simulate a "grandparent
+# cascade failed before .done was written" scenario:
+#   1. Confirm .done was written at the parent level.
+#   2. Remove parent-level .done.
+#   3. Reset the grandparent manifest back to waiting (simulating that the
+#      grandparent cascade failed after the parent was finalized but before
+#      the grandparent was updated).
+#   4. Remove grandparent's .done (sp-cont-call_parent.done).
+#   5. Invoke _local_continue_parent at the parent level via a source-only
+#      trampoline — build a modified copy of the binary with 'main "$@"'
+#      stripped so sourcing it doesn't trigger execution.
+#   6. Assert: grandparent is completed, parent-level .done re-written, no
+#      duplicate receipts at the parent level.
+# -----------------------------------------------------------------------
+u8c5_dir="$OPENSOP_LOCAL_HOME/u8c5-cascade-retry"
+mkdir -p "$u8c5_dir"
+
+cat > "$u8c5_dir/u8c5_child.sop.json" <<'JSON'
+{
+  "name": "u8c5-child",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "go", "type": "string", "required": true }] },
+    { "id": "done", "type": "noop" }
+  ]
+}
+JSON
+
+jq -n --arg d "$u8c5_dir" '{
+  "name": "u8c5-parent",
+  "inputs": {},
+  "steps": [
+    { "id": "call_child", "type": "subprocess",
+      "process": ($d + "/u8c5_child.sop.json") },
+    { "id": "p_after", "type": "noop" }
+  ]
+}' > "$u8c5_dir/u8c5_parent.sop.json"
+
+jq -n --arg d "$u8c5_dir" '{
+  "name": "u8c5-grandparent",
+  "inputs": {},
+  "steps": [
+    { "id": "call_parent", "type": "subprocess",
+      "process": ($d + "/u8c5_parent.sop.json") },
+    { "id": "gp_after", "type": "noop" }
+  ]
+}' > "$u8c5_dir/u8c5_grandparent.sop.json"
+
+# Run grandparent — pauses while grandchild waits at gate.
+set +e
+u8c5_gp_out="$("$cli" run "$u8c5_dir/u8c5_grandparent.sop.json" --local --json)"; u8c5_gp_rc=$?
+set -e
+[ "$u8c5_gp_rc" -eq 0 ] \
+  || { echo "FAIL: u8c-5 — grandparent initial run should exit 0, got $u8c5_gp_rc"; exit 1; }
+u8c5_gprid="$(jq -r '.run_id' <<<"$u8c5_gp_out")"
+u8c5_p_run_dir="$(readlink -f "$OPENSOP_LOCAL_HOME/runs/$u8c5_gprid/subprocess/call_parent/"* 2>/dev/null | head -1)"
+u8c5_prid="$(basename "$u8c5_p_run_dir")"
+u8c5_c_run_dir="$(readlink -f "$OPENSOP_LOCAL_HOME/runs/$u8c5_prid/subprocess/call_child/"* 2>/dev/null | head -1)"
+u8c5_crid="$(basename "$u8c5_c_run_dir")"
+
+# Submit the child gate — drives the full 3-level cascade.
+set +e
+"$cli" submit "$u8c5_crid" gate --local --output go=yes --json >/dev/null 2>&1; u8c5_sub_rc=$?
+set -e
+[ "$u8c5_sub_rc" -eq 0 ] \
+  || { echo "FAIL: u8c-5 — child gate submit should exit 0, got $u8c5_sub_rc"; exit 1; }
+
+# All three levels must be completed.
+u8c5_gp_final="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$u8c5_gprid/manifest.json")"
+u8c5_p_final="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$u8c5_prid/manifest.json")"
+[ "$u8c5_gp_final" = "completed" ] \
+  || { echo "FAIL: u8c-5 — grandparent should be completed after cascade, got $u8c5_gp_final"; exit 1; }
+[ "$u8c5_p_final" = "completed" ] \
+  || { echo "FAIL: u8c-5 — parent should be completed after cascade, got $u8c5_p_final"; exit 1; }
+echo "PASS: u8c-5 — 3-level chain: all three runs completed"
+
+# Confirm parent-level .done marker was written.
+u8c5_parent_done="$OPENSOP_LOCAL_HOME/runs/$u8c5_prid/.sp-cont-call_child.done"
+[ -f "$u8c5_parent_done" ] \
+  || { echo "FAIL: u8c-5 — parent-level .done marker should exist after full cascade"; exit 1; }
+echo "PASS: u8c-5 — parent-level .done marker written after successful cascade"
+
+# Simulate "parent finalized but grandparent cascade failed before .done written":
+#   - Remove parent-level .done AND its lock dir (lock is released on function return
+#     within the same process; the original cli subprocess does release it, but we
+#     confirm here to guarantee trampoline can re-acquire it).
+#   - Reset grandparent manifest to waiting at call_parent (simulating stranded GP).
+#   - Remove grandparent-level .done (sp-cont-call_parent.done) and its lock dir.
+rm "$u8c5_parent_done"
+rmdir "$OPENSOP_LOCAL_HOME/runs/$u8c5_prid/.sp-cont-call_child.lock" 2>/dev/null || true
+u8c5_gp_done="$OPENSOP_LOCAL_HOME/runs/$u8c5_gprid/.sp-cont-call_parent.done"
+rm -f "$u8c5_gp_done"
+rmdir "$OPENSOP_LOCAL_HOME/runs/$u8c5_gprid/.sp-cont-call_parent.lock" 2>/dev/null || true
+jq -c '.status="waiting"
+  | .waiting={"step":"call_parent","index":0,"reason":"waiting_for_callback",
+               "since":"2000-01-01T00:00:00Z","expects":{"outputs":[],"schema":[]}}' \
+  "$OPENSOP_LOCAL_HOME/runs/$u8c5_gprid/manifest.json" \
+  > "$OPENSOP_LOCAL_HOME/runs/$u8c5_gprid/manifest.json.tmp" \
+  && mv "$OPENSOP_LOCAL_HOME/runs/$u8c5_gprid/manifest.json.tmp" \
+        "$OPENSOP_LOCAL_HOME/runs/$u8c5_gprid/manifest.json"
+
+# Build a source-only trampoline: strip the final 'main "$@"' line from a
+# temp copy of the binary so we can source function definitions without
+# triggering execution.  Then call _local_continue_parent directly with the
+# child run dir (the same call local_submit would make on retry).
+u8c5_bin_nosrc="$u8c5_dir/opensop_nosrc"
+grep -v '^main "\$@"$' "$cli" > "$u8c5_bin_nosrc"
+
+u8c5_trampoline="$u8c5_dir/u8c5_trampoline.sh"
+cat > "$u8c5_trampoline" <<TRAMP
+#!/usr/bin/env bash
+set -euo pipefail
+export OPENSOP_LOCAL_HOME="$OPENSOP_LOCAL_HOME"
+# shellcheck disable=SC1090
+source "$u8c5_bin_nosrc"
+_local_continue_parent "$u8c5_c_run_dir"
+TRAMP
+chmod +x "$u8c5_trampoline"
+
+set +e
+bash "$u8c5_trampoline" >/dev/null 2>&1; u8c5_tramp_rc=$?
+set -e
+# rc 0: Case B ran and re-drove grandparent cascade successfully.
+# rc non-0: grandparent cascade re-failed — still acceptable for the receipt test,
+# but .done must have been written if and only if cascade returned 0.
+
+# The parent-level .done must be re-written (Case B writes it after cascade returns 0).
+[ -f "$u8c5_parent_done" ] \
+  || { echo "FAIL: u8c-5 — .done not re-written after Case B cascade retry"; exit 1; }
+echo "PASS: u8c-5 — .done re-written after Case B re-drives the grandparent cascade"
+
+# Grandparent must be completed (cascade re-drove it from waiting→completed).
+u8c5_gp_after_retry="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$u8c5_gprid/manifest.json")"
+[ "$u8c5_gp_after_retry" = "completed" ] \
+  || { echo "FAIL: u8c-5 — grandparent should be completed after Case B retry, got $u8c5_gp_after_retry"; exit 1; }
+echo "PASS: u8c-5 — grandparent completed after Case B retry (cascade re-driven from waiting)"
+
+# No duplicate receipts at the parent level for call_child.
+u8c5_p_receipts="$(jq -s '[.[] | select(.step=="call_child" and (.status=="completed" or .status=="failed"))] | length' \
+  "$OPENSOP_LOCAL_HOME/runs/$u8c5_prid/audit.jsonl")"
+[ "$u8c5_p_receipts" -eq 1 ] \
+  || { echo "FAIL: u8c-5 — duplicate receipts at parent level: expected 1, got $u8c5_p_receipts"; exit 1; }
+echo "PASS: u8c-5 — exactly 1 terminal receipt at parent level after Case B retry (no duplicate)"
+
+# -----------------------------------------------------------------------
+# U8c-6: fail-closed idempotent receipt (Fix 2).
+# Verify that when process.snapshot.json is missing and the fail-closed
+# path is triggered, a re-invocation does NOT append a duplicate failed
+# receipt for the subprocess step.
+#
+# Approach:
+#   1. Run parent+child (child pauses at gate); parent is waiting.
+#   2. Delete parent's process.snapshot.json to trigger fail-closed path.
+#   3. Submit child gate → _local_continue_parent fires fail-closed,
+#      appends 1 failed receipt, finalizes parent as failed, writes .done.
+#   4. Remove .done to simulate "manifest-finalize succeeded but cascade
+#      failed — .done was never written".  Also reset parent manifest to
+#      waiting at call_child to allow re-entry (simulating a partial write
+#      scenario where the receipt was written but the manifest flip failed).
+#   5. Re-invoke _local_continue_parent directly via the trampoline.
+#   6. Assert EXACTLY ONE failed receipt for call_child in parent audit.
+# -----------------------------------------------------------------------
+u8c6_dir="$OPENSOP_LOCAL_HOME/u8c6-fail-closed-idem"
+mkdir -p "$u8c6_dir"
+
+cat > "$u8c6_dir/u8c6_child.sop.json" <<'JSON'
+{
+  "name": "u8c6-child",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "go", "type": "string", "required": true }] },
+    { "id": "done", "type": "noop" }
+  ]
+}
+JSON
+
+jq -n --arg d "$u8c6_dir" '{
+  "name": "u8c6-parent",
+  "inputs": {},
+  "steps": [
+    { "id": "call_child", "type": "subprocess",
+      "process": ($d + "/u8c6_child.sop.json") },
+    { "id": "after", "type": "noop" }
+  ]
+}' > "$u8c6_dir/u8c6_parent.sop.json"
+
+set +e
+u8c6_pm="$("$cli" run "$u8c6_dir/u8c6_parent.sop.json" --local --json)"; u8c6_rc=$?
+set -e
+[ "$u8c6_rc" -eq 0 ] \
+  || { echo "FAIL: u8c-6 — initial run should exit 0 (pause), got $u8c6_rc"; exit 1; }
+[ "$(jq -r '.status' <<<"$u8c6_pm")" = "waiting" ] \
+  || { echo "FAIL: u8c-6 — parent should be waiting after run"; exit 1; }
+u8c6_prid="$(jq -r '.run_id' <<<"$u8c6_pm")"
+u8c6_c_run_dir="$(readlink -f "$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/subprocess/call_child/"* 2>/dev/null | head -1)"
+u8c6_crid="$(basename "$u8c6_c_run_dir")"
+
+# Delete parent snapshot to trigger fail-closed path.
+u8c6_snap="$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/process.snapshot.json"
+[ -f "$u8c6_snap" ] \
+  || { echo "FAIL: u8c-6 — parent snapshot should exist before delete"; exit 1; }
+rm "$u8c6_snap"
+
+# Submit child gate → fail-closed fires; parent becomes failed, receipt written.
+set +e
+"$cli" submit "$u8c6_crid" gate --local --output go=go --json >/dev/null 2>&1; u8c6_sub_rc=$?
+set -e
+
+u8c6_parent_status="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/manifest.json")"
+[ "$u8c6_parent_status" = "failed" ] \
+  || { echo "FAIL: u8c-6 — parent should be failed (fail-closed), got $u8c6_parent_status"; exit 1; }
+echo "PASS: u8c-6 — fail-closed: parent is failed after snapshot deletion"
+
+# Exactly 1 receipt after first invocation.
+u8c6_receipts_1="$(jq -s '[.[] | select(.step=="call_child" and (.status=="completed" or .status=="failed"))] | length' \
+  "$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/audit.jsonl")"
+[ "$u8c6_receipts_1" -eq 1 ] \
+  || { echo "FAIL: u8c-6 — expected 1 receipt after first fail-closed, got $u8c6_receipts_1"; exit 1; }
+echo "PASS: u8c-6 — exactly 1 failed receipt after first fail-closed invocation"
+
+# Simulate partial write: .done was never written (cascade failed after the
+# receipt was appended but before manifest finalize committed).  Remove .done
+# and the concurrency lock (lock is always released within the originating
+# process; clearing it here ensures the trampoline can re-acquire it).
+# Also reset parent manifest back to waiting at call_child so
+# _local_continue_parent re-enters via Case A (parent still waiting) which
+# is the correct path for this scenario: receipt written, manifest NOT yet
+# flipped to terminal.
+u8c6_done="$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/.sp-cont-call_child.done"
+rm -f "$u8c6_done"
+rmdir "$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/.sp-cont-call_child.lock" 2>/dev/null || true
+# Reset manifest to waiting so the function's precondition (Case A) is met.
+jq -c '.status="waiting" | .waiting={"step":"call_child","index":0,"reason":"waiting_for_callback","since":"2000-01-01T00:00:00Z","expects":{"outputs":[],"schema":[]}}' \
+  "$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/manifest.json" \
+  > "$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/manifest.json.tmp" \
+  && mv "$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/manifest.json.tmp" \
+        "$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/manifest.json"
+
+# Re-invoke via trampoline — should detect existing receipt, skip append,
+# then finalize + cascade + write .done.
+# Use grep -v to strip the final 'main "$@"' invocation so sourcing the
+# binary loads function definitions without triggering execution.
+u8c6_bin_nosrc="$u8c6_dir/opensop_nosrc"
+grep -v '^main "\$@"$' "$cli" > "$u8c6_bin_nosrc"
+u8c6_trampoline="$u8c6_dir/u8c6_trampoline.sh"
+cat > "$u8c6_trampoline" <<TRAMP6
+#!/usr/bin/env bash
+set -euo pipefail
+export OPENSOP_LOCAL_HOME="$OPENSOP_LOCAL_HOME"
+# shellcheck disable=SC1090
+source "$u8c6_bin_nosrc"
+_local_continue_parent "$u8c6_c_run_dir"
+TRAMP6
+chmod +x "$u8c6_trampoline"
+
+set +e
+bash "$u8c6_trampoline" >/dev/null 2>&1; u8c6_tramp_rc=$?
+set -e
+
+# Assert EXACTLY ONE terminal receipt for call_child (Fix 2 guard skipped the append).
+u8c6_receipts_2="$(jq -s '[.[] | select(.step=="call_child" and (.status=="completed" or .status=="failed"))] | length' \
+  "$OPENSOP_LOCAL_HOME/runs/$u8c6_prid/audit.jsonl")"
+[ "$u8c6_receipts_2" -eq 1 ] \
+  || { echo "FAIL: u8c-6 — duplicate receipt after retry! expected 1, got $u8c6_receipts_2"; exit 1; }
+echo "PASS: u8c-6 — fail-closed idempotent receipt: exactly 1 terminal receipt after retry (Fix 2 guard active)"
+
 # --------------------------------------------------------------------------- #
 # U9: Webhook punch-list fixes (HIGH/SECURITY assertions)
 # --------------------------------------------------------------------------- #
