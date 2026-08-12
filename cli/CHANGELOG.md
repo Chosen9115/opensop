@@ -11,6 +11,12 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Fixed
 
+- **Subprocess parent auto-continuation (#107).** When a `subprocess` step's child run contains a form/approval/wait step, the parent run was left permanently in `waiting` state after the child completed — the parent never received the child's output and downstream steps never ran. Three changes fix this:
+  - Child manifests now record `parent_run_id`, `parent_step_id`, and `parent_step_index` at creation time so the child knows how to walk back to its parent.
+  - A new `_local_continue_parent` helper is called by `local_submit` whenever a run reaches a terminal state. It reads the parent linkage, atomically claims the continuation (via `mkdir` lock dir — idempotent and race-safe), merges the child's final `context.json` into the parent context under the subprocess step id (matching the sync-completion merge semantics), appends a `completed` audit receipt for the subprocess step, and re-enters `_local_step_loop` from the next step onward. On child failure it propagates a `failed` receipt and marks the parent `failed` without running downstream steps. Recursion handles nested subprocesses (`_local_continue_parent` calls itself when the resumed parent itself has a `parent_run_id`).
+  - `local_submit` calls `_local_continue_parent "$run_dir"` after finalizing a terminal run manifest.
+  - +14 assertions across 5 new test scenarios: end-to-end continuation, downstream propagation, multiple child pause cycles, idempotency, and failure propagation.
+
 - **test(cli): make the upgrade BASH_SOURCE[0] test hermetic and effective (#104).** The section-(4) upgrade test previously invoked `"$cli" upgrade` directly (where `$cli` is the repo's own `cli/bin/opensop`). On a machine with network access and a valid published checksum, the upgrade could succeed and silently overwrite the working-tree binary with published `main`. Now the test runs a throwaway copy of the binary (the intended `BASH_SOURCE[0]`) and injects a stub `curl` that serves a controlled fixture binary + matching checksum from local temp files — no network, and the repo binary is never a candidate target. The upgrade is driven to a real success and the test asserts it replaced the throwaway copy (not the PATH decoy, not the repo binary), so a `command -v opensop` regression is actually caught.
 
 - **Resumed runs are now drift-proof (#101) — heal and subprocess coverage extended.** Three adversarial gaps closed on top of the original fix:

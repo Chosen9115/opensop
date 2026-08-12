@@ -2535,6 +2535,268 @@ jq -e 'select(.step=="after" and .status=="completed")' "$sp_coe_audit" >/dev/nu
 echo "PASS: subprocess — continue_on_error: failing child recorded failed, 'after' still ran"
 
 # --------------------------------------------------------------------------- #
+# U8b: subprocess parent auto-continuation (#107)
+#
+# When a child run pauses (form/approval/wait step inside a subprocess) and is
+# later submitted to completion, the parent run must automatically advance past
+# the subprocess step — no manual parent submit required.
+#
+# Test matrix:
+#   1. End-to-end continuation: parent[subprocess(child), after] where child has
+#      [gate(form), work(automated)].  Run → pause.  submit gate → parent completes.
+#   2. Downstream propagation: 'after' sees the child's work output threaded through.
+#   3. Multiple child pause cycles: child has two form gates — parent advances only
+#      after the child fully completes (not after the first submit).
+#   4. Idempotency: re-submitting the child after it completed is safe.
+#   5. Failure propagation: submitting child gate with a failing child step causes
+#      the parent to be marked failed.
+# --------------------------------------------------------------------------- #
+spc_dir="$OPENSOP_LOCAL_HOME/sp-cont-tests"
+mkdir -p "$spc_dir"
+
+# Child process: gate(form) → work(shell echoing a marker)
+cat > "$spc_dir/child.sop.json" <<'JSON'
+{
+  "name": "child-with-gate",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "signal", "type": "string", "required": true }] },
+    { "id": "work", "type": "shell",
+      "run": "echo child_marker=CHILD_OUTPUT" }
+  ]
+}
+JSON
+
+# Parent process: subprocess → after(shell reading child output)
+jq -n --arg spc_dir "$spc_dir" \
+  --arg after_run 'echo after_saw=$(echo "$OSL_CONTEXT" | jq -r '"'"'.call_child.work.stdout // ""'"'"')' \
+'{
+  "name": "parent-with-subprocess",
+  "inputs": {},
+  "steps": [
+    { "id": "call_child",
+      "type": "subprocess",
+      "process": ($spc_dir + "/child.sop.json")
+    },
+    { "id": "after",
+      "type": "shell",
+      "run": $after_run }
+  ]
+}' > "$spc_dir/parent.sop.json"
+
+# Step 1: run parent — should pause at subprocess (waiting for child's gate).
+set +e
+spc1_pm="$("$cli" run "$spc_dir/parent.sop.json" --local --json)"; spc1_rc=$?
+set -e
+[ "$spc1_rc" -eq 0 ] \
+  || { echo "FAIL: sp-cont — initial parent run should exit 0 (pause), got $spc1_rc"; exit 1; }
+[ "$(jq -r '.status' <<<"$spc1_pm")" = "waiting" ] \
+  || { echo "FAIL: sp-cont — parent should be waiting, got $(jq -r '.status' <<<"$spc1_pm")"; exit 1; }
+spc1_prid="$(jq -r '.run_id' <<<"$spc1_pm")"
+echo "PASS: sp-cont — parent pauses while subprocess child waits at gate"
+
+# Locate the child run via the symlink.
+spc1_child_run_dir="$(readlink -f "$OPENSOP_LOCAL_HOME/runs/$spc1_prid/subprocess/call_child/"* 2>/dev/null | head -1)"
+[ -d "$spc1_child_run_dir" ] \
+  || { echo "FAIL: sp-cont — child run dir symlink not found"; exit 1; }
+spc1_crid="$(basename "$spc1_child_run_dir")"
+
+# Verify child manifest has parent linkage fields (#107 stamp).
+spc1_child_mf="$(cat "$OPENSOP_LOCAL_HOME/runs/$spc1_crid/manifest.json")"
+[ "$(jq -r '.parent_run_id' <<<"$spc1_child_mf")" = "$spc1_prid" ] \
+  || { echo "FAIL: sp-cont — child manifest missing parent_run_id"; exit 1; }
+[ "$(jq -r '.parent_step_id' <<<"$spc1_child_mf")" = "call_child" ] \
+  || { echo "FAIL: sp-cont — child manifest missing parent_step_id"; exit 1; }
+[ "$(jq -r '.parent_step_index' <<<"$spc1_child_mf")" = "0" ] \
+  || { echo "FAIL: sp-cont — child manifest missing parent_step_index"; exit 1; }
+echo "PASS: sp-cont — child manifest has parent_run_id / parent_step_id / parent_step_index"
+
+# Step 2: submit the child gate → child completes → parent auto-advances.
+set +e
+spc1_sub_out="$("$cli" submit "$spc1_crid" gate --local \
+  --output signal=go \
+  --json)"; spc1_sub_rc=$?
+set -e
+[ "$spc1_sub_rc" -eq 0 ] \
+  || { echo "FAIL: sp-cont — child gate submit should exit 0, got $spc1_sub_rc"; exit 1; }
+echo "PASS: sp-cont — child gate submit exits 0"
+
+# Wait a brief moment for _local_continue_parent to finalize the parent.
+# (It runs synchronously in the same process — no sleep needed, just re-read.)
+spc1_parent_mf_disk="$(cat "$OPENSOP_LOCAL_HOME/runs/$spc1_prid/manifest.json")"
+[ "$(jq -r '.status' <<<"$spc1_parent_mf_disk")" = "completed" ] \
+  || { echo "FAIL: sp-cont — parent manifest.status should be 'completed' after child completes, got: $(jq -r '.status' <<<"$spc1_parent_mf_disk")"; exit 1; }
+echo "PASS: sp-cont — parent manifest.status == completed after child submit"
+
+# The parent's context should have call_child's output (child's entire context).
+spc1_pctx="$(cat "$OPENSOP_LOCAL_HOME/runs/$spc1_prid/context.json")"
+jq -e '.call_child != null' <<<"$spc1_pctx" >/dev/null \
+  || { echo "FAIL: sp-cont — parent context.json is missing call_child key"; exit 1; }
+echo "PASS: sp-cont — parent context.json has call_child entry (child final context merged under step id)"
+
+# Test 2: Downstream propagation — 'after' saw child's work step output.
+spc1_after_out="$(jq -r '.after.stdout // ""' <<<"$spc1_pctx")"
+echo "$spc1_after_out" | grep -q "after_saw=.*child_marker=CHILD_OUTPUT" \
+  || { echo "FAIL: sp-cont — 'after' step did not see child work output (got: $spc1_after_out)"; exit 1; }
+echo "PASS: sp-cont — 'after' step ran and saw child output threaded through context"
+
+# Parent audit: should have waiting receipt (subprocess paused) + completed receipt for call_child + after.
+spc1_paudit="$OPENSOP_LOCAL_HOME/runs/$spc1_prid/audit.jsonl"
+jq -e 'select(.step=="call_child" and .status=="waiting")' "$spc1_paudit" >/dev/null \
+  || { echo "FAIL: sp-cont — parent audit missing call_child waiting receipt"; exit 1; }
+jq -e 'select(.step=="call_child" and .status=="completed" and .type=="subprocess")' "$spc1_paudit" >/dev/null \
+  || { echo "FAIL: sp-cont — parent audit missing call_child completed receipt"; exit 1; }
+jq -e 'select(.step=="after" and .status=="completed")' "$spc1_paudit" >/dev/null \
+  || { echo "FAIL: sp-cont — parent audit missing after completed receipt"; exit 1; }
+echo "PASS: sp-cont — parent audit has call_child(waiting) + call_child(completed) + after(completed)"
+
+# --------------------------------------------------------------------------- #
+# Test 3: Multiple child pause cycles — parent advances only after child FULLY completes.
+# Child has two form steps; parent should remain waiting after first submit.
+# --------------------------------------------------------------------------- #
+cat > "$spc_dir/child2.sop.json" <<'JSON'
+{
+  "name": "two-gate-child",
+  "inputs": {},
+  "steps": [
+    { "id": "gate1", "type": "form",
+      "inputs": [{ "name": "a", "type": "string", "required": true }] },
+    { "id": "gate2", "type": "form",
+      "inputs": [{ "name": "b", "type": "string", "required": true }] },
+    { "id": "done", "type": "shell", "run": "echo all_gates_passed=yes" }
+  ]
+}
+JSON
+
+jq -n --arg spc_dir "$spc_dir" '{
+  "name": "parent-two-gate",
+  "inputs": {},
+  "steps": [
+    { "id": "sp", "type": "subprocess", "process": ($spc_dir + "/child2.sop.json") },
+    { "id": "after", "type": "shell", "run": "echo parent_after_ran=yes" }
+  ]
+}' > "$spc_dir/parent2.sop.json"
+
+set +e
+spc2_pm="$("$cli" run "$spc_dir/parent2.sop.json" --local --json)"; spc2_rc=$?
+set -e
+[ "$spc2_rc" -eq 0 ] \
+  || { echo "FAIL: sp-cont multi-cycle — initial run should exit 0, got $spc2_rc"; exit 1; }
+spc2_prid="$(jq -r '.run_id' <<<"$spc2_pm")"
+spc2_child_run_dir="$(readlink -f "$OPENSOP_LOCAL_HOME/runs/$spc2_prid/subprocess/sp/"* 2>/dev/null | head -1)"
+spc2_crid="$(basename "$spc2_child_run_dir")"
+
+# Submit gate1 — child pauses again at gate2; parent must still be waiting.
+set +e
+"$cli" submit "$spc2_crid" gate1 --local --output a=first --json >/dev/null 2>&1; spc2_s1_rc=$?
+set -e
+[ "$spc2_s1_rc" -eq 0 ] \
+  || { echo "FAIL: sp-cont multi-cycle — gate1 submit should exit 0, got $spc2_s1_rc"; exit 1; }
+
+spc2_parent_status_after_s1="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$spc2_prid/manifest.json")"
+[ "$spc2_parent_status_after_s1" = "waiting" ] \
+  || { echo "FAIL: sp-cont multi-cycle — parent should still be waiting after gate1 (got: $spc2_parent_status_after_s1)"; exit 1; }
+echo "PASS: sp-cont multi-cycle — parent still waiting after first of two child gates submitted"
+
+# Submit gate2 — child fully completes; parent should now advance.
+set +e
+"$cli" submit "$spc2_crid" gate2 --local --output b=second --json >/dev/null 2>&1; spc2_s2_rc=$?
+set -e
+[ "$spc2_s2_rc" -eq 0 ] \
+  || { echo "FAIL: sp-cont multi-cycle — gate2 submit should exit 0, got $spc2_s2_rc"; exit 1; }
+
+spc2_parent_final_status="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$spc2_prid/manifest.json")"
+[ "$spc2_parent_final_status" = "completed" ] \
+  || { echo "FAIL: sp-cont multi-cycle — parent should be completed after all gates (got: $spc2_parent_final_status)"; exit 1; }
+echo "PASS: sp-cont multi-cycle — parent completes only after child fully completes (both gates submitted)"
+
+# --------------------------------------------------------------------------- #
+# Test 4: Idempotency — re-submitting a completed child is safe.
+# --------------------------------------------------------------------------- #
+spc1_child_status_after_redo="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$spc1_crid/manifest.json")"
+if [ "$spc1_child_status_after_redo" = "waiting" ]; then
+  # Child already completed in test 1 — trying to submit again should fail (not waiting).
+  echo "FAIL: sp-cont idempotency — child should not be waiting again"
+  exit 1
+fi
+# submit to a non-waiting run fails with usage_error — that's the expected safe behavior.
+set +e
+spc1_redo_out="$("$cli" submit "$spc1_crid" gate --local --output signal=redo --json 2>&1)"; spc1_redo_rc=$?
+set -e
+[ "$spc1_redo_rc" -ne 0 ] \
+  || { echo "FAIL: sp-cont idempotency — re-submitting completed child should fail, got 0"; exit 1; }
+# Parent must still be completed; context not corrupted.
+spc1_parent_status_after_redo="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$spc1_prid/manifest.json")"
+[ "$spc1_parent_status_after_redo" = "completed" ] \
+  || { echo "FAIL: sp-cont idempotency — parent should remain completed, got: $spc1_parent_status_after_redo"; exit 1; }
+spc1_pctx_after_redo="$(cat "$OPENSOP_LOCAL_HOME/runs/$spc1_prid/context.json")"
+jq -e '.call_child != null' <<<"$spc1_pctx_after_redo" >/dev/null \
+  || { echo "FAIL: sp-cont idempotency — parent context corrupted after redo attempt"; exit 1; }
+echo "PASS: sp-cont idempotency — re-submit on completed child rejected; parent stays completed, context intact"
+
+# --------------------------------------------------------------------------- #
+# Test 5: Failure propagation — when child resumes into a failing step,
+# the parent subprocess step fails and parent manifest.status == failed.
+# --------------------------------------------------------------------------- #
+cat > "$spc_dir/child_fail.sop.json" <<'JSON'
+{
+  "name": "child-with-failing-work",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "trigger", "type": "string", "required": true }] },
+    { "id": "boom", "type": "shell", "run": "exit 7" }
+  ]
+}
+JSON
+
+jq -n --arg spc_dir "$spc_dir" '{
+  "name": "parent-child-fails",
+  "inputs": {},
+  "steps": [
+    { "id": "sp_fail", "type": "subprocess", "process": ($spc_dir + "/child_fail.sop.json") },
+    { "id": "after", "type": "shell", "run": "echo should-not-run" }
+  ]
+}' > "$spc_dir/parent_fail.sop.json"
+
+set +e
+spc5_pm="$("$cli" run "$spc_dir/parent_fail.sop.json" --local --json)"; spc5_rc=$?
+set -e
+[ "$spc5_rc" -eq 0 ] \
+  || { echo "FAIL: sp-cont fail-prop — initial run should exit 0 (pause), got $spc5_rc"; exit 1; }
+spc5_prid="$(jq -r '.run_id' <<<"$spc5_pm")"
+spc5_child_run_dir="$(readlink -f "$OPENSOP_LOCAL_HOME/runs/$spc5_prid/subprocess/sp_fail/"* 2>/dev/null | head -1)"
+spc5_crid="$(basename "$spc5_child_run_dir")"
+
+# Submit gate — child resumes then hits 'boom' (exit 7) and fails.
+set +e
+"$cli" submit "$spc5_crid" gate --local --output trigger=go --json >/dev/null 2>&1; spc5_sub_rc=$?
+set -e
+# Child submit may return non-zero because the child itself fails.
+
+spc5_child_final="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$spc5_crid/manifest.json")"
+[ "$spc5_child_final" = "failed" ] \
+  || { echo "FAIL: sp-cont fail-prop — child should be failed, got $spc5_child_final"; exit 1; }
+echo "PASS: sp-cont fail-prop — child fails after gate submit (boom step exits 7)"
+
+spc5_parent_final="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$spc5_prid/manifest.json")"
+[ "$spc5_parent_final" = "failed" ] \
+  || { echo "FAIL: sp-cont fail-prop — parent should be failed after child failure, got $spc5_parent_final"; exit 1; }
+echo "PASS: sp-cont fail-prop — parent manifest.status == failed when child fails"
+
+# 'after' must NOT have run in the parent.
+spc5_paudit="$OPENSOP_LOCAL_HOME/runs/$spc5_prid/audit.jsonl"
+jq -e 'select(.step=="after")' "$spc5_paudit" >/dev/null 2>&1 \
+  && { echo "FAIL: sp-cont fail-prop — 'after' step ran despite child failure"; exit 1; }
+echo "PASS: sp-cont fail-prop — 'after' step did not run in parent after child failure"
+
+# Parent audit should have a failed receipt for the subprocess step.
+jq -e 'select(.step=="sp_fail" and .status=="failed")' "$spc5_paudit" >/dev/null \
+  || { echo "FAIL: sp-cont fail-prop — parent audit missing sp_fail failed receipt"; exit 1; }
+echo "PASS: sp-cont fail-prop — parent audit has sp_fail failed receipt"
+
+# --------------------------------------------------------------------------- #
 # U9: Webhook punch-list fixes (HIGH/SECURITY assertions)
 # --------------------------------------------------------------------------- #
 u9_dir="$OPENSOP_LOCAL_HOME/u9-webhook-fixes"
