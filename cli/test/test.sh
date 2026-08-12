@@ -1387,6 +1387,327 @@ echo "PASS: process drift — multiple pause/resume cycles both use the snapshot
 rm -rf "$pd_dir" "$pd_home"
 
 # --------------------------------------------------------------------------- #
+# U4c: heal --apply drift-proofing (#101 gap 1)
+#
+# When a run fails, the operator may edit/reorder/delete the on-disk process
+# file before running heal --apply.  heal must retry the ORIGINAL step (from
+# the per-run snapshot), not whatever the file says at heal time.
+#
+# Three scenarios: modify the failed step's run:, reorder steps, delete the
+# original file entirely.
+# --------------------------------------------------------------------------- #
+
+hd_dir="$(mktemp -d)"; hd_home="$(mktemp -d)"
+
+# Helper: a two-step process where 'boom' is conditional on a sentinel file.
+# We use a sentinel so we can make it pass on second try without touching the
+# process definition itself.
+hd_sentinel="$hd_dir/sentinel"
+
+cat > "$hd_dir/hd.sop.json" <<JSON
+{
+  "name": "hd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "pre",  "type": "shell", "run": "echo pre=ORIGINAL" },
+    { "id": "boom", "type": "shell", "run": "[ ! -f \"$hd_sentinel\" ] || exit 11" },
+    { "id": "post", "type": "shell", "run": "echo post=ORIGINAL" }
+  ]
+}
+JSON
+
+# --- (1) heal --apply after modifying the failed step's run: ---
+# First run: sentinel present → boom fails.
+touch "$hd_sentinel"
+set +e
+hd1_m="$(OPENSOP_LOCAL_HOME="$hd_home" "$cli" run "$hd_dir/hd.sop.json" --json 2>/dev/null)"; hd1_rc=$?
+set -e
+[ "$hd1_rc" -ne 0 ] || { echo "FAIL: heal drift (modify) — initial run should fail"; exit 1; }
+hd1_rid="$(jq -r '.run_id' <<<"$hd1_m")"
+
+# Drift: change boom's run: in the on-disk file to something different.
+sed -i 's/exit 11/echo DRIFTED_BOOM/' "$hd_dir/hd.sop.json"
+
+# Remove sentinel so the ORIGINAL conditional passes; heal should run ORIGINAL
+# command (the conditional), not the drifted replacement.
+rm -f "$hd_sentinel"
+set +e
+hd1_heal="$(OPENSOP_LOCAL_HOME="$hd_home" "$cli" heal "$hd1_rid" --apply --json 2>/dev/null)"; hd1_heal_rc=$?
+set -e
+[ "$hd1_heal_rc" -eq 0 ] \
+  || { echo "FAIL: heal drift (modify) — heal --apply should succeed, got $hd1_heal_rc"; exit 1; }
+[ "$(jq -r '.status' <<<"$hd1_heal")" = "completed" ] \
+  || { echo "FAIL: heal drift (modify) — run should complete after heal, got: $(jq -r '.status' <<<"$hd1_heal")"; exit 1; }
+# The 'post' step must have run with the ORIGINAL marker.
+hd1_post="$(jq -r '.post.stdout // ""' "$hd_home/runs/$hd1_rid/context.json" 2>/dev/null)"
+[[ "$hd1_post" == *"post=ORIGINAL"* ]] \
+  || { echo "FAIL: heal drift (modify) — post step should use snapshot (post=ORIGINAL), got: $hd1_post"; exit 1; }
+echo "PASS: heal drift — modifying failed step's run: while failed does not affect heal --apply (snapshot used)"
+
+# Restore the file for next scenario.
+cat > "$hd_dir/hd.sop.json" <<JSON
+{
+  "name": "hd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "pre",  "type": "shell", "run": "echo pre=ORIGINAL" },
+    { "id": "boom", "type": "shell", "run": "[ ! -f \"$hd_sentinel\" ] || exit 11" },
+    { "id": "post", "type": "shell", "run": "echo post=ORIGINAL" }
+  ]
+}
+JSON
+
+# --- (2) heal --apply after reordering steps ---
+touch "$hd_sentinel"
+set +e
+hd2_m="$(OPENSOP_LOCAL_HOME="$hd_home" "$cli" run "$hd_dir/hd.sop.json" --json 2>/dev/null)"; hd2_rc=$?
+set -e
+[ "$hd2_rc" -ne 0 ] || { echo "FAIL: heal drift (reorder) — initial run should fail"; exit 1; }
+hd2_rid="$(jq -r '.run_id' <<<"$hd2_m")"
+
+# Drift: put 'post' first and remove 'pre' and 'boom' — completely different plan.
+cat > "$hd_dir/hd.sop.json" <<'JSON'
+{
+  "name": "hd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "post", "type": "shell", "run": "echo post=REORDERED" },
+    { "id": "pre",  "type": "shell", "run": "echo pre=REORDERED" }
+  ]
+}
+JSON
+
+rm -f "$hd_sentinel"
+set +e
+hd2_heal="$(OPENSOP_LOCAL_HOME="$hd_home" "$cli" heal "$hd2_rid" --apply --json 2>/dev/null)"; hd2_heal_rc=$?
+set -e
+[ "$hd2_heal_rc" -eq 0 ] \
+  || { echo "FAIL: heal drift (reorder) — heal --apply should succeed, got $hd2_heal_rc"; exit 1; }
+hd2_post="$(jq -r '.post.stdout // ""' "$hd_home/runs/$hd2_rid/context.json" 2>/dev/null)"
+[[ "$hd2_post" == *"post=ORIGINAL"* ]] \
+  || { echo "FAIL: heal drift (reorder) — post step should use snapshot (post=ORIGINAL), got: $hd2_post"; exit 1; }
+echo "PASS: heal drift — reordering steps while failed does not misalign heal --apply (original order)"
+
+# --- (3) heal --apply after the original file is deleted ---
+cat > "$hd_dir/hd.sop.json" <<JSON
+{
+  "name": "hd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "pre",  "type": "shell", "run": "echo pre=ORIGINAL" },
+    { "id": "boom", "type": "shell", "run": "[ ! -f \"$hd_sentinel\" ] || exit 11" },
+    { "id": "post", "type": "shell", "run": "echo post=ORIGINAL" }
+  ]
+}
+JSON
+touch "$hd_sentinel"
+set +e
+hd3_m="$(OPENSOP_LOCAL_HOME="$hd_home" "$cli" run "$hd_dir/hd.sop.json" --json 2>/dev/null)"; hd3_rc=$?
+set -e
+[ "$hd3_rc" -ne 0 ] || { echo "FAIL: heal drift (delete-original) — initial run should fail"; exit 1; }
+hd3_rid="$(jq -r '.run_id' <<<"$hd3_m")"
+
+# Delete the original file entirely.
+rm -f "$hd_dir/hd.sop.json"
+rm -f "$hd_sentinel"
+set +e
+hd3_heal="$(OPENSOP_LOCAL_HOME="$hd_home" "$cli" heal "$hd3_rid" --apply --json 2>/dev/null)"; hd3_heal_rc=$?
+set -e
+[ "$hd3_heal_rc" -eq 0 ] \
+  || { echo "FAIL: heal drift (delete-original) — heal --apply should succeed even with file deleted, got $hd3_heal_rc"; exit 1; }
+[ "$(jq -r '.status' <<<"$hd3_heal")" = "completed" ] \
+  || { echo "FAIL: heal drift (delete-original) — run should complete, got: $(jq -r '.status' <<<"$hd3_heal")"; exit 1; }
+hd3_post="$(jq -r '.post.stdout // ""' "$hd_home/runs/$hd3_rid/context.json" 2>/dev/null)"
+[[ "$hd3_post" == *"post=ORIGINAL"* ]] \
+  || { echo "FAIL: heal drift (delete-original) — post step should run from snapshot, got: $hd3_post"; exit 1; }
+echo "PASS: heal drift — deleting the original file does not prevent heal --apply (snapshot used)"
+
+rm -rf "$hd_dir" "$hd_home"
+
+# --------------------------------------------------------------------------- #
+# U4d: subprocess child snapshot — paused child resumes from snapshot (#101 gap 2)
+#
+# A subprocess step that pauses at a form step leaves a process.snapshot.json
+# in the child run dir.  When the operator submits to the child run, local_submit
+# executes from that snapshot — not from whatever the child .sop.json file says.
+#
+# Two scenarios: modify the child's run: while paused; reorder child steps.
+# --------------------------------------------------------------------------- #
+
+spd_dir="$(mktemp -d)"; spd_home="$(mktemp -d)"
+
+# Child process: pauses at a form, then runs a report step.
+cat > "$spd_dir/child.sop.json" <<'JSON'
+{
+  "name": "spd-child",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] },
+    { "id": "report", "type": "shell", "run": "echo sp_marker=ORIGINAL" }
+  ]
+}
+JSON
+
+# Parent process: single subprocess step calling the child.
+jq -n --arg child "$spd_dir/child.sop.json" '{
+  "name": "spd-parent",
+  "inputs": {},
+  "steps": [
+    { "id": "call_child", "type": "subprocess", "process": $child }
+  ]
+}' > "$spd_dir/parent.sop.json"
+
+# --- (1) Modify child run: while child is paused → child resume uses original code ---
+set +e
+spd1_pm="$(OPENSOP_LOCAL_HOME="$spd_home" "$cli" run "$spd_dir/parent.sop.json" --json 2>/dev/null)"
+set -e
+# Parent should be in waiting status (child paused at form).
+[ "$(jq -r '.status' <<<"$spd1_pm")" = "waiting" ] \
+  || { echo "FAIL: subprocess drift (modify) — parent should be waiting, got: $(jq -r '.status' <<<"$spd1_pm")"; exit 1; }
+spd1_prid="$(jq -r '.run_id' <<<"$spd1_pm")"
+
+# Find the child run dir via the symlink the engine created.
+spd1_child_run_dir="$(readlink -f "$spd_home/runs/$spd1_prid/subprocess/call_child/"* 2>/dev/null | head -1)"
+[ -d "$spd1_child_run_dir" ] \
+  || { echo "FAIL: subprocess drift (modify) — child run dir symlink not found"; exit 1; }
+spd1_crid="$(basename "$spd1_child_run_dir")"
+
+# Verify snapshot was written for the child.
+[ -f "$spd1_child_run_dir/process.snapshot.json" ] \
+  || { echo "FAIL: subprocess drift (modify) — child process.snapshot.json not written"; exit 1; }
+echo "PASS: subprocess drift — child process.snapshot.json is written at subprocess creation"
+
+# Drift: change the child's report run: in the on-disk file.
+sed -i 's/sp_marker=ORIGINAL/sp_marker=DRIFTED/' "$spd_dir/child.sop.json"
+
+# Submit to the child run to resume it.
+set +e
+OPENSOP_LOCAL_HOME="$spd_home" "$cli" submit "$spd1_crid" gate --output ok=go --json >/dev/null 2>&1
+set -e
+spd1_report="$(jq -r '.report.stdout // ""' "$spd1_child_run_dir/context.json" 2>/dev/null)"
+[[ "$spd1_report" == *"sp_marker=ORIGINAL"* ]] \
+  || { echo "FAIL: subprocess drift (modify) — child resume should use snapshot, got: $spd1_report"; exit 1; }
+echo "PASS: subprocess drift — modifying child run: while paused does not affect child resume (snapshot used)"
+
+# Restore child file for next scenario.
+cat > "$spd_dir/child.sop.json" <<'JSON'
+{
+  "name": "spd-child",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] },
+    { "id": "report", "type": "shell", "run": "echo sp_marker=ORIGINAL" }
+  ]
+}
+JSON
+
+# --- (2) Reorder child steps while paused → child resume uses original order ---
+set +e
+spd2_pm="$(OPENSOP_LOCAL_HOME="$spd_home" "$cli" run "$spd_dir/parent.sop.json" --json 2>/dev/null)"
+set -e
+[ "$(jq -r '.status' <<<"$spd2_pm")" = "waiting" ] \
+  || { echo "FAIL: subprocess drift (reorder) — parent should be waiting, got: $(jq -r '.status' <<<"$spd2_pm")"; exit 1; }
+spd2_prid="$(jq -r '.run_id' <<<"$spd2_pm")"
+spd2_child_run_dir="$(readlink -f "$spd_home/runs/$spd2_prid/subprocess/call_child/"* 2>/dev/null | head -1)"
+spd2_crid="$(basename "$spd2_child_run_dir")"
+
+# Drift: swap report to index 0 and gate to index 1.
+cat > "$spd_dir/child.sop.json" <<'JSON'
+{
+  "name": "spd-child",
+  "inputs": {},
+  "steps": [
+    { "id": "report", "type": "shell", "run": "echo sp_marker=REORDERED" },
+    { "id": "gate",   "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] }
+  ]
+}
+JSON
+
+set +e
+OPENSOP_LOCAL_HOME="$spd_home" "$cli" submit "$spd2_crid" gate --output ok=go --json >/dev/null 2>&1
+set -e
+spd2_report="$(jq -r '.report.stdout // ""' "$spd2_child_run_dir/context.json" 2>/dev/null)"
+[[ "$spd2_report" == *"sp_marker=ORIGINAL"* ]] \
+  || { echo "FAIL: subprocess drift (reorder) — child resume should use snapshot order, got: $spd2_report"; exit 1; }
+echo "PASS: subprocess drift — reordering child steps while paused does not misalign child resume (original order)"
+
+rm -rf "$spd_dir" "$spd_home"
+
+# --------------------------------------------------------------------------- #
+# U4e: snapshot execution with original file deleted (#101 gap 3)
+#
+# When a run is paused and the ORIGINAL process file is deleted entirely,
+# the snapshot should still drive execution correctly AND relative run: scripts
+# that live in the original process directory should still resolve (proc_dir
+# is recorded in the manifest at run creation and used on resume).
+# --------------------------------------------------------------------------- #
+
+gd_dir="$(mktemp -d)"; gd_home="$(mktemp -d)"
+gd_scripts="$gd_dir/steps"
+mkdir -p "$gd_scripts"
+
+# A small sibling script in the process directory (executable so the engine
+# invokes it directly via its shebang, rather than via bash — this exercises
+# the automated-step proc_dir resolution path that resolves relative paths
+# against the original process directory, not the snapshot location).
+cat > "$gd_scripts/sibling.sh" <<'SH'
+#!/usr/bin/env bash
+echo '{"script_ran":"YES"}'
+SH
+chmod +x "$gd_scripts/sibling.sh"
+
+# Process that pauses at a form, then runs the sibling script as an 'automated'
+# step (the type that resolves run: relative to proc_dir).
+cat > "$gd_dir/gd.sop.json" <<'JSON'
+{
+  "name": "gd-test",
+  "inputs": {},
+  "steps": [
+    { "id": "gate",   "type": "form",
+      "inputs": [{ "name": "ok", "type": "string", "required": true }] },
+    { "id": "script", "type": "automated", "run": "steps/sibling.sh" }
+  ]
+}
+JSON
+
+set +e
+gd_m="$(OPENSOP_LOCAL_HOME="$gd_home" "$cli" run "$gd_dir/gd.sop.json" --json 2>/dev/null)"
+set -e
+[ "$(jq -r '.status' <<<"$gd_m")" = "waiting" ] \
+  || { echo "FAIL: gap3 deleted-file — initial run should be waiting, got: $(jq -r '.status' <<<"$gd_m")"; exit 1; }
+gd_rid="$(jq -r '.run_id' <<<"$gd_m")"
+
+# Confirm process_dir was recorded in the manifest.
+gd_manifest_dir="$(jq -r '.process_dir // ""' "$gd_home/runs/$gd_rid/manifest.json")"
+[ -n "$gd_manifest_dir" ] \
+  || { echo "FAIL: gap3 deleted-file — manifest.process_dir not recorded at run creation"; exit 1; }
+echo "PASS: gap3 deleted-file — manifest.process_dir recorded at run creation"
+
+# Delete the original process file (but leave the steps/ sibling script).
+rm -f "$gd_dir/gd.sop.json"
+
+# Resume — must work even with the original file gone.
+set +e
+gd_submit="$(OPENSOP_LOCAL_HOME="$gd_home" "$cli" submit "$gd_rid" gate --output ok=go --json 2>/dev/null)"; gd_submit_rc=$?
+set -e
+[ "$gd_submit_rc" -eq 0 ] \
+  || { echo "FAIL: gap3 deleted-file — resume should succeed even with original file deleted, got $gd_submit_rc"; exit 1; }
+[ "$(jq -r '.status' <<<"$gd_submit")" = "completed" ] \
+  || { echo "FAIL: gap3 deleted-file — run should complete, got: $(jq -r '.status' <<<"$gd_submit")"; exit 1; }
+
+# The sibling script must have run (proves proc_dir resolved correctly).
+# automated steps merge their JSON stdout back into context under the step id.
+gd_script_out="$(jq -r '.script.script_ran // ""' "$gd_home/runs/$gd_rid/context.json" 2>/dev/null)"
+[[ "$gd_script_out" == "YES" ]] \
+  || { echo "FAIL: gap3 deleted-file — sibling script did not run or proc_dir wrong, got: $gd_script_out"; exit 1; }
+echo "PASS: gap3 deleted-file — relative run: script resolves correctly even after original file is deleted (proc_dir from manifest)"
+
+rm -rf "$gd_dir" "$gd_home"
+
+# --------------------------------------------------------------------------- #
 # U5: wait step type — sync (seconds), async pause/resume (until), bare (neither)
 # --------------------------------------------------------------------------- #
 
