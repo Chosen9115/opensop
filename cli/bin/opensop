@@ -4296,10 +4296,16 @@ $llm_rendered_prompt"
 #     re-enters _local_step_loop from (parent_step_index + 1) onward.
 #   - On child failed: appends a failed audit receipt for the parent step and
 #     flips the parent manifest to failed (no downstream steps run).
-#   - Recursion: if resuming the parent also reaches a terminal state and the
-#     parent itself has a parent_run_id, recurses via _local_continue_parent.
-#   - Idempotency: atomically claims continuation via a lock dir; repeated calls
-#     for an already-continued parent are safe no-ops.
+#   - Recursion: when the resumed parent itself reaches a terminal state and the
+#     parent has its own parent_run_id, recurses so failures and completions walk
+#     all the way up to the root (grandparent→greatgrandparent, etc.).
+#   - Idempotency: a durable completion marker file (.sp-cont-<step>.done) is
+#     written ONLY after ALL state is committed.  A concurrent short-lived lock
+#     dir serialises concurrent calls; it is released on function return.
+#     Partial failures (lock released, no .done) are re-attempted on next submit.
+#   - Snapshot required: the parent's process.snapshot.json MUST exist.  If it is
+#     absent or unreadable the parent is failed closed — the mutable process_file
+#     is never executed here.
 #
 _local_continue_parent() {
   local child_run_dir="$1"
@@ -4320,9 +4326,21 @@ _local_continue_parent() {
   local parent_mf="$parent_run_dir/manifest.json"
   [ -f "$parent_mf" ] || return 0
 
-  # Idempotency/locking: atomically claim this continuation via mkdir.
-  # A second or concurrent call for the same step silently returns.
-  mkdir "$parent_run_dir/.sp-cont-$parent_step_id" 2>/dev/null || return 0
+  # --- Durable idempotency guard (fix #2) ---
+  # Written ONLY after all mutations are committed (at the very end of each
+  # terminal path).  If present, this continuation already fully completed.
+  local _done_marker="$parent_run_dir/.sp-cont-$parent_step_id.done"
+  [[ -f "$_done_marker" ]] && return 0
+
+  # --- Short-lived concurrency lock (fix #2) ---
+  # Serialises concurrent calls; released via trap on RETURN regardless of how
+  # this function exits.  A second concurrent caller sees the lock and returns;
+  # after the first finishes it either wrote .done (skip on next retry) or not
+  # (re-attempt is safe because all mutations are idempotent or guarded).
+  local _lock_dir="$parent_run_dir/.sp-cont-$parent_step_id.lock"
+  mkdir "$_lock_dir" 2>/dev/null || return 0
+  # shellcheck disable=SC2064
+  trap "rmdir '$_lock_dir' 2>/dev/null || true" RETURN
 
   # Verify the parent is still paused at this exact step (guard against races
   # or repeated submit calls after the parent already progressed).
@@ -4337,7 +4355,49 @@ _local_continue_parent() {
   local cont_now; cont_now="$(_local_now)"
   local cont_now_ms; cont_now_ms="$(_local_now_ms)"
 
+  # --- Helper: finalize parent manifest to a terminal state ---
+  # Sets status, ended_at, duration_ms; strips waiting/cursor on failure.
+  _cont_finalize_manifest() {
+    local _status="$1" _strip_waiting="${2:-}"
+    local _p_ended; _p_ended="$(_local_now)"
+    local _p_now_ms; _p_now_ms="$(_local_now_ms)"
+    local _p_total_ms
+    _p_total_ms="$(jq -r --argjson now_ms "$_p_now_ms" '
+      if .started_at_ms != null and (.started_at_ms | type) == "number" then
+        ($now_ms - .started_at_ms) | if . < 0 then 0 else . end
+      elif .started_at != null and (.started_at | type) == "string" and (.started_at | . != "") then
+        ($now_ms - ((.started_at | fromdateiso8601) * 1000 | floor)) | if . < 0 then 0 else . end
+      else
+        null
+      end
+    ' "$parent_mf" 2>/dev/null)" || _p_total_ms="null"
+    [[ -z "$_p_total_ms" ]] && _p_total_ms="null"
+    local _jq_expr='.status=$s | .ended_at=$e | .duration_ms=$dur'
+    [[ -n "$_strip_waiting" ]] && _jq_expr+=' | del(.waiting) | del(.cursor)'
+    jq -c --arg s "$_status" --arg e "$_p_ended" --argjson dur "$_p_total_ms" \
+       "$_jq_expr" \
+       "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf"
+  }
+
   if [[ "$child_status" == "completed" ]]; then
+    # --- Fix #3: require process.snapshot.json; fail closed if absent. ---
+    local parent_snap_file="$parent_run_dir/process.snapshot.json"
+    if [[ ! -f "$parent_snap_file" ]]; then
+      # Snapshot missing — fail the parent closed; never fall back to mutable process_file.
+      jq -nc \
+        --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
+        --arg a "$cont_now" --arg b "$cont_now" \
+        '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"failed",
+          exit_code:1, started_at:$a, ended_at:$b, duration_ms:0, result_hash:"unavailable",
+          output:{error:"process.snapshot.json missing — cannot resume parent (fail-closed)"}}' \
+        >> "$parent_audit"
+      _cont_finalize_manifest "failed" "strip"
+      # Cascade failure upward before writing .done.
+      _local_continue_parent "$parent_run_dir"
+      touch "$_done_marker"
+      return 0
+    fi
+
     # --- Read child's final context — that whole object is the subprocess step output ---
     local child_final_ctx
     if [[ -f "$child_run_dir/context.json" ]]; then
@@ -4363,7 +4423,8 @@ _local_continue_parent() {
     fi
     parent_ctx="$(jq -c --arg id "$parent_step_id" --argjson o "$child_out_json" '.[$id]=$o' <<<"$parent_ctx")"
     printf '%s' "$parent_ctx" > "$parent_run_dir/context.json.tmp" \
-      && mv "$parent_run_dir/context.json.tmp" "$parent_run_dir/context.json"
+      && mv "$parent_run_dir/context.json.tmp" "$parent_run_dir/context.json" \
+      || return 0  # write failed — leave no .done so a retry can recover
 
     # Compute result_hash for the audit receipt.
     local _cont_canon cont_result_hash
@@ -4373,37 +4434,37 @@ _local_continue_parent() {
     [[ -z "$cont_result_hash" ]] && cont_result_hash="unavailable"
 
     # Append a completed audit receipt for the subprocess step in the parent run.
-    jq -nc \
-      --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
-      --arg a "$cont_now" --arg b "$cont_now" \
-      --argjson out "$child_out_json" \
-      --arg rh "$cont_result_hash" \
-      '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"completed",
-        exit_code:0, started_at:$a, ended_at:$b, duration_ms:0, result_hash:$rh, output:$out}' \
-      >> "$parent_audit"
+    # Guard: only append when the parent is still waiting at this step (idempotency
+    # on retry — if .done is absent but manifest already progressed, skip the append).
+    local _cur_status; _cur_status="$(jq -r '.status' "$parent_mf")"
+    local _cur_waiting; _cur_waiting="$(jq -r '.waiting.step // ""' "$parent_mf")"
+    if [[ "$_cur_status" == "waiting" && "$_cur_waiting" == "$parent_step_id" ]]; then
+      jq -nc \
+        --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
+        --arg a "$cont_now" --arg b "$cont_now" \
+        --argjson out "$child_out_json" \
+        --arg rh "$cont_result_hash" \
+        '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"completed",
+          exit_code:0, started_at:$a, ended_at:$b, duration_ms:0, result_hash:$rh, output:$out}' \
+        >> "$parent_audit" || return 0  # write failed — leave no .done
+    fi
 
     # Flip parent manifest back to running (clear waiting/cursor) so _local_step_loop
     # can re-enter it cleanly.
     jq -c '.status="running" | del(.waiting) | del(.cursor)' \
-      "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf"
+      "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf" \
+      || return 0  # write failed — leave no .done
 
-    # Resolve the parent's snap + proc_dir (mirrors local_submit resolution).
-    local parent_snap_file parent_proc_file parent_proc_dir
-    parent_snap_file="$parent_run_dir/process.snapshot.json"
-    local parent_orig_proc_file; parent_orig_proc_file="$(jq -r '.process_file' "$parent_mf")"
-    if [[ -f "$parent_snap_file" ]]; then
-      parent_proc_file="$parent_snap_file"
-      local _pmdir; _pmdir="$(jq -r '.process_dir // ""' "$parent_mf")"
-      if [[ -n "$_pmdir" && -d "$_pmdir" ]]; then
-        parent_proc_dir="$_pmdir"
-      else
-        parent_proc_dir="$(cd "$(dirname "$parent_orig_proc_file")" 2>/dev/null && pwd \
-          || dirname "$parent_orig_proc_file")"
-      fi
+    # Resolve proc_dir from snapshot (snapshot is guaranteed present at this point — fix #3).
+    local parent_proc_file parent_proc_dir
+    parent_proc_file="$parent_snap_file"
+    local _pmdir; _pmdir="$(jq -r '.process_dir // ""' "$parent_mf")"
+    local parent_orig_proc_file; parent_orig_proc_file="$(jq -r '.process_file // ""' "$parent_mf")"
+    if [[ -n "$_pmdir" && -d "$_pmdir" ]]; then
+      parent_proc_dir="$_pmdir"
     else
-      parent_proc_file="$parent_orig_proc_file"
-      parent_proc_dir="$(cd "$(dirname "$parent_proc_file")" 2>/dev/null && pwd \
-        || dirname "$parent_proc_file")"
+      parent_proc_dir="$(cd "$(dirname "$parent_orig_proc_file")" 2>/dev/null && pwd \
+        || dirname "$parent_orig_proc_file")"
     fi
 
     local resume_from=$(( parent_step_index + 1 ))
@@ -4461,31 +4522,22 @@ _local_continue_parent() {
           | .cursor={next_index:$idx}
           | .waiting={step:$step, index:$widx, reason:$reason, expects:$expects, since:$since}' \
          "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf"
+      # Waiting state is stable — write .done so idempotency guard fires on retry.
+      touch "$_done_marker"
     else
-      # Terminal state: finalize manifest with ended_at + duration.
-      local p_ended; p_ended="$(_local_now)"
-      local p_now_ms; p_now_ms="$(_local_now_ms)"
-      local p_total_ms
-      p_total_ms="$(jq -r --argjson now_ms "$p_now_ms" '
-        if .started_at_ms != null and (.started_at_ms | type) == "number" then
-          ($now_ms - .started_at_ms) | if . < 0 then 0 else . end
-        elif .started_at != null and (.started_at | type) == "string" and (.started_at | . != "") then
-          ($now_ms - ((.started_at | fromdateiso8601) * 1000 | floor)) | if . < 0 then 0 else . end
-        else
-          null
-        end
-      ' "$parent_mf" 2>/dev/null)" || p_total_ms="null"
-      [[ -z "$p_total_ms" ]] && p_total_ms="null"
-      jq -c --arg s "$parent_run_status" --arg e "$p_ended" --argjson dur "$p_total_ms" \
-         '.status=$s | .ended_at=$e | .duration_ms=$dur' \
-         "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf"
+      # Terminal state (completed or failed): finalize manifest.
+      _cont_finalize_manifest "$parent_run_status"
 
-      # Cascade: if the parent itself has a grandparent, drive it forward too.
+      # Fix #1: cascade terminal state upward — failed OR completed must both recurse.
       _local_continue_parent "$parent_run_dir"
+
+      # Write .done only after cascade returns, so grandparent cascade is re-attempted
+      # on retry if it failed (no .done written on partial failure).
+      touch "$_done_marker"
     fi
 
   elif [[ "$child_status" == "failed" ]]; then
-    # Child failed — propagate failure upward; no downstream steps run.
+    # --- Fix #1: child failed — propagate upward; recurse after finalizing parent. ---
     jq -nc \
       --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
       --arg a "$cont_now" --arg b "$cont_now" \
@@ -4494,23 +4546,12 @@ _local_continue_parent() {
         output:{error:"subprocess failed — see child run"}}' \
       >> "$parent_audit"
 
-    # Finalize parent manifest as failed.
-    local p_ended_f; p_ended_f="$(_local_now)"
-    local p_now_ms_f; p_now_ms_f="$(_local_now_ms)"
-    local p_total_ms_f
-    p_total_ms_f="$(jq -r --argjson now_ms "$p_now_ms_f" '
-      if .started_at_ms != null and (.started_at_ms | type) == "number" then
-        ($now_ms - .started_at_ms) | if . < 0 then 0 else . end
-      elif .started_at != null and (.started_at | type) == "string" and (.started_at | . != "") then
-        ($now_ms - ((.started_at | fromdateiso8601) * 1000 | floor)) | if . < 0 then 0 else . end
-      else
-        null
-      end
-    ' "$parent_mf" 2>/dev/null)" || p_total_ms_f="null"
-    [[ -z "$p_total_ms_f" ]] && p_total_ms_f="null"
-    jq -c --arg s "failed" --arg e "$p_ended_f" --argjson dur "$p_total_ms_f" \
-       '.status=$s | .ended_at=$e | .duration_ms=$dur | del(.waiting) | del(.cursor)' \
-       "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf"
+    _cont_finalize_manifest "failed" "strip"
+
+    # Cascade: walk failure up to any grandparent (#107 fix #1).
+    _local_continue_parent "$parent_run_dir"
+
+    touch "$_done_marker"
   fi
 
   return 0
