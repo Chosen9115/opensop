@@ -4177,21 +4177,48 @@ echo "PASS: upgrade -- --pin with no value exits non-zero"
 #     is on PATH, the wrong binary would be "upgraded".  With BASH_SOURCE[0],
 #     the running script is always the upgrade target, independent of PATH.
 #
-#     We simulate the attack: place a decoy `opensop` wrapper earlier on PATH
-#     that writes a canary file if it's ever treated as the upgrade target.
-#     Then run upgrade (we'll abort at the checksum-missing stage, which is
-#     fine — we just need to confirm the decoy's install dir is NOT the target).
+#     WHY THIS TEST MUST BE HERMETIC (issue #104):
+#     Running `"$cli" upgrade` directly (where $cli = the repo's own
+#     cli/bin/opensop) on a machine WITH network means the upgrade CAN succeed:
+#     it downloads published main, verifies the checksum, and overwrites
+#     BASH_SOURCE[0] = cli/bin/opensop — silently clobbering the working-tree
+#     binary with the published one.  The test's own assertions still pass
+#     (they only check the decoy was not targeted), so the clobber is invisible
+#     until a later test (the install.sh checksum test) fails.
+#
+#     FIX: we run the upgrade against a THROWAWAY COPY of the binary in a
+#     temp dir, not against $cli itself.  If the upgrade somehow succeeds, it
+#     overwrites the throwaway copy — never the repo binary.  We also inject a
+#     stub curl that always exits non-zero, so the download fails immediately
+#     regardless of network availability.  This keeps the test hermetic while
+#     preserving the original assertions: the decoy dir must not be the upgrade
+#     target, and the decoy path must not appear in the error output.
+
 upg_decoy_dir="$(mktemp -d)"
 # The decoy must be executable and write a canary when invoked.
 printf '#!/usr/bin/env bash\ntouch "%s/decoy-was-targeted"\necho decoy' "$upg_decoy_dir" \
   > "${upg_decoy_dir}/opensop"
 chmod +x "${upg_decoy_dir}/opensop"
 
-# Run upgrade with the decoy first on PATH; expect it to fail (no checksum file
-# in the test environment / network unavailable is OK — we just need the
-# resolved path NOT to be the decoy dir's file).
+# Throwaway copy of the binary in its own temp dir.  BASH_SOURCE[0] will
+# resolve to this copy, so any successful upgrade overwrites only the copy.
+upg_throwaway_dir="$(mktemp -d)"
+cp "$cli" "${upg_throwaway_dir}/opensop"
+chmod +x "${upg_throwaway_dir}/opensop"
+
+# Stub curl: always fails immediately (simulates no network / unreachable host)
+# so the upgrade never downloads or writes anything, regardless of network state.
+upg_curl_stub_dir="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nexit 6\n' > "${upg_curl_stub_dir}/curl"
+chmod +x "${upg_curl_stub_dir}/curl"
+
+# Run upgrade from the throwaway copy with the decoy first on PATH.
+# The decoy is shadowed by the throwaway dir, but PATH lookup is irrelevant —
+# BASH_SOURCE[0] always wins.  Upgrade must fail (curl stub exits 6 = no
+# network) without touching the decoy dir's canary or mentioning its path.
 set +e
-upg_src_out="$(PATH="${upg_decoy_dir}:${PATH}" "$cli" upgrade --json 2>&1)"; upg_src_rc=$?
+upg_src_out="$(PATH="${upg_decoy_dir}:${upg_curl_stub_dir}:${PATH}" \
+  "${upg_throwaway_dir}/opensop" upgrade --json 2>&1)"; upg_src_rc=$?
 set -e
 
 # The decoy must not have been treated as the upgrade target
@@ -4201,7 +4228,7 @@ set -e
 # (We can't predict the exact error, but the decoy path must NOT appear.)
 echo "$upg_src_out" | grep -q "${upg_decoy_dir}" \
   && { echo "FAIL: upgrade error mentions decoy dir — wrong target resolved; output: $upg_src_out"; exit 1; }
-rm -rf "$upg_decoy_dir"
+rm -rf "$upg_decoy_dir" "$upg_throwaway_dir" "$upg_curl_stub_dir"
 echo "PASS: upgrade — targets BASH_SOURCE[0], not PATH (decoy opensop on PATH is ignored)"
 
 # (5) help output: `opensop help upgrade` must succeed and include the command name.
