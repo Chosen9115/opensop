@@ -3094,6 +3094,96 @@ jq -e 'select(.step=="call_child" and .status=="failed")' "$u8c3_paudit" >/dev/n
   || { echo "FAIL: u8c-3 — parent audit missing call_child failed receipt"; exit 1; }
 echo "PASS: u8c-3 — parent audit has call_child failed receipt (fail-closed path)"
 
+# -----------------------------------------------------------------------
+# U8c-4: idempotent receipt append (Fix B).
+# Verify that when a terminal receipt already exists in the parent's audit
+# for a subprocess step, a re-entry of _local_continue_parent does NOT
+# append a duplicate.  This simulates a crash/retry scenario: receipt was
+# written, manifest flip was interrupted (still waiting), .done was never
+# written, and a later submit retries continuation.
+#
+# Approach:
+#   1. Run parent+child (child pauses at gate).  Parent is waiting.
+#   2. Manually pre-append a completed receipt for call_child to the parent
+#      audit (simulating a prior partial continuation that wrote the receipt
+#      but crashed before the manifest flip).
+#   3. Submit the child gate → continuation fires normally.
+#   4. Assert parent audit has EXACTLY ONE terminal receipt for call_child.
+# -----------------------------------------------------------------------
+u8c4_dir="$OPENSOP_LOCAL_HOME/u8c4-idempotent-receipt"
+mkdir -p "$u8c4_dir"
+
+cat > "$u8c4_dir/u8c4_child.sop.json" <<'JSON'
+{
+  "name": "u8c4-child",
+  "inputs": {},
+  "steps": [
+    { "id": "gate", "type": "form",
+      "inputs": [{ "name": "val", "type": "string", "required": true }] },
+    { "id": "done", "type": "noop" }
+  ]
+}
+JSON
+
+jq -n --arg u8c4_dir "$u8c4_dir" '{
+  "name": "u8c4-parent",
+  "inputs": {},
+  "steps": [
+    { "id": "call_child",
+      "type": "subprocess",
+      "process": ($u8c4_dir + "/u8c4_child.sop.json") },
+    { "id": "after", "type": "noop" }
+  ]
+}' > "$u8c4_dir/u8c4_parent.sop.json"
+
+set +e
+u8c4_pm="$("$cli" run "$u8c4_dir/u8c4_parent.sop.json" --local --json)"; u8c4_rc=$?
+set -e
+[ "$u8c4_rc" -eq 0 ] \
+  || { echo "FAIL: u8c-4 — initial run should exit 0 (pause), got $u8c4_rc"; exit 1; }
+[ "$(jq -r '.status' <<<"$u8c4_pm")" = "waiting" ] \
+  || { echo "FAIL: u8c-4 — parent should be waiting after run"; exit 1; }
+u8c4_prid="$(jq -r '.run_id' <<<"$u8c4_pm")"
+u8c4_c_run_dir="$(readlink -f "$OPENSOP_LOCAL_HOME/runs/$u8c4_prid/subprocess/call_child/"* 2>/dev/null | head -1)"
+u8c4_crid="$(basename "$u8c4_c_run_dir")"
+
+# Pre-seed a terminal receipt for call_child in the parent audit (simulating
+# a partial continuation that wrote the receipt but crashed before the manifest flip).
+jq -nc \
+  --arg rid "$u8c4_prid" \
+  --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{run_id:$rid, step:"call_child", type:"subprocess", executor:"internal",
+    status:"completed", exit_code:0, started_at:$now, ended_at:$now,
+    duration_ms:0, result_hash:"pre-seeded", output:{}}' \
+  >> "$OPENSOP_LOCAL_HOME/runs/$u8c4_prid/audit.jsonl"
+
+# Count receipts before the real continuation fires.
+u8c4_receipts_before="$(jq -s '[.[] | select(.step=="call_child" and (.status=="completed" or .status=="failed"))] | length' \
+  "$OPENSOP_LOCAL_HOME/runs/$u8c4_prid/audit.jsonl")"
+[ "$u8c4_receipts_before" -eq 1 ] \
+  || { echo "FAIL: u8c-4 — expected 1 pre-seeded receipt, got $u8c4_receipts_before"; exit 1; }
+echo "PASS: u8c-4 — pre-seeded receipt injected into parent audit"
+
+# Submit child gate → continuation fires; Fix B guard should skip the append.
+set +e
+"$cli" submit "$u8c4_crid" gate --local --output val=x --json >/dev/null 2>&1; u8c4_sub_rc=$?
+set -e
+[ "$u8c4_sub_rc" -eq 0 ] \
+  || { echo "FAIL: u8c-4 — child submit should exit 0, got $u8c4_sub_rc"; exit 1; }
+
+# Parent should have completed (continuation ran normally despite skipping receipt append).
+u8c4_parent_status="$(jq -r '.status' "$OPENSOP_LOCAL_HOME/runs/$u8c4_prid/manifest.json")"
+[ "$u8c4_parent_status" = "completed" ] \
+  || { echo "FAIL: u8c-4 — parent should be completed after continuation, got $u8c4_parent_status"; exit 1; }
+echo "PASS: u8c-4 — parent completed normally despite skipped duplicate receipt append"
+
+# Assert EXACTLY ONE terminal receipt for call_child in the parent audit.
+u8c4_receipts_after="$(jq -s '[.[] | select(.step=="call_child" and (.status=="completed" or .status=="failed"))] | length' \
+  "$OPENSOP_LOCAL_HOME/runs/$u8c4_prid/audit.jsonl")"
+[ "$u8c4_receipts_after" -eq 1 ] \
+  || { echo "FAIL: u8c-4 — duplicate receipt! expected 1 terminal receipt for call_child, got $u8c4_receipts_after"; exit 1; }
+echo "PASS: u8c-4 — idempotent receipt: exactly 1 terminal receipt for call_child (no duplicate appended)"
+
 # --------------------------------------------------------------------------- #
 # U9: Webhook punch-list fixes (HIGH/SECURITY assertions)
 # --------------------------------------------------------------------------- #

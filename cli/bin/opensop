@@ -4306,6 +4306,14 @@ $llm_rendered_prompt"
 #   - Snapshot required: the parent's process.snapshot.json MUST exist.  If it is
 #     absent or unreadable the parent is failed closed — the mutable process_file
 #     is never executed here.
+#   - Durability boundary: the .done marker + waiting-step guard provide
+#     normal-operation idempotency (duplicate submits, concurrent calls).
+#     A SIGKILL between the manifest flip and the .done write can leave a run
+#     in 'running' state with no live worker — recoverable only by the same
+#     means as any other interrupted local run (i.e. re-submitting or using
+#     `opensop heal`).  The local engine is best-effort, same posture as a
+#     Makefile; full crash-consistency across all mutation points would require
+#     an engine-wide explicit resumable state machine (out of scope here).
 #
 _local_continue_parent() {
   local child_run_dir="$1"
@@ -4384,17 +4392,18 @@ _local_continue_parent() {
     local parent_snap_file="$parent_run_dir/process.snapshot.json"
     if [[ ! -f "$parent_snap_file" ]]; then
       # Snapshot missing — fail the parent closed; never fall back to mutable process_file.
+      # Fix A: check every required write; do NOT write .done if any write fails.
       jq -nc \
         --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
         --arg a "$cont_now" --arg b "$cont_now" \
         '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"failed",
           exit_code:1, started_at:$a, ended_at:$b, duration_ms:0, result_hash:"unavailable",
           output:{error:"process.snapshot.json missing — cannot resume parent (fail-closed)"}}' \
-        >> "$parent_audit"
-      _cont_finalize_manifest "failed" "strip"
+        >> "$parent_audit" || return 1  # write failed — leave no .done
+      _cont_finalize_manifest "failed" "strip" || return 1  # write failed — leave no .done
       # Cascade failure upward before writing .done.
-      _local_continue_parent "$parent_run_dir"
-      touch "$_done_marker"
+      _local_continue_parent "$parent_run_dir" || return 1  # cascade failed — leave no .done
+      touch "$_done_marker" || true  # best-effort; idempotency guard may miss on next call but safe
       return 0
     fi
 
@@ -4424,7 +4433,7 @@ _local_continue_parent() {
     parent_ctx="$(jq -c --arg id "$parent_step_id" --argjson o "$child_out_json" '.[$id]=$o' <<<"$parent_ctx")"
     printf '%s' "$parent_ctx" > "$parent_run_dir/context.json.tmp" \
       && mv "$parent_run_dir/context.json.tmp" "$parent_run_dir/context.json" \
-      || return 0  # write failed — leave no .done so a retry can recover
+      || return 1  # write failed — leave no .done so a retry can recover
 
     # Compute result_hash for the audit receipt.
     local _cont_canon cont_result_hash
@@ -4438,7 +4447,14 @@ _local_continue_parent() {
     # on retry — if .done is absent but manifest already progressed, skip the append).
     local _cur_status; _cur_status="$(jq -r '.status' "$parent_mf")"
     local _cur_waiting; _cur_waiting="$(jq -r '.waiting.step // ""' "$parent_mf")"
-    if [[ "$_cur_status" == "waiting" && "$_cur_waiting" == "$parent_step_id" ]]; then
+    # Fix B: idempotent receipt — skip append if a terminal receipt already exists for this
+    # parent_step_id (prevents duplicate receipts on retry when .done is absent but
+    # manifest already advanced past this step).
+    local _existing_completed
+    _existing_completed="$(jq -s --arg sid "$parent_step_id" \
+      'any(.[]; .step==$sid and (.status=="completed" or .status=="failed"))' \
+      "$parent_audit" 2>/dev/null)" || _existing_completed="false"
+    if [[ "$_cur_status" == "waiting" && "$_cur_waiting" == "$parent_step_id" && "$_existing_completed" != "true" ]]; then
       jq -nc \
         --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
         --arg a "$cont_now" --arg b "$cont_now" \
@@ -4446,14 +4462,14 @@ _local_continue_parent() {
         --arg rh "$cont_result_hash" \
         '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"completed",
           exit_code:0, started_at:$a, ended_at:$b, duration_ms:0, result_hash:$rh, output:$out}' \
-        >> "$parent_audit" || return 0  # write failed — leave no .done
+        >> "$parent_audit" || return 1  # write failed — leave no .done
     fi
 
     # Flip parent manifest back to running (clear waiting/cursor) so _local_step_loop
     # can re-enter it cleanly.
     jq -c '.status="running" | del(.waiting) | del(.cursor)' \
       "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf" \
-      || return 0  # write failed — leave no .done
+      || return 1  # write failed — leave no .done
 
     # Resolve proc_dir from snapshot (snapshot is guaranteed present at this point — fix #3).
     local parent_proc_file parent_proc_dir
@@ -4521,37 +4537,50 @@ _local_continue_parent() {
          '.status=$s
           | .cursor={next_index:$idx}
           | .waiting={step:$step, index:$widx, reason:$reason, expects:$expects, since:$since}' \
-         "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf"
+         "$parent_mf" > "$parent_mf.tmp" && mv "$parent_mf.tmp" "$parent_mf" \
+         || return 1  # write failed — leave no .done so a retry can recover
       # Waiting state is stable — write .done so idempotency guard fires on retry.
-      touch "$_done_marker"
+      touch "$_done_marker" || true  # best-effort
     else
       # Terminal state (completed or failed): finalize manifest.
-      _cont_finalize_manifest "$parent_run_status"
+      # Fix A: check every required write; do NOT write .done if any fails.
+      _cont_finalize_manifest "$parent_run_status" || return 1  # write failed — leave no .done
 
       # Fix #1: cascade terminal state upward — failed OR completed must both recurse.
-      _local_continue_parent "$parent_run_dir"
+      # Fix A: if cascade fails, leave no .done so caller retries.
+      _local_continue_parent "$parent_run_dir" || return 1
 
-      # Write .done only after cascade returns, so grandparent cascade is re-attempted
-      # on retry if it failed (no .done written on partial failure).
-      touch "$_done_marker"
+      # Write .done only after cascade returns successfully, so grandparent cascade is
+      # re-attempted on retry if it failed.
+      touch "$_done_marker" || true  # best-effort
     fi
 
   elif [[ "$child_status" == "failed" ]]; then
     # --- Fix #1: child failed — propagate upward; recurse after finalizing parent. ---
-    jq -nc \
-      --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
-      --arg a "$cont_now" --arg b "$cont_now" \
-      '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"failed",
-        exit_code:1, started_at:$a, ended_at:$b, duration_ms:0, result_hash:"unavailable",
-        output:{error:"subprocess failed — see child run"}}' \
-      >> "$parent_audit"
+    # Fix B: idempotent receipt — skip append if a terminal receipt already exists
+    # for this parent_step_id (prevents duplicate receipts on retry when .done is absent).
+    local _existing_terminal
+    _existing_terminal="$(jq -s --arg sid "$parent_step_id" \
+      'any(.[]; .step==$sid and (.status=="completed" or .status=="failed"))' \
+      "$parent_audit" 2>/dev/null)" || _existing_terminal="false"
+    if [[ "$_existing_terminal" != "true" ]]; then
+      jq -nc \
+        --arg rid "$parent_run_id" --arg sid "$parent_step_id" \
+        --arg a "$cont_now" --arg b "$cont_now" \
+        '{run_id:$rid, step:$sid, type:"subprocess", executor:"internal", status:"failed",
+          exit_code:1, started_at:$a, ended_at:$b, duration_ms:0, result_hash:"unavailable",
+          output:{error:"subprocess failed — see child run"}}' \
+        >> "$parent_audit" || return 1  # write failed — leave no .done
+    fi
 
-    _cont_finalize_manifest "failed" "strip"
+    # Fix A: check every required write; do NOT write .done if any fails.
+    _cont_finalize_manifest "failed" "strip" || return 1  # write failed — leave no .done
 
     # Cascade: walk failure up to any grandparent (#107 fix #1).
-    _local_continue_parent "$parent_run_dir"
+    # Fix A: if cascade fails, leave no .done so caller retries.
+    _local_continue_parent "$parent_run_dir" || return 1
 
-    touch "$_done_marker"
+    touch "$_done_marker" || true  # best-effort
   fi
 
   return 0
