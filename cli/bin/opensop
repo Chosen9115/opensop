@@ -4337,7 +4337,17 @@ _local_continue_parent() {
   # returns.  No trap — explicit release guarantees the lock is freed even under
   # recursion without clobbering another invocation's trap.
   local _lock_dir="$parent_run_dir/.sp-cont-$parent_step_id.lock"
-  mkdir "$_lock_dir" 2>/dev/null || return 0
+  if ! mkdir "$_lock_dir" 2>/dev/null; then
+    # Distinguish EXPECTED contention (the lock dir already exists → another
+    # continuation for this exact (parent_run, step) is in flight; safe no-op)
+    # from a GENUINE acquisition error (permission / missing path / fs) — the
+    # latter must not be silently swallowed as success, or the parent could be
+    # left waiting with no surfaced error. (Concurrent-owner-fails recovery is a
+    # best-effort-durability concern tracked engine-wide in #109.)
+    [[ -d "$_lock_dir" ]] && return 0
+    warn "subprocess continuation: cannot acquire lock at $_lock_dir — parent run $parent_run_id may remain waiting"
+    return 1
+  fi
 
   local _body_rc=0
   _local_continue_parent_body \

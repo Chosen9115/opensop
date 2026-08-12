@@ -3614,6 +3614,52 @@ u8c7_locks_after_retry="$(find "$OPENSOP_LOCAL_HOME/runs/$u8c7_gprid" \
          -name '.sp-cont-*.lock' -type d 2>/dev/null; exit 1; }
 echo "PASS: u8c-7 — no .sp-cont-*.lock dirs remain after recursive re-drive (wrapper/body lock fix verified)"
 
+# U8c-8: a GENUINE lock-acquisition error must NOT be swallowed as success (#107).
+# `mkdir` failure caused by expected contention (lock DIR already present) is a
+# safe no-op; any other failure (here: a non-directory file occupies the lock
+# path — a corrupt/unexpected state) must surface as a non-zero return so the
+# parent is not silently left waiting.
+u8c8_home="$(mktemp -d)/home"; mkdir -p "$u8c8_home/runs"
+u8c8_prid="u8c8-parent"; u8c8_crid="u8c8-child"
+mkdir -p "$u8c8_home/runs/$u8c8_prid" "$u8c8_home/runs/$u8c8_crid"
+# Minimal parent manifest: waiting at step 'sp' (enough to reach the lock step).
+printf '{"run_id":"%s","status":"waiting","waiting":{"step":"sp","index":0}}\n' "$u8c8_prid" \
+  > "$u8c8_home/runs/$u8c8_prid/manifest.json"
+# Child manifest: terminal + parent linkage back to the parent's 'sp' step.
+printf '{"run_id":"%s","status":"completed","parent_run_id":"%s","parent_step_id":"sp","parent_step_index":0}\n' \
+  "$u8c8_crid" "$u8c8_prid" > "$u8c8_home/runs/$u8c8_crid/manifest.json"
+# Occupy the lock path with a FILE (not a dir): mkdir will fail and `[[ -d ]]` is false.
+: > "$u8c8_home/runs/$u8c8_prid/.sp-cont-sp.lock"
+
+u8c8_bin_nosrc="$u8c8_home/opensop_nosrc"
+grep -v '^main "\$@"$' "$cli" > "$u8c8_bin_nosrc"
+u8c8_tramp="$u8c8_home/tramp.sh"
+cat > "$u8c8_tramp" <<TRAMP8
+#!/usr/bin/env bash
+set -euo pipefail
+export OPENSOP_LOCAL_HOME="$u8c8_home"
+# shellcheck disable=SC1090
+source "$u8c8_bin_nosrc"
+_local_continue_parent "$u8c8_home/runs/$u8c8_crid"
+TRAMP8
+chmod +x "$u8c8_tramp"
+
+set +e
+u8c8_out="$(bash "$u8c8_tramp" 2>&1)"; u8c8_rc=$?
+set -e
+[ "$u8c8_rc" -ne 0 ] \
+  || { echo "FAIL: u8c-8 — genuine lock-acquisition error should return non-zero, got $u8c8_rc"; exit 1; }
+echo "$u8c8_out" | grep -qi 'cannot acquire lock' \
+  || { echo "FAIL: u8c-8 — genuine lock-acquisition error should surface a warning; got: $u8c8_out"; exit 1; }
+# Sanity: expected contention (a real lock DIR) is still a safe no-op (return 0).
+rm -f "$u8c8_home/runs/$u8c8_prid/.sp-cont-sp.lock"
+mkdir "$u8c8_home/runs/$u8c8_prid/.sp-cont-sp.lock"
+set +e; bash "$u8c8_tramp" >/dev/null 2>&1; u8c8_rc2=$?; set -e
+[ "$u8c8_rc2" -eq 0 ] \
+  || { echo "FAIL: u8c-8 — expected contention (lock dir present) should be a safe no-op (return 0), got $u8c8_rc2"; exit 1; }
+rm -rf "$u8c8_home"
+echo "PASS: u8c-8 — genuine lock-acquisition error surfaces (non-zero + warn); contention stays a safe no-op"
+
 # --------------------------------------------------------------------------- #
 # U9: Webhook punch-list fixes (HIGH/SECURITY assertions)
 # --------------------------------------------------------------------------- #
