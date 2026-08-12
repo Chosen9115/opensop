@@ -4190,6 +4190,14 @@ echo "PASS: upgrade -- --pin with no value exits non-zero"
 #       instead of the throwaway — failing both assertions below.  (An
 #       abort-early/curl-fails design cannot distinguish the two, which is why
 #       we drive a real controlled replacement here.)
+# Portable SHA-256 (Linux sha256sum → macOS shasum → openssl), matching the
+# production _portable_sha256 fallback so this test also runs on stock macOS.
+_upg_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else openssl dgst -sha256 "$1" | awk '{print $NF}'; fi
+}
+
 upg_decoy_dir="$(mktemp -d)"
 # The decoy carries a distinctive original marker so we can prove it was NOT
 # overwritten by the upgrade (a PATH-targeting bug would replace this file).
@@ -4206,7 +4214,7 @@ chmod +x "${upg_throwaway_dir}/opensop"
 upg_fix_dir="$(mktemp -d)"
 printf '#!/usr/bin/env bash\n# UPGRADE-FIXTURE-9.9.9\nreadonly OPENSOP_CLI_VERSION="9.9.9"\necho fixture\n' \
   > "${upg_fix_dir}/opensop.fixture"
-sha256sum "${upg_fix_dir}/opensop.fixture" | awk '{print $1}' > "${upg_fix_dir}/opensop.sha256.fixture"
+_upg_sha256 "${upg_fix_dir}/opensop.fixture" > "${upg_fix_dir}/opensop.sha256.fixture"
 
 # Stub curl: serve the fixture checksum for *.sha256 URLs, the fixture binary
 # otherwise. No network, deterministic.
@@ -4229,7 +4237,7 @@ exit 0
 CURLSTUB
 chmod +x "${upg_curl_stub_dir}/curl"
 
-upg_cli_sha_before="$(sha256sum "$cli" | awk '{print $1}')"
+upg_cli_sha_before="$(_upg_sha256 "$cli")"
 
 # Run the upgrade from the throwaway copy with the decoy FIRST on PATH.
 set +e
@@ -4249,7 +4257,7 @@ grep -q 'DECOY-ORIGINAL-MARKER' "${upg_decoy_dir}/opensop" \
 grep -q 'UPGRADE-FIXTURE' "${upg_decoy_dir}/opensop" \
   && { echo "FAIL: PATH decoy was replaced by the upgrade — wrong (PATH-resolved) target"; exit 1; }
 # The repo's own binary must never be a candidate — verify byte-for-byte unchanged.
-[ "$(sha256sum "$cli" | awk '{print $1}')" = "$upg_cli_sha_before" ] \
+[ "$(_upg_sha256 "$cli")" = "$upg_cli_sha_before" ] \
   || { echo "FAIL: repo cli/bin/opensop was modified by the upgrade test (should be impossible)"; exit 1; }
 rm -rf "$upg_decoy_dir" "$upg_throwaway_dir" "$upg_fix_dir" "$upg_curl_stub_dir"
 echo "PASS: upgrade — replaces BASH_SOURCE[0] (throwaway), never the PATH decoy or the repo binary"
