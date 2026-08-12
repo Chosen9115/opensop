@@ -9,6 +9,8 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-12
+
 ### Fixed
 
 - **Local `automated` steps now match SPEC §3.3 (#74).** (1) The script shebang is honored: an executable step script runs via its own interpreter (Ruby, Python, …) instead of being forced through `bash` — the repo's own `.rb` example steps (`processes/examples/steps/*.rb`) now run locally. Non-executable scripts still run via `bash` (backward compatible). (2) A step's declared `inputs[]` (`from:` references to `steps.<id>.outputs.<field>` or `process.inputs.<field>`) are now resolved and merged OVER the accumulated context before piping, so a script can read its declared input by name while scripts that reach into `.<step-id>.<output>` keep working unchanged. +3 regression tests.
@@ -996,6 +998,7 @@ work; v0.6 features only activate inside a cell.
 - `X-SOP-Token` auth header support.
 - `NO_COLOR` support.
 
+[0.9.0]: https://github.com/Chosen9115/opensop/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Chosen9115/opensop/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Chosen9115/opensop/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Chosen9115/opensop/compare/v0.5.0...v0.6.0
