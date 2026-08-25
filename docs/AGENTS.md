@@ -44,7 +44,7 @@ Linux: `apt-get install -y jq curl`
 ### Install (one line)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/opensop \
+curl -fsSL https://raw.githubusercontent.com/opensop/opensop/main/cli/bin/opensop \
   -o /usr/local/bin/opensop && chmod +x /usr/local/bin/opensop
 ```
 
@@ -53,7 +53,7 @@ If `sudo` is needed for `/usr/local/bin`, use `~/.local/bin/opensop` and confirm
 From source (hermetic / air-gapped):
 
 ```bash
-git clone https://github.com/Chosen9115/opensop.git /tmp/opensop
+git clone https://github.com/opensop/opensop.git /tmp/opensop
 cp /tmp/opensop/cli/bin/opensop /usr/local/bin/opensop && chmod +x /usr/local/bin/opensop
 ```
 

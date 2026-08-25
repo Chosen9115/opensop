@@ -3,10 +3,10 @@
 # install.sh — curl-pipe installer for the OpenSOP CLI
 #
 # Usage (latest release):
-#   curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/opensop/opensop/main/cli/install.sh | bash
 #
 # Usage (pinned version):
-#   curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/install.sh | bash -s -- --version 0.8.1
+#   curl -fsSL https://raw.githubusercontent.com/opensop/opensop/main/cli/install.sh | bash -s -- --version 0.8.1
 #
 # Usage (system-wide — writes to /usr/local/bin, may need sudo):
 #   curl -fsSL ... | bash -s -- --prefix /usr/local
@@ -49,7 +49,7 @@ set -euo pipefail
 # Constants
 # --------------------------------------------------------------------------- #
 
-readonly REPO_OWNER="Chosen9115"
+readonly REPO_OWNER="opensop"
 readonly REPO_NAME="opensop"
 readonly BINARY_NAME="opensop"
 readonly RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}"

@@ -33,7 +33,7 @@ Spec version: **0.7**. Full grammar in [SPEC.md](SPEC.md).
 Install (deps: bash 4+, jq):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/opensop \
+curl -fsSL https://raw.githubusercontent.com/opensop/opensop/main/cli/bin/opensop \
   -o /usr/local/bin/opensop && chmod +x /usr/local/bin/opensop
 ```
 

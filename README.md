@@ -12,7 +12,7 @@ OpenSOP packages an agent's process as a **file in your repo** — same steps, s
 
 ```bash
 # Install the CLI — one file, deps: bash 4+ and jq
-curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/opensop \
+curl -fsSL https://raw.githubusercontent.com/opensop/opensop/main/cli/bin/opensop \
   -o opensop && chmod +x opensop
 
 # Turn a process you already run into an OpenSOP process — and see the difference
@@ -229,4 +229,4 @@ Reference server: [Chosen9115/opensop-rails](https://github.com/Chosen9115/opens
 
 Apache 2.0. See [`LICENSE`](./LICENSE).
 
-**Turn a process you run into one that runs the same way every time — `opensop onboard`.** If OpenSOP is useful, [star the repo](https://github.com/Chosen9115/opensop) — it tells us the standard is worth hardening.
+**Turn a process you run into one that runs the same way every time — `opensop onboard`.** If OpenSOP is useful, [star the repo](https://github.com/opensop/opensop) — it tells us the standard is worth hardening.

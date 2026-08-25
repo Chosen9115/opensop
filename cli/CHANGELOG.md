@@ -118,7 +118,7 @@ This project follows [Semantic Versioning](https://semver.org/) and the
   confirm transfer integrity, not third-party authenticity).
 
   `OPENSOP_RECIPES_BASE` env var (new): overrides the base URL used by
-  `opensop pull`. Default: `https://raw.githubusercontent.com/Chosen9115/opensop`.
+  `opensop pull`. Default: `https://raw.githubusercontent.com/opensop/opensop`.
   Set to a `file://` URL pointing at a local directory tree with the same
   `<ref>/recipes/<author>/<slug>.sop.json` layout for offline testing.
 
@@ -421,7 +421,7 @@ This project follows [Semantic Versioning](https://semver.org/) and the
     (`brew install bash`; macOS ships bash 3.2 which is not supported); **Windows** — WSL only.
 
   - `opensop upgrade` — new subcommand.  Re-fetches the latest release of the
-    single-file script from `github.com/Chosen9115/opensop` and replaces the
+    single-file script from `github.com/opensop/opensop` and replaces the
     installed binary.  Prints old → new version on success.  Flags: `--pin X.Y.Z`
     to target a specific tag; `--dry-run` to preview without writing.  Registered in
     the command registry (category `config`, backend `local`; requires `curl`).
@@ -1024,14 +1024,14 @@ work; v0.6 features only activate inside a cell.
 - `X-SOP-Token` auth header support.
 - `NO_COLOR` support.
 
-[0.9.0]: https://github.com/Chosen9115/opensop/compare/v0.8.0...v0.9.0
-[0.8.0]: https://github.com/Chosen9115/opensop/compare/v0.7.0...v0.8.0
-[0.7.0]: https://github.com/Chosen9115/opensop/compare/v0.6.0...v0.7.0
-[0.6.0]: https://github.com/Chosen9115/opensop/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/Chosen9115/opensop/compare/v0.4.1...v0.5.0
-[0.4.1]: https://github.com/Chosen9115/opensop/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/Chosen9115/opensop/compare/v0.3.1...v0.4.0
-[0.3.1]: https://github.com/Chosen9115/opensop/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/Chosen9115/opensop/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/Chosen9115/opensop/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/Chosen9115/opensop/releases/tag/v0.1.0
+[0.9.0]: https://github.com/opensop/opensop/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/opensop/opensop/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/opensop/opensop/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/opensop/opensop/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/opensop/opensop/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/opensop/opensop/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/opensop/opensop/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/opensop/opensop/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/opensop/opensop/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/opensop/opensop/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/opensop/opensop/releases/tag/v0.1.0

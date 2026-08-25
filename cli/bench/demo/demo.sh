@@ -286,6 +286,6 @@ println  "  Declare it, run it, get the same result every time."
 println  "                                                — OpenSOP"
 printf "${RESET}"
 printf '\n'
-cprintln "$DIM" "  opensop.ai  ·  github.com/Chosen9115/opensop"
+cprintln "$DIM" "  opensop.ai  ·  github.com/opensop/opensop"
 printf '\n'
 pause 3.5

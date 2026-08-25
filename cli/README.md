@@ -82,7 +82,7 @@ chsh -s "$(brew --prefix)/bin/bash"
 ### Installer (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/opensop/opensop/main/cli/install.sh | bash
 ```
 
 Installs to `~/.local/bin/opensop` (user-writable, no sudo). Options:
@@ -103,19 +103,19 @@ The installer checks bash version, verifies `jq` is available, and prints a `$PA
 ### Direct download (one line)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Chosen9115/opensop/main/cli/bin/opensop \
+curl -fsSL https://raw.githubusercontent.com/opensop/opensop/main/cli/bin/opensop \
   -o ~/.local/bin/opensop && chmod +x ~/.local/bin/opensop
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/Chosen9115/opensop.git
+git clone https://github.com/opensop/opensop.git
 cp opensop/cli/bin/opensop ~/.local/bin/
 chmod +x ~/.local/bin/opensop
 ```
 
-The CLI is a single bash file living at `cli/bin/opensop` in the [opensop](https://github.com/Chosen9115/opensop) repo (the `opensop-cli` repo is archived — all development continues here).
+The CLI is a single bash file living at `cli/bin/opensop` in the [opensop](https://github.com/opensop/opensop) repo (the `opensop-cli` repo is archived — all development continues here).
 
 ### Upgrade
 
@@ -326,7 +326,7 @@ $ opensop --json schema validate /nonexistent.yaml 2>&1 1>/dev/null
 
 Set `NO_COLOR=1` to disable ANSI color.
 
-**`OPENSOP_RECIPES_BASE`** overrides the base URL used by `opensop pull` (default: `https://raw.githubusercontent.com/Chosen9115/opensop`). Set it to a `file://` URL pointing at a local directory with the same `<ref>/recipes/<author>/<slug>.sop.json` layout for offline testing or air-gapped environments.
+**`OPENSOP_RECIPES_BASE`** overrides the base URL used by `opensop pull` (default: `https://raw.githubusercontent.com/opensop/opensop`). Set it to a `file://` URL pointing at a local directory with the same `<ref>/recipes/<author>/<slug>.sop.json` layout for offline testing or air-gapped environments.
 
 ## Input forms
 
