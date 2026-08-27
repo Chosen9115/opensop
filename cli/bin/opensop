@@ -718,7 +718,7 @@ submit|resume a paused (waiting) run by supplying step outputs|submit <run_id> <
 cancel|cancel a running or waiting run|cancel <run_id> [--reason TEXT]|execution|dual
 runs|list local runs|runs|execution|local
 show|show a local run's manifest and per-step receipts|show <run_id>|execution|local
-heal|diagnose or re-run a failed step (closed heal loop)|heal <run_id> [--apply] [--input k=v ...]|execution|local
+heal|diagnose or re-run a failed step (closed heal loop)|heal <run_id> [--apply] [--force-effects] [--input k=v ...]|execution|local
 init|create .opensop/ in cwd making it an OpenSOP cell|init [--name N] [--parent PATH]|cells|local
 scope|print the active cell and ancestor chain|scope|cells|local
 annotate|append a policy event to a skill's lineage history|annotate <skill> <event-type> <json>|cells|local
@@ -1058,6 +1058,8 @@ EX
   opensop heal <run_id> --json                 # machine-readable fault record
   opensop heal <run_id> --apply                # re-run the failed step, continue the run
   opensop heal <run_id> --apply --input k=v    # re-run with corrected inputs
+  opensop heal <run_id> --apply --force-effects  # required when the failed step declares `effects` (it may have already
+                                                  # acted on the world — LinkedIn post, email, spend); refused without this flag
 EX
       ;;
     init)
@@ -4252,7 +4254,13 @@ $llm_rendered_prompt"
            "The step produced this output/error: " + ($out | tojson) + ".\n" +
            "To diagnose: inspect the step definition and the inputs above. " +
            "Common fixes: correct the step script or shell command, supply missing/corrected inputs via \"--input k=v\", or fix an upstream step output that this step depends on. " +
-           "To re-run after a fix: opensop heal " + $rid + " --apply [--input k=v ...]"')"
+           (if (($step_def.effects // "") | length) > 0 then
+              "This step declares effects: \"" + $step_def.effects + "\" — it may have already succeeded before this failure; do not blindly retry. " +
+              "To re-run anyway: opensop heal " + $rid + " --apply --force-effects"
+            else
+              "To re-run after a fix: opensop heal " + $rid + " --apply [--input k=v ...]"
+            end)'
+        )"
         jq -nc \
           --arg rid "$run_id" \
           --arg sid "$sid" \
@@ -5906,17 +5914,26 @@ local_show() {
 #   If re-run succeeds: run continues/completes normally.
 #   If re-run fails again: a fresh fault record is written at the same path.
 #   Prints a warning about input data exposure per SPEC §11.4.
+#
+#   Effects guard: if the failed step declares `effects` (SPEC §3.2) it acts on
+#   the world outside the run — it may have already succeeded remotely before
+#   the CLI observed the failure. `--apply` refuses to re-run such a step
+#   (exit non-zero, no re-run, no audit event) unless `--force-effects` is also
+#   passed. This is a refusal + flag, not an interactive prompt — agents have
+#   no TTY to answer one.
 # --------------------------------------------------------------------------- #
 local_heal() {
-  [[ $# -lt 1 ]] && die "usage: opensop heal <run_id> [--apply] [--input k=v ...]" "usage_error" "run opensop help heal"
+  [[ $# -lt 1 ]] && die "usage: opensop heal <run_id> [--apply] [--force-effects] [--input k=v ...]" "usage_error" "run opensop help heal"
   local run_id="${1:-}"; shift
-  [ -n "$run_id" ] || die "usage: opensop heal <run_id> [--apply] [--input k=v ...]" "usage_error"
+  [ -n "$run_id" ] || die "usage: opensop heal <run_id> [--apply] [--force-effects] [--input k=v ...]" "usage_error"
 
   local want_apply=false
+  local want_force_effects=false
   local -a extra_args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --apply) want_apply=true ;;
+      --force-effects) want_force_effects=true ;;
       --input|--inputs|-*)  extra_args+=("$1") ;;
       *)        extra_args+=("$1") ;;
     esac
@@ -5941,6 +5958,22 @@ local_heal() {
   fi
 
   local fault_json; fault_json="$(cat "$fault_file")"
+  local failed_step_id; failed_step_id="$(jq -r '.step.id // ""' <<<"$fault_json")"
+
+  # Look up the failed step's declared `effects` (SPEC §3.2), if any, so both
+  # diagnosis and --apply can guard against re-executing a step that acts on
+  # the world. Prefer the per-run snapshot (#101, same source --apply retries
+  # from); fall back to manifest.process_file. Best-effort: if neither is
+  # readable, step_effects stays empty and heal behaves as it did before
+  # `effects` existed.
+  local step_effects=""
+  local _heal_effects_src="$run_dir/process.snapshot.json"
+  [ -f "$_heal_effects_src" ] || _heal_effects_src="$(jq -r '.process_file // ""' "$mf")"
+  if [[ -n "$failed_step_id" && -n "$_heal_effects_src" && -f "$_heal_effects_src" ]]; then
+    step_effects="$(jq -r --arg sid "$failed_step_id" \
+      '((.steps // [])[] | select(.id == $sid) | .effects) // empty' \
+      "$_heal_effects_src" 2>/dev/null)"
+  fi
 
   # ── diagnosis mode (no --apply) ───────────────────────────────────────────
   if [[ "$want_apply" == false ]]; then
@@ -5962,14 +5995,34 @@ local_heal() {
       info "── inputs snapshot (may contain sensitive data — see SPEC §11.4) ──"
       jq -c '.inputs' <<<"$fault_json"
       info "── next steps ──"
-      printf '  opensop heal %s --apply [--input k=v ...]   # re-run the failed step\n' "$run_id"
+      if [[ -n "$step_effects" ]]; then
+        printf '  step '\''%s'\'' declares effects: "%s"\n' "$failed_step" "$step_effects"
+        printf '  It may have already succeeded before the failure. Check before retrying.\n'
+        printf '  opensop heal %s --apply --force-effects   # re-run anyway (irreversible step)\n' "$run_id"
+      else
+        printf '  opensop heal %s --apply [--input k=v ...]   # re-run the failed step\n' "$run_id"
+      fi
     fi
     return 0
   fi
 
   # ── apply mode (--apply) ──────────────────────────────────────────────────
   # Re-run the previously-failed step and continue the run from there.
-  #
+
+  # Effects guard (must run before anything else in apply mode): a step that
+  # declares `effects` acts on the world outside the run — it may have already
+  # succeeded remotely before the CLI observed the failure (e.g. an HTTP
+  # request that landed but the response timed out). Re-running it blind can
+  # double-post/double-send/double-spend, so refuse unless the caller
+  # explicitly opts in with --force-effects. This is a refusal + documented
+  # flag, not an interactive prompt — agents have no TTY to answer one.
+  if [[ -n "$step_effects" && "$want_force_effects" != true ]]; then
+    local _guard_msg
+    _guard_msg="$(printf "heal: step '%s' declares effects: \"%s\"\nIt may have already succeeded before the failure. Check before retrying.\nTo re-run anyway: opensop heal %s --apply --force-effects" \
+      "$failed_step_id" "$step_effects" "$run_id")"
+    die "$_guard_msg" "cli_error"
+  fi
+
   # Prefer the per-run process snapshot (written at run creation, #101) so that
   # edits to the on-disk .sop.json after the failure cannot change what gets
   # retried.  Fall back to manifest.process_file for legacy runs (no snapshot).
@@ -5992,7 +6045,7 @@ local_heal() {
     proc_dir="$(cd "$(dirname "$proc_file")" && pwd)"
   fi
 
-  local failed_step_id; failed_step_id="$(jq -r '.step.id' <<<"$fault_json")"
+  # failed_step_id was already computed above (used by the effects guard).
 
   # Find the index of the failed step in the process file (snapshot or fallback).
   local n_steps; n_steps="$(jq '(.steps // []) | length' "$proc_file")"
@@ -6026,15 +6079,22 @@ local_heal() {
     ctx="$(jq -c --argjson i "$_heal_inp" '. * $i' <<<"$ctx")"
   fi
 
-  # Append a "heal" audit event before re-running.
+  # Append a "heal" audit event before re-running. When the step declared
+  # `effects` and the guard above was overridden with --force-effects, record
+  # that in the note — this is the durable evidence that an irreversible step
+  # was knowingly re-run.
   local heal_ts; heal_ts="$(_local_now)"
   local audit="$run_dir/audit.jsonl"
+  local heal_note="heal --apply: re-running failed step"
+  if [[ -n "$step_effects" && "$want_force_effects" == true ]]; then
+    heal_note="heal --apply --force-effects: re-running step with declared effects (\"$step_effects\") — may double-execute"
+  fi
   jq -nc \
     --arg rid "$run_id" \
     --arg sid "$failed_step_id" \
     --arg ts "$heal_ts" \
-    '{run_id:$rid, event:"heal", step:$sid, healed_at:$ts,
-      note:"heal --apply: re-running failed step"}' >> "$audit"
+    --arg note "$heal_note" \
+    '{run_id:$rid, event:"heal", step:$sid, healed_at:$ts, note:$note}' >> "$audit"
 
   # Append lineage annotation if inside a cell.
   local _cell_root; _cell_root="$(_find_scope_root 2>/dev/null || true)"
