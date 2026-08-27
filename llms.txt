@@ -86,7 +86,7 @@ opensop dry-run ./my-process.sop.json --input key=value
 
 The CLI runs processes locally with no server. For shared orchestration, a team audit log, or a monitoring UI, point the CLI at any server that implements the `/sop/*` API contract in [SPEC.md](SPEC.md) §4.2.
 
-Reference server implementation: [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) — a Rails 8 server adding team visibility, webhook-triggered starts (HMAC-authenticated), and a shared audit log. Use it with:
+There is no maintained reference server. SPEC.md §4 specifies an optional server profile — shared audit log, team visibility, webhook-triggered starts — for anyone who wants to implement it. Point the CLI at a conforming server with:
 
 ```bash
 opensop config set url https://your-server.example.com

@@ -202,7 +202,7 @@ Full grammar and the `/sop/*` API contract: [`SPEC.md`](./SPEC.md).
 
 The CLI runs everything locally with no server. When you want shared orchestration, a team audit log, or a monitoring API, point the CLI at any server that implements the [`SPEC.md`](./SPEC.md) `/sop/*` contract — including per-process status at `GET /sop/processes/status`, which backs `opensop ps --remote` / `opensop watch --remote`.
 
-Reference server: [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) — Rails 8, team visibility, HMAC-verified webhook triggers, shared audit log. The server is optional infrastructure; `opensop run` never requires it.
+There is no maintained reference server. The profile is specified so anyone can build one; the CLI is the reference implementation of the local profile, and `opensop run` never requires a server.
 
 ---
 
@@ -221,7 +221,6 @@ Reference server: [Chosen9115/opensop-rails](https://github.com/Chosen9115/opens
 | [`docs/AGENTS.md`](./docs/AGENTS.md) | Agent builders | Discover → run → build → openSOP-ize → evolve |
 | [`EVOLUTION.md`](./EVOLUTION.md) | Process authors | Mineralization tiers — hardening a process over time |
 | [`cli/README.md`](./cli/README.md) | CLI users | Full command reference + install verification |
-| [opensop-rails](https://github.com/Chosen9115/opensop-rails) | Self-hosters | The reference server |
 
 ---
 

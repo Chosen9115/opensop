@@ -2,7 +2,7 @@
 
 This directory is the OpenSOP process library: example `.sop.json` and `.sop.yaml` process definitions that demonstrate the spec and serve as starting points.
 
-The local CLI (`opensop run`) executes `.sop.json` files directly — no server, no database. The reference server ([Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails)) loads from a `processes/` directory on boot and registers definitions into a database cache. Both consumers read the same files; the format is the same.
+The local CLI (`opensop run`) executes `.sop.json` files directly — no server, no database. A conforming server loads from a `processes/` directory on boot and registers definitions into its own cache. Both consumers read the same files; the format is the same.
 
 ## Layout
 
@@ -37,7 +37,7 @@ The CLI runs the process on-machine: no server, no network, no account. Paused s
 When an `automated` step references a script via `run:`, the path resolves differently depending on the backend:
 
 - **Local CLI:** path is relative to the process file.
-- **Reference server (opensop-rails):** path is relative to the `processes/` root, not the YAML file. A YAML at `processes/examples/customer-onboarding.sop.yaml` must write `run: ./examples/steps/verify-documents.rb`.
+- **A conforming server:** path is relative to the `processes/` root, not the YAML file. A YAML at `processes/examples/customer-onboarding.sop.yaml` must write `run: ./examples/steps/verify-documents.rb`.
 
 ## For forks with private processes
 

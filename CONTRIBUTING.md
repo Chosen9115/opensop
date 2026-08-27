@@ -1,6 +1,6 @@
 # Contributing to OpenSOP
 
-OpenSOP is a public standard: the spec ([`SPEC.md`](./SPEC.md)), the manifesto ([`MANIFESTO.md`](./MANIFESTO.md)), and the local-first CLI ([`cli/`](./cli/)). The Rails reference server has moved to [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) — engine contributions go there.
+OpenSOP is a public standard: the spec ([`SPEC.md`](./SPEC.md)), the manifesto ([`MANIFESTO.md`](./MANIFESTO.md)), and the local-first CLI ([`cli/`](./cli/)). The spec defines an optional server profile (§4); there is no maintained reference server.
 
 ---
 
@@ -20,9 +20,8 @@ OpenSOP is a public standard: the spec ([`SPEC.md`](./SPEC.md)), the manifesto (
 `SPEC.md` is the contract shared between this repo and any conforming server. Changes must be coordinated:
 
 1. **Open an issue** here describing the proposed change and its rationale. Include the current behavior, the proposed behavior, and which step types or endpoints are affected.
-2. **Open a corresponding issue or PR** in [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) covering the server-side implementation.
-3. The two PRs must reference each other. Neither merges until both are ready (or the server PR is tracked as a known gap in the `SPEC.md` status section).
-4. Update `SPEC.md` to reflect the new version (`0.6` → next). When proposing a format change, describe it as a `0.6` extension — the current version is `"0.6"`, not `"0.1"`.
+2. If the change touches the **server profile** (§4), say so explicitly. Nobody implements that profile today, so the spec is the only record of the decision.
+3. Update `SPEC.md` to reflect the new version. When proposing a format change, describe it as an extension of the current version — check the version at the top of `SPEC.md` rather than assuming.
 
 ---
 
@@ -70,7 +69,7 @@ Public example processes live in `processes/examples/`. They must be:
 
 `processes/examples/customer-onboarding.sop.yaml` is the canonical reference.
 
-**A note on `run:` paths:** the reference server (opensop-rails) resolves script paths relative to `processes/` (not relative to the YAML file). A YAML at `processes/examples/my-process.sop.yaml` must reference its script as `./examples/steps/my-script.rb`.
+**A note on `run:` paths:** a conforming server resolves script paths relative to `processes/` (not relative to the YAML file). A YAML at `processes/examples/my-process.sop.yaml` must reference its script as `./examples/steps/my-script.rb`.
 
 ---
 
