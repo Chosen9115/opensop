@@ -9,6 +9,10 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Changed
+
+- **`opensop pull` now addresses the `opensop/recipes` library, not `opensop/opensop`.** The recipe library is moving out of the main repo into its own public repo, and recipes are now per-slug folders instead of flat files. `OPENSOP_RECIPES_BASE` now defaults to `https://raw.githubusercontent.com/opensop/recipes`, and the fetch path drops the `recipes/` segment and adds a `<slug>/` folder: `${OPENSOP_RECIPES_BASE}/${ref}/${author}/${slug}/${slug}.sop.json` (was `.../recipes/${author}/${slug}.sop.json`). `OPENSOP_RECIPES_BASE` itself still overrides the base exactly as before — only the default value and the path shape under it changed. The example recipes that ship in this repo under `recipes/opensop/` moved from `recipes/opensop/<slug>.sop.json` to `recipes/opensop/<slug>/<slug>.sop.json` to match; they remain in-repo examples and CLI test fixtures, not the published library.
+
 ### Fixed
 
 - **Subprocess parent auto-continuation (#107).** When a `subprocess` step's child run contains a form/approval/wait step, the parent run was left permanently in `waiting` state after the child completed — the parent never received the child's output and downstream steps never ran. Three changes fix this, plus three adversarial hardening fixes applied in follow-up review:
