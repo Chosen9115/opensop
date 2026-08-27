@@ -149,7 +149,7 @@ versions continue to parse and run unchanged — this spec is additive.
 | `sla` | No | `{target: "72h", warning: "48h"}`. |
 | `on_error` | No | `{notify: {channel, target}, retry_policy}`. |
 | `access` | No | `{start: [], view: [], advance: [], admin: []}`. |
-| `recipe` | No | Distribution metadata: origin, install hint, discovery tags. See §2.8. Ignored by the execution engine. |
+| `sop` | No | Distribution metadata: origin, install hint, discovery tags. See §2.8. Ignored by the execution engine. `recipe` is accepted as a deprecated alias. |
 
 ---
 
@@ -321,27 +321,32 @@ process:
 Running instances are pinned to the version they started on. `replaces` marks
 the prior version as deprecated.
 
-### 2.8 The `recipe` object — distribution metadata (additive, v0.7.x)
+### 2.8 The `sop` object — distribution metadata (additive, v0.7.x; renamed from `recipe` in v0.7.x)
 
-The optional `recipe` object makes a `.sop.json` or `.sop.yaml` file
+The optional `sop` object makes a `.sop.json` or `.sop.yaml` file
 self-describing as a distribution artifact. It carries metadata about where the
 file came from and how a consumer can install or reference it. These fields are
 **ignored by the execution engine** — they have no effect on how a process runs,
 what steps execute, or what outputs are produced. Their sole purpose is
 discovery and distribution tooling.
 
-All three fields are optional. Omitting the `recipe` object entirely is the
+All three fields are optional. Omitting the `sop` object entirely is the
 normal case for private or in-repo processes; nothing breaks and nothing changes.
+
+`recipe` is accepted as a **deprecated alias** for `sop`, with the same three
+sub-fields (`recipe.source`, `recipe.install`, `recipe.tags`). Conforming
+parsers MUST still accept it. If a document has both `sop` and `recipe`, `sop`
+wins and `recipe` is ignored.
 
 | Field | Type | Description |
 |---|---|---|
-| `recipe.source` | string | Canonical location of this recipe file. A raw URL (e.g. `https://raw.githubusercontent.com/acme/sops/main/customer-onboarding.sop.json`) or a short owner/slug reference (e.g. `acme/customer-onboarding`) that tooling can resolve. Lets a consumer trace the file back to its authoritative origin. |
-| `recipe.install` | string | A one-line human- or agent-runnable install hint (e.g. `opensop pull acme/customer-onboarding`). Tooling (CLI, registry UIs) may display this as a copy-pasteable command. Not executed by the engine. |
-| `recipe.tags` | string[] | Array of strings for discovery and search (e.g. `["sales", "lead-qualification", "crm"]`). Distinct from the process-level `tags` field (§2.2), which is for runtime filtering and appears in `GET /sop/` responses. `recipe.tags` is for external registry or marketplace discovery. |
+| `sop.source` | string | Canonical location of this SOP file. A raw URL (e.g. `https://raw.githubusercontent.com/acme/sops/main/customer-onboarding.sop.json`) or a short owner/slug reference (e.g. `acme/customer-onboarding`) that tooling can resolve. Lets a consumer trace the file back to its authoritative origin. |
+| `sop.install` | string | A one-line human- or agent-runnable install hint (e.g. `opensop pull acme/customer-onboarding`). Tooling (CLI, registry UIs) may display this as a copy-pasteable command. Not executed by the engine. |
+| `sop.tags` | string[] | Array of strings for discovery and search (e.g. `["sales", "lead-qualification", "crm"]`). Distinct from the process-level `tags` field (§2.2), which is for runtime filtering and appears in `GET /sop/` responses. `sop.tags` is for external registry or marketplace discovery. |
 
 **Rationale:** a shared process file is its own distribution vehicle. Without
-`recipe`, a consumer who receives a `.sop.json` has no machine-readable way to
-know where it came from or how to get updates. With `recipe`, the file carries
+`sop`, a consumer who receives a `.sop.json` has no machine-readable way to
+know where it came from or how to get updates. With `sop`, the file carries
 that metadata alongside its execution definition, enabling a registry or agent to
 surface the install command and link back to the source without out-of-band
 documentation.
@@ -353,7 +358,7 @@ documentation.
   "name": "customer-onboarding",
   "version": "2.1",
   "description": "Onboard a new customer: collect info, verify, assign rep",
-  "recipe": {
+  "sop": {
     "source": "acme/customer-onboarding",
     "install": "opensop pull acme/customer-onboarding",
     "tags": ["onboarding", "crm", "sales"]
@@ -373,7 +378,7 @@ process:
   name: customer-onboarding
   version: "2.1"
   description: "Onboard a new customer: collect info, verify, assign rep"
-  recipe:
+  sop:
     source: acme/customer-onboarding
     install: opensop pull acme/customer-onboarding
     tags: [onboarding, crm, sales]
@@ -384,20 +389,21 @@ process:
         - { name: company, type: string }
 ```
 
-`recipe` is a Process field (§2.2), so it follows the same flat/wrapped
+`sop` is a Process field (§2.2), so it follows the same flat/wrapped
 projection as every other process field (§2.1): in the wrapped envelope it sits
 inside `process:`; in the flat `.sop.json` form it appears as a top-level key
 alongside `name`, `steps`, etc. It is purely distribution metadata that
 describes the file as an artifact — it never participates in the execution model.
 
-**Engine behavior:** conforming v0.7.x parsers MUST ignore the `recipe` object
-and its sub-fields when loading a process for execution — it never affects which
-steps run or what they produce. Normal document validation (size limits, type
-checks, security constraints) still applies to the object itself. Older or strict
-parsers that predate the v0.7.x `recipe` field may not recognize it; that is a
-known compatibility boundary, not a conformance violation — `recipe` metadata is
-advisory and safe to drop. This clause establishes no general rule about other
-unknown keys; it governs `recipe` only.
+**Engine behavior:** conforming v0.7.x parsers MUST ignore the `sop` object
+(and its deprecated `recipe` alias) and their sub-fields when loading a process
+for execution — it never affects which steps run or what they produce. Normal
+document validation (size limits, type checks, security constraints) still
+applies to the object itself. Older or strict parsers that predate the v0.7.x
+`sop`/`recipe` field may not recognize it; that is a known compatibility
+boundary, not a conformance violation — this metadata is advisory and safe to
+drop. This clause establishes no general rule about other unknown keys; it
+governs `sop` and its `recipe` alias only.
 
 ---
 
@@ -2109,6 +2115,7 @@ process:
 | 0.6 | Local execution backend (genuine local execution, no server), `.sop.json` flat format, run-dir artifacts (manifest/audit/context), pause/resume state machine, cell substrate (init/scope/annotate/lineage/fork), `shell` and `noop` local-only step types, `executor` audit field, `--conflicts` for list |
 | 0.7 | Process status model (§9): canonical process states (`open`/`scheduled`/`running`) and rollup fields (`last_status`, `last_run_at`, `next_run_at`). Reliability metrics contract (§10): per-step `duration_ms`, `model`, `tokens_in`, `tokens_out`, `result_hash`, `token_source` in run receipts; top-level manifest `duration_ms`; resumed-completion `duration_ms` + `result_hash` on completed events written by `local_submit` (C1a follow-up); `duration_ms` + `result_hash:"pending"` on subprocess and webhook-callback waiting events (C1a follow-up); manifest total-duration-on-resume recomputed as full wall time from run start (C1a follow-up); the aggregated `metrics` block is reserved for v0.7.x. Security model (§11): no-telemetry statement, shell-step trust boundary, daemon secrets posture, fault-record redaction rules, stream auth requirement. Stream protocol, self-heal semantics, scheduler-trigger promotion, and server metrics API reserved for v0.7.x. `/sop/*` HTTP contract unchanged. |
 | 0.7.x (additive) | Optional `recipe` object (§2.8), a Process field: `recipe.source` (canonical origin), `recipe.install` (one-line install hint), `recipe.tags` (discovery tags). Distribution metadata only — ignored by the execution engine, additive and non-breaking; ignored by v0.7.x-capable parsers (older strict parsers may not recognize it — a known compatibility boundary). No HTTP API change. No CLI parsing required for MVP (later slice). |
+| 0.7.x (rename) | `recipe` object renamed to `sop` (§2.8): `sop.source`, `sop.install`, `sop.tags`, same semantics as the fields above. `recipe` is retained as a deprecated alias — conforming parsers MUST still accept it, and `sop` wins if both are present. Distribution metadata only, still ignored by the execution engine. Non-breaking. No HTTP API change. |
 | 0.7.x (additive) | Optional `effects` field (§3.2), a Step field: a plain string describing what the step does to the world (e.g. `"publishes a post to LinkedIn"`). Presence, not content, is the signal that a step is irreversible and must not be silently auto-retried. Additive and non-breaking; process-level effects are derived (union of step `effects`), not a separate stored field. Enforced by the CLI's `opensop heal --apply`, which refuses to re-run a step declaring `effects` unless `--force-effects` is passed. No HTTP API change. |
 
 ## Appendix B — Flat vs. wrapped envelope quick reference

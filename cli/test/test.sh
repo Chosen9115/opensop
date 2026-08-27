@@ -8382,7 +8382,7 @@ set -e
 rm -rf "$goose_home"
 echo "PASS: skill install — single-scope runtime (goose) installs with the default scope"
 
-# --- consistency: EVERY recipe-review surface must (a) direct readers to READ
+# --- consistency: EVERY SOP-review surface must (a) direct readers to READ
 #     the run commands directly, and (b) never present dry-run AS the command
 #     review (dry-run previews the flow only, not command bodies). ---
 repo_root="$(cd "$here/.." && pwd)"
@@ -8390,7 +8390,7 @@ repo_root="$(cd "$here/.." && pwd)"
 # (a) POSITIVE: the direct-inspection idiom appears on every documentation
 #     surface, in the embedded skill, and in pull/import's own output.
 for surface in \
-  "$repo_root/recipes/README.md" \
+  "$repo_root/sops/README.md" \
   "$repo_root/docs/AGENTS.md" \
   "$repo_root/cli/README.md"
 do
@@ -8403,9 +8403,9 @@ done
 # INDEPENDENTLY by invoking each against a fixture (pretty mode → human output),
 # so one regressing can't be masked by the other.
 _rev_fx="$(mktemp -d)"; mkdir -p "$_rev_fx/main/opensop/daily-standup-notes"
-cp "$repo_root/recipes/opensop/daily-standup-notes/daily-standup-notes.sop.json" "$_rev_fx/main/opensop/daily-standup-notes/"
+cp "$repo_root/sops/opensop/daily-standup-notes/daily-standup-notes.sop.json" "$_rev_fx/main/opensop/daily-standup-notes/"
 _rev_out="$(mktemp -d)"
-pull_review="$(OPENSOP_RECIPES_BASE="file://$_rev_fx" "$cli" pull opensop/daily-standup-notes --output "$_rev_out/p.sop.json" --pretty 2>&1)"
+pull_review="$(OPENSOP_SOPS_BASE="file://$_rev_fx" "$cli" pull opensop/daily-standup-notes --output "$_rev_out/p.sop.json" --pretty 2>&1)"
 echo "$pull_review" | grep -qE '\{id, ?type, ?run\}|run commands' \
   || { echo "FAIL: pull output does not point at reading the run commands: $pull_review"; rm -rf "$_rev_fx" "$_rev_out"; exit 1; }
 imp_review="$("$cli" import "$_rev_fx/main/opensop/daily-standup-notes/daily-standup-notes.sop.json" --output "$_rev_out/i.sop.json" --pretty 2>&1)"
@@ -8419,36 +8419,36 @@ echo "PASS: pull and import each independently emit the read-the-run-commands gu
 #     'review steps' annotation). Disclaimers ("previews the flow ... NOT command
 #     bodies", "not a substitute", "not sufficient review") do not match.
 for surface in \
-  "$repo_root/recipes/README.md" \
+  "$repo_root/sops/README.md" \
   "$repo_root/docs/AGENTS.md" \
   "$repo_root/cli/README.md" \
   "$cli"
 do
   if grep -nE 'opensop dry-run[^#]*#[^#]*\breview\b' "$surface" >/dev/null 2>&1; then
-    echo "FAIL: ${surface#$repo_root/} annotates 'opensop dry-run' as the recipe review step"; exit 1
+    echo "FAIL: ${surface#$repo_root/} annotates 'opensop dry-run' as the SOP review step"; exit 1
   fi
 done
-# (c) ORDERING: wherever a surface shows a concrete recipe dry-run
+# (c) ORDERING: wherever a surface shows a concrete SOP dry-run
 #     ('opensop dry-run ./...'), a direct jq inspection MUST appear BEFORE it, so
 #     a reader following the workflow top-to-bottom reads the shell before the
 #     flow-only preview.
-# Applies to the recipe pull-then-review WORKFLOW surfaces. (docs/AGENTS.md's
-# `dry-run ./process` lines are general usage examples, not recipe-review
+# Applies to the SOP pull-then-review WORKFLOW surfaces. (docs/AGENTS.md's
+# `dry-run ./process` lines are general usage examples, not SOP-review
 # workflows, so they are covered by the presence/no-review-annotation checks
 # above rather than ordering.)
 _skill_tmp="$(mktemp)"; "$cli" skill show 2>/dev/null > "$_skill_tmp"
-for f in "$repo_root/cli/README.md" "$repo_root/recipes/README.md" "$_skill_tmp"; do
+for f in "$repo_root/cli/README.md" "$repo_root/sops/README.md" "$_skill_tmp"; do
   dr=$(grep -nE 'opensop dry-run +\./' "$f" | head -1 | cut -d: -f1) || dr=""
-  [ -n "$dr" ] || continue   # no concrete recipe dry-run on this surface
+  [ -n "$dr" ] || continue   # no concrete SOP dry-run on this surface
   jqln=$(grep -nE '\{id, ?type, ?run\}' "$f" | awk -F: -v d="$dr" '$1 < d {print $1; exit}') || jqln=""
   [ -n "$jqln" ] \
     || { label=$([ "$f" = "$_skill_tmp" ] && echo "embedded SKILL.md" || echo "${f#$repo_root/}"); \
-         echo "FAIL: $label shows 'opensop dry-run <recipe>' (line $dr) with no jq inspection before it"; rm -f "$_skill_tmp"; exit 1; }
+         echo "FAIL: $label shows 'opensop dry-run <sop>' (line $dr) with no jq inspection before it"; rm -f "$_skill_tmp"; exit 1; }
 done
 rm -f "$_skill_tmp"
-echo "PASS: recipe-review ordering — jq inspection precedes any concrete dry-run on every workflow surface"
+echo "PASS: SOP-review ordering — jq inspection precedes any concrete dry-run on every workflow surface"
 
-echo "PASS: recipe-review guidance is consistent — reads run commands, dry-run never labeled the review — across recipes README, AGENTS.md, CLI README, embedded SKILL.md, and pull/import output"
+echo "PASS: SOP-review guidance is consistent — reads run commands, dry-run never labeled the review — across sops README, AGENTS.md, CLI README, embedded SKILL.md, and pull/import output"
 
 # --- skill install: <dir> and --runtime are mutually exclusive ---
 set +e
@@ -8563,47 +8563,47 @@ rm -rf "$sl_dir"
 echo "PASS: skill install — refuses to install through a symlink destination"
 
 # --------------------------------------------------------------------------- #
-# Seed recipes: each must pass opensop dry-run (OFFLINE — no network needed)  #
+# Seed SOPs: each must pass opensop dry-run (OFFLINE — no network needed)     #
 # --------------------------------------------------------------------------- #
-recipes_dir="$(cd "$(dirname "$0")/../.." && pwd)/recipes/opensop"
-for recipe_file in \
-    "$recipes_dir/daily-standup-notes/daily-standup-notes.sop.json" \
-    "$recipes_dir/triage-bug-report/triage-bug-report.sop.json" \
-    "$recipes_dir/release-checklist/release-checklist.sop.json" \
-    "$recipes_dir/lead-qualification/lead-qualification.sop.json" \
-    "$recipes_dir/meeting-action-items/meeting-action-items.sop.json" \
-    "$recipes_dir/incident-postmortem/incident-postmortem.sop.json" \
-    "$recipes_dir/pr-review-gate/pr-review-gate.sop.json" \
-    "$recipes_dir/customer-onboarding/customer-onboarding.sop.json" \
-    "$recipes_dir/content-publish-approval/content-publish-approval.sop.json" \
-    "$recipes_dir/weekly-status-digest/weekly-status-digest.sop.json" \
-    "$recipes_dir/email-spam-filter/email-spam-filter.sop.json"; do
-  [ -f "$recipe_file" ] \
-    || { echo "FAIL: seed recipe file missing: $recipe_file"; exit 1; }
+sops_dir="$(cd "$(dirname "$0")/../.." && pwd)/sops/opensop"
+for sop_file in \
+    "$sops_dir/daily-standup-notes/daily-standup-notes.sop.json" \
+    "$sops_dir/triage-bug-report/triage-bug-report.sop.json" \
+    "$sops_dir/release-checklist/release-checklist.sop.json" \
+    "$sops_dir/lead-qualification/lead-qualification.sop.json" \
+    "$sops_dir/meeting-action-items/meeting-action-items.sop.json" \
+    "$sops_dir/incident-postmortem/incident-postmortem.sop.json" \
+    "$sops_dir/pr-review-gate/pr-review-gate.sop.json" \
+    "$sops_dir/customer-onboarding/customer-onboarding.sop.json" \
+    "$sops_dir/content-publish-approval/content-publish-approval.sop.json" \
+    "$sops_dir/weekly-status-digest/weekly-status-digest.sop.json" \
+    "$sops_dir/email-spam-filter/email-spam-filter.sop.json"; do
+  [ -f "$sop_file" ] \
+    || { echo "FAIL: seed SOP file missing: $sop_file"; exit 1; }
   set +e
-  dry_out="$("$cli" dry-run "$recipe_file" --json 2>&1)"; dry_rc=$?
+  dry_out="$("$cli" dry-run "$sop_file" --json 2>&1)"; dry_rc=$?
   set -e
   [ "$dry_rc" -eq 0 ] \
-    || { echo "FAIL: seed recipe dry-run failed ($dry_rc): $recipe_file: $dry_out"; exit 1; }
+    || { echo "FAIL: seed SOP dry-run failed ($dry_rc): $sop_file: $dry_out"; exit 1; }
   echo "$dry_out" | jq -e '.valid == true' >/dev/null \
-    || { echo "FAIL: seed recipe dry-run reports invalid: $recipe_file: $dry_out"; exit 1; }
-  echo "PASS: seed recipe passes dry-run: $(basename "$recipe_file")"
+    || { echo "FAIL: seed SOP dry-run reports invalid: $sop_file: $dry_out"; exit 1; }
+  echo "PASS: seed SOP passes dry-run: $(basename "$sop_file")"
 done
 
 # --- form fields must be declared under `inputs` (not `fields`) so the engine
 #     surfaces them in waiting.expects and an agent can DISCOVER what to submit.
 #     (A form step with a `fields` key is invisible to the runtime — the run
-#     pauses with empty expects and the recipe can't be completed correctly.) ---
-for recipe_file in "$recipes_dir"/*/*.sop.json; do
-  bad="$(jq '[(.steps//.process.steps)[] | select(.type=="form" and has("fields"))] | length' "$recipe_file")"
+#     pauses with empty expects and the SOP can't be completed correctly.) ---
+for sop_file in "$sops_dir"/*/*.sop.json; do
+  bad="$(jq '[(.steps//.process.steps)[] | select(.type=="form" and has("fields"))] | length' "$sop_file")"
   [ "$bad" = "0" ] \
-    || { echo "FAIL: $(basename "$recipe_file") has $bad form step(s) using the undiscoverable 'fields' key — use 'inputs'"; exit 1; }
+    || { echo "FAIL: $(basename "$sop_file") has $bad form step(s) using the undiscoverable 'fields' key — use 'inputs'"; exit 1; }
 done
-echo "PASS: seed recipes — all form steps declare fields under 'inputs' (discoverable via waiting.expects)"
+echo "PASS: seed SOPs — all form steps declare fields under 'inputs' (discoverable via waiting.expects)"
 
-# Dynamic proof: a form recipe surfaces a NON-EMPTY waiting.expects so an agent
+# Dynamic proof: a form SOP surfaces a NON-EMPTY waiting.expects so an agent
 # can learn the field name, submit it, and get populated output.
-dsn="$recipes_dir/daily-standup-notes/daily-standup-notes.sop.json"
+dsn="$sops_dir/daily-standup-notes/daily-standup-notes.sop.json"
 dh="$(mktemp -d)"
 dm="$(OPENSOP_LOCAL_HOME="$dh" "$cli" run "$dsn" --json 2>/dev/null)"
 drid="$(echo "$dm" | jq -r '.run_id')"; dfield="$(echo "$dm" | jq -r '.waiting.expects.outputs[0] // .waiting.expects.schema[0].name // ""')"
@@ -8619,12 +8619,12 @@ dout="$(jq -r 'to_entries[]|select(.value|type=="object" and has("summary"))|.va
 rm -rf "$dh"
 echo "$dout" | grep -q "populated-0" \
   || { echo "FAIL: daily-standup-notes submitted form value did not appear in the output: $dout"; exit 1; }
-echo "PASS: form recipe — waiting.expects exposes fields; submitted values populate the output (end-to-end)"
+echo "PASS: form SOP — waiting.expects exposes fields; submitted values populate the output (end-to-end)"
 
 # --- meeting-action-items: malformed LLM items (numeric/array/null/missing/scalar)
 #     must COMPLETE with a NON-EMPTY artifact — never crash, never silently empty
 #     (defensive tostring formatting + set -o pipefail). Dry-run can't catch this. ---
-mai="$recipes_dir/meeting-action-items/meeting-action-items.sop.json"
+mai="$sops_dir/meeting-action-items/meeting-action-items.sop.json"
 for stub in \
     '{"items":[{"owner":7,"task":"ship"}]}' \
     '{"items":[{"owner":"Al","task":["a","b"]}]}' \
@@ -8647,7 +8647,7 @@ done
 echo "PASS: meeting-action-items — malformed LLM items render non-empty (never crash or silently empty)"
 
 # --- lead-qualification: the outcome enum is runtime-enforced ---
-lq="$recipes_dir/lead-qualification/lead-qualification.sop.json"
+lq="$sops_dir/lead-qualification/lead-qualification.sop.json"
 set +e
 lq_bad="$(OSL_LLM_STUB='{"outcome":"uncertain","rationale":"x"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$lq" --input company=Acme --input budget=100k --input timeline=Q3 --input need=x --json 2>/dev/null)"
 set -e
@@ -8661,7 +8661,7 @@ echo "PASS: lead-qualification — outcome enum enforced (out-of-enum fails, val
 # --- email-spam-filter: the AUTHORITATIVE decision is a structured `action` enum
 #     (DELIVER only for ham AND confidence in [0.85,1.0]); attacker-controlled
 #     display fields are control-char-stripped so they can't forge a decision. ---
-esf="$recipes_dir/email-spam-filter/email-spam-filter.sop.json"
+esf="$sops_dir/email-spam-filter/email-spam-filter.sop.json"
 esf_action() {  # $1 stub [$2 sender] [$3 body] → echoes .route.action
   local stub="$1" sender="${2:-a@b.com}" body="${3:-hello}" mh m rid
   mh="$(mktemp -d)"
@@ -8707,11 +8707,11 @@ echo "PASS: email-spam-filter — authoritative action enum unforgeable; display
 
 # --- release-checklist: release_ready must be gated on ALL four approvals — a
 #     single rejected gate must NOT produce a release-ready artifact. ---
-rc_recipe="$recipes_dir/release-checklist/release-checklist.sop.json"
+rc_sop="$sops_dir/release-checklist/release-checklist.sop.json"
 run_release_test() {  # args: 4 decisions (tests,changelog,docs,security) → echoes release_ready
   local decs=("$@") m rid step i=0 rh
   rh="$(mktemp -d)"
-  m="$(OPENSOP_LOCAL_HOME="$rh" "$cli" run "$rc_recipe" --input component=api --input version=1.0.0 --json 2>/dev/null)"
+  m="$(OPENSOP_LOCAL_HOME="$rh" "$cli" run "$rc_sop" --input component=api --input version=1.0.0 --json 2>/dev/null)"
   rid="$(echo "$m" | jq -r '.run_id')"; step="$(echo "$m" | jq -r '.waiting.step // empty')"
   while [ -n "$step" ] && [ "$i" -lt 4 ]; do
     m="$(OPENSOP_LOCAL_HOME="$rh" "$cli" submit "$rid" "$step" --output decision="${decs[$i]}" --json 2>/dev/null)"
@@ -8726,8 +8726,8 @@ run_release_test() {  # args: 4 decisions (tests,changelog,docs,security) → ec
   || { echo "FAIL: release-checklist with a rejected gate must yield release_ready=false (false release-ready artifact)"; exit 1; }
 echo "PASS: release-checklist — release_ready gated on ALL approvals (any reject blocks it)"
 
-# --- release-checklist: mark-ready step must NOT exist in the recipe file ---
-jq -e '.steps|any(.id=="mark-ready")|not' "$rc_recipe" >/dev/null \
+# --- release-checklist: mark-ready step must NOT exist in the SOP file ---
+jq -e '.steps|any(.id=="mark-ready")|not' "$rc_sop" >/dev/null \
   || { echo "FAIL: release-checklist still contains mark-ready noop step"; exit 1; }
 echo "PASS: release-checklist — mark-ready noop step is gone"
 
@@ -8739,7 +8739,7 @@ for triple in \
     "customer-onboarding:kickoff-approval:onboarding_checklist:NOT STARTED" \
     "incident-postmortem:sign-off:postmortem:REJECTED"; do
   _rf_slug="$(echo "$triple" | cut -d: -f1)"
-  rf="$recipes_dir/$_rf_slug/$_rf_slug.sop.json"
+  rf="$sops_dir/$_rf_slug/$_rf_slug.sop.json"
   appr="$(echo "$triple" | cut -d: -f2)"; key="$(echo "$triple" | cut -d: -f3)"; want="$(echo "$triple" | cut -d: -f4)"
   runc="$(jq -r '(.steps//.process.steps)[]|select(.type=="shell")|.run' "$rf")"
   ctxn="$(jq -nc --arg a "$appr" '{($a):{decision:null}, "collect-draft":{title:"t"}, "collect-customer":{name:"n"}, "collect-incident":{title:"t"}}')"
@@ -8753,13 +8753,13 @@ echo "PASS: approval formatters fail closed — a null/missing decision never yi
 # Shell formatter hardening: malformed numeric form outputs must NOT cause
 # a jq type error (empty artifact + silent success). set -o pipefail + tostring
 # coercion must surface real jq failures and render any value type as a string.
-# Tests: form-backed recipes submit a numeric value for a declared string field.
+# Tests: form-backed SOPs submit a numeric value for a declared string field.
 # --------------------------------------------------------------------------- #
 
-# Helper: run a form recipe end-to-end given a form step + approval step, submitting
+# Helper: run a form SOP end-to-end given a form step + approval step, submitting
 # malformed numeric outputs on the form and a given decision on the approval (or
 # "none" if no approval step). Returns the final context.json path.
-_recipe_run() {
+_sop_run() {
   local rh sop form_step form_json appr_step decision
   rh="$(mktemp -d)"
   sop="$1" form_step="$2" form_json="$3" appr_step="$4" decision="${5:-approve}"
@@ -8780,8 +8780,8 @@ _recipe_run() {
 
 # --- incident-postmortem: numeric title ---
 for _dec in approve reject; do
-  read -r _st _rid _rh <<< "$(_recipe_run \
-    "$recipes_dir/incident-postmortem/incident-postmortem.sop.json" \
+  read -r _st _rid _rh <<< "$(_sop_run \
+    "$sops_dir/incident-postmortem/incident-postmortem.sop.json" \
     "collect-incident" \
     '{"title":7,"severity":"SEV2","timeline":"5pm start","impact":"none"}' \
     "sign-off" "$_dec")"
@@ -8807,8 +8807,8 @@ echo "PASS: incident-postmortem — numeric title coerced; approve shows Approve
 
 # --- pr-review-gate: numeric title ---
 for _dec in approve reject; do
-  read -r _st _rid _rh <<< "$(_recipe_run \
-    "$recipes_dir/pr-review-gate/pr-review-gate.sop.json" \
+  read -r _st _rid _rh <<< "$(_sop_run \
+    "$sops_dir/pr-review-gate/pr-review-gate.sop.json" \
     "collect-pr" \
     '{"title":7,"author":"alice","risk":"low"}' \
     "gate-review" "$_dec")"
@@ -8827,8 +8827,8 @@ echo "PASS: pr-review-gate — numeric title coerced; approve and reject decisio
 
 # --- customer-onboarding: numeric name ---
 for _dec in approve reject; do
-  read -r _st _rid _rh <<< "$(_recipe_run \
-    "$recipes_dir/customer-onboarding/customer-onboarding.sop.json" \
+  read -r _st _rid _rh <<< "$(_sop_run \
+    "$sops_dir/customer-onboarding/customer-onboarding.sop.json" \
     "collect-customer" \
     '{"name":7,"plan":"starter","primary_contact":"alice@example.com"}' \
     "kickoff-approval" "$_dec")"
@@ -8852,8 +8852,8 @@ echo "PASS: customer-onboarding — numeric name coerced; approve shows Tasks, r
 
 # --- content-publish-approval: numeric title ---
 for _dec in approve reject; do
-  read -r _st _rid _rh <<< "$(_recipe_run \
-    "$recipes_dir/content-publish-approval/content-publish-approval.sop.json" \
+  read -r _st _rid _rh <<< "$(_sop_run \
+    "$sops_dir/content-publish-approval/content-publish-approval.sop.json" \
     "collect-draft" \
     '{"title":7,"channel":"blog","summary":"test summary"}' \
     "editorial-approval" "$_dec")"
@@ -8879,7 +8879,7 @@ echo "PASS: content-publish-approval — numeric title coerced; approve APPROVED
 
 # --- weekly-status-digest: numeric wins field (multi-step form, no approval) ---
 _rh_wsd="$(mktemp -d)"
-_m_wsd="$(OPENSOP_LOCAL_HOME="$_rh_wsd" "$cli" run "$recipes_dir/weekly-status-digest/weekly-status-digest.sop.json" --json 2>/dev/null)"
+_m_wsd="$(OPENSOP_LOCAL_HOME="$_rh_wsd" "$cli" run "$sops_dir/weekly-status-digest/weekly-status-digest.sop.json" --json 2>/dev/null)"
 _rid_wsd="$(echo "$_m_wsd" | jq -r '.run_id')"
 _m_wsd="$(OPENSOP_LOCAL_HOME="$_rh_wsd" "$cli" submit "$_rid_wsd" collect-wins \
   --outputs '{"wins":7}' --decided-by test-agent --json 2>/dev/null)"
@@ -8899,7 +8899,7 @@ echo "PASS: weekly-status-digest — numeric wins coerced, artifact non-empty"
 
 # --- daily-standup-notes: numeric yesterday field ---
 _rh_dsn="$(mktemp -d)"
-_m_dsn="$(OPENSOP_LOCAL_HOME="$_rh_dsn" "$cli" run "$recipes_dir/daily-standup-notes/daily-standup-notes.sop.json" --json 2>/dev/null)"
+_m_dsn="$(OPENSOP_LOCAL_HOME="$_rh_dsn" "$cli" run "$sops_dir/daily-standup-notes/daily-standup-notes.sop.json" --json 2>/dev/null)"
 _rid_dsn="$(echo "$_m_dsn" | jq -r '.run_id')"
 _m_dsn="$(OPENSOP_LOCAL_HOME="$_rh_dsn" "$cli" submit "$_rid_dsn" collect-yesterday \
   --outputs '{"yesterday":7}' --decided-by test-agent --json 2>/dev/null)"
@@ -8921,7 +8921,7 @@ echo "PASS: daily-standup-notes — numeric yesterday coerced, artifact non-empt
 #     tostring (no crash), a valid priority completes, an out-of-enum priority
 #     fails (enum enforced). Runs locally — no judgment step. ---
 _rh_tbr="$(mktemp -d)"
-_m_tbr="$(OSL_LLM_STUB='{"priority":"P1","rationale":"data loss on export"}' OPENSOP_LOCAL_HOME="$_rh_tbr" "$cli" run "$recipes_dir/triage-bug-report/triage-bug-report.sop.json" --inputs '{"title":7,"description":"rows dropped","severity":"high"}' --json 2>/dev/null)"
+_m_tbr="$(OSL_LLM_STUB='{"priority":"P1","rationale":"data loss on export"}' OPENSOP_LOCAL_HOME="$_rh_tbr" "$cli" run "$sops_dir/triage-bug-report/triage-bug-report.sop.json" --inputs '{"title":7,"description":"rows dropped","severity":"high"}' --json 2>/dev/null)"
 [ "$(echo "$_m_tbr" | jq -r '.status')" = "completed" ] \
   || { echo "FAIL: triage-bug-report with a numeric title should complete, got $(echo "$_m_tbr"|jq -r '.status')"; exit 1; }
 _rid_tbr="$(echo "$_m_tbr" | jq -r '.run_id')"
@@ -8930,25 +8930,25 @@ rm -rf "$_rh_tbr"
 echo "$_tbr_out" | grep -q "P1" \
   || { echo "FAIL: triage-bug-report output missing the triaged priority (P1): $_tbr_out"; exit 1; }
 set +e
-_tbr_bad="$(OSL_LLM_STUB='{"priority":"P9","rationale":"x"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$recipes_dir/triage-bug-report/triage-bug-report.sop.json" --input title=t --input description=d --json 2>/dev/null)"
+_tbr_bad="$(OSL_LLM_STUB='{"priority":"P9","rationale":"x"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$sops_dir/triage-bug-report/triage-bug-report.sop.json" --input title=t --input description=d --json 2>/dev/null)"
 set -e
 [ "$(echo "$_tbr_bad" | jq -r '.status')" = "failed" ] \
   || { echo "FAIL: triage-bug-report out-of-enum priority (P9) should fail the run, got $(echo "$_tbr_bad"|jq -r '.status')"; exit 1; }
 echo "PASS: triage-bug-report — input-driven llm: numeric title renders, valid priority completes, out-of-enum fails"
 
 # --------------------------------------------------------------------------- #
-# opensop pull — offline tests via OPENSOP_RECIPES_BASE=file://...            #
+# opensop pull — offline tests via OPENSOP_SOPS_BASE=file://...               #
 # --------------------------------------------------------------------------- #
 
 # Build a local fixture tree mirroring the opensop/sops raw URL layout
-# (<ref>/<author>/<slug>/<slug>.sop.json — no 'recipes/' path segment).
+# (<ref>/<author>/<slug>/<slug>.sop.json — no 'sops/' path segment).
 pull_workdir="$(mktemp -d)"
 pull_fixture="$pull_workdir/fixture"
 mkdir -p "$pull_fixture/main/opensop/daily-standup-notes" "$pull_fixture/main/opensop/triage-bug-report"
-cp "$recipes_dir/daily-standup-notes/daily-standup-notes.sop.json" "$pull_fixture/main/opensop/daily-standup-notes/"
-cp "$recipes_dir/triage-bug-report/triage-bug-report.sop.json"     "$pull_fixture/main/opensop/triage-bug-report/"
+cp "$sops_dir/daily-standup-notes/daily-standup-notes.sop.json" "$pull_fixture/main/opensop/daily-standup-notes/"
+cp "$sops_dir/triage-bug-report/triage-bug-report.sop.json"     "$pull_fixture/main/opensop/triage-bug-report/"
 
-export OPENSOP_RECIPES_BASE="file://${pull_fixture}"
+export OPENSOP_SOPS_BASE="file://${pull_fixture}"
 
 # --- pull happy-path: writes file, prints sha256, does NOT create a run dir ---
 pull_out_file="$pull_workdir/daily-standup-notes.sop.json"
@@ -8982,7 +8982,7 @@ echo "PASS: pull — reported sha256 matches file on disk"
 
 # --- pull: bad slug (file not found in fixture) → error, non-zero exit ---
 set +e
-bad_out="$("$cli" pull opensop/no-such-recipe --output "$pull_workdir/nowhere.sop.json" 2>&1)"; bad_rc=$?
+bad_out="$("$cli" pull opensop/no-such-sop --output "$pull_workdir/nowhere.sop.json" 2>&1)"; bad_rc=$?
 set -e
 [ "$bad_rc" -ne 0 ] \
   || { echo "FAIL: pull bad slug should exit non-zero"; exit 1; }
@@ -9133,7 +9133,7 @@ inj_marker="$inj_parent/INJECTED"
 inj_dir="$inj_parent/a'\$(touch $inj_marker)b"   # literal quote + $(...) in the dir name
 mkdir -p "$inj_dir"
 set +e
-OPENSOP_RECIPES_BASE="file://$pull_fixture" "$cli" pull opensop/daily-standup-notes \
+OPENSOP_SOPS_BASE="file://$pull_fixture" "$cli" pull opensop/daily-standup-notes \
   --output "$inj_dir/out.sop.json" >/dev/null 2>&1; inj_rc=$?
 set -e
 [ "$inj_rc" -eq 0 ] \
@@ -9148,7 +9148,7 @@ echo "PASS: pull — quote/\$() in --output dir name cannot inject via the EXIT 
 # --- pull/import/info honor --json (machine-readable success output) ---
 json_target="$pull_workdir/json-out.sop.json"
 set +e
-pj="$(OPENSOP_RECIPES_BASE="file://$pull_fixture" "$cli" pull opensop/daily-standup-notes --output "$json_target" --json 2>/dev/null)"; pj_rc=$?
+pj="$(OPENSOP_SOPS_BASE="file://$pull_fixture" "$cli" pull opensop/daily-standup-notes --output "$json_target" --json 2>/dev/null)"; pj_rc=$?
 set -e
 [ "$pj_rc" -eq 0 ] || { echo "FAIL: pull --json should exit 0: $pj"; exit 1; }
 echo "$pj" | jq -e '.ok == true and .executed == false and .name != null and (.output_path | endswith("json-out.sop.json"))' >/dev/null \
@@ -9169,14 +9169,14 @@ set -e
 [ "$nj_rc" -eq 0 ] || { echo "FAIL: info --json should exit 0: $nj"; exit 1; }
 echo "$nj" | jq -e '.ok == true and .executed == false and (.tags | type=="array") and (.install != null)' >/dev/null \
   || { echo "FAIL: info --json did not emit the expected JSON object (tags array + install): $nj"; exit 1; }
-echo "PASS: info --json — emits recipe metadata as a structured object"
+echo "PASS: info --json — emits SOP metadata as a structured object"
 
 # --- pull: a symlink-to-directory destination must be refused, and nothing may
 #     be written INTO the linked directory (no-dereference hard-link guard) ---
 sl_parent="$(mktemp -d)"; mkdir -p "$sl_parent/realdir"
 ln -s "$sl_parent/realdir" "$sl_parent/link.sop.json"
 set +e
-OPENSOP_RECIPES_BASE="file://$pull_fixture" "$cli" pull opensop/daily-standup-notes \
+OPENSOP_SOPS_BASE="file://$pull_fixture" "$cli" pull opensop/daily-standup-notes \
   --output "$sl_parent/link.sop.json" >/dev/null 2>&1; slp_rc=$?
 set -e
 [ "$slp_rc" -ne 0 ] \
@@ -9186,8 +9186,97 @@ set -e
 rm -rf "$sl_parent"
 echo "PASS: pull — refuses a symlink destination; nothing written into the linked dir"
 
+# --------------------------------------------------------------------------- #
+# Deprecation paths: OPENSOP_RECIPES_BASE (env var) and the `recipe` object    #
+# (SPEC 2.8, renamed to `sop`) — both must still work, `sop` must win.         #
+# --------------------------------------------------------------------------- #
+
+# --- (a) OPENSOP_RECIPES_BASE alone (OPENSOP_SOPS_BASE unset) still resolves
+#     pull, prints a deprecation warning to stderr, and keeps stdout clean
+#     JSON (auto-JSON when piped, same contract as every other pull test). ---
+dep_target="$pull_workdir/deprecated-base.sop.json"
+dep_stderr="$pull_workdir/deprecated-base.stderr"
+set +e
+dep_out="$(
+  unset OPENSOP_SOPS_BASE
+  export OPENSOP_RECIPES_BASE="file://$pull_fixture"
+  "$cli" pull opensop/daily-standup-notes --output "$dep_target" 2>"$dep_stderr"
+)"; dep_rc=$?
+set -e
+dep_err="$(cat "$dep_stderr")"
+[ "$dep_rc" -eq 0 ] \
+  || { echo "FAIL: pull with only OPENSOP_RECIPES_BASE set should still succeed, got $dep_rc: $dep_out / $dep_err"; exit 1; }
+[ -f "$dep_target" ] \
+  || { echo "FAIL: pull with only OPENSOP_RECIPES_BASE set did not write the output file"; exit 1; }
+echo "$dep_err" | grep -qi "OPENSOP_RECIPES_BASE" \
+  || { echo "FAIL: pull with only OPENSOP_RECIPES_BASE set did not print a deprecation warning to stderr: $dep_err"; exit 1; }
+echo "$dep_out" | jq -e '.ok == true and .executed == false' >/dev/null \
+  || { echo "FAIL: pull with only OPENSOP_RECIPES_BASE set did not emit clean JSON on stdout: $dep_out"; exit 1; }
+rm -f "$dep_stderr"
+echo "PASS: OPENSOP_RECIPES_BASE (deprecated) — pull still works, warns on stderr, stdout stays clean JSON"
+
+# --- (b) a .sop.json carrying only the old `recipe` object (no `sop` key)
+#     still yields correct source/install/tags from `opensop info`. ---
+legacy_recipe_file="$pull_workdir/legacy-recipe.sop.json"
+cat > "$legacy_recipe_file" <<'FIXEOF'
+{
+  "name": "legacy-recipe-alias",
+  "version": "1.0",
+  "description": "Exercises the deprecated recipe object as an alias for sop",
+  "recipe": {
+    "source": "acme/legacy-recipe-alias",
+    "install": "opensop pull acme/legacy-recipe-alias",
+    "tags": ["legacy", "alias"]
+  },
+  "steps": [
+    { "id": "noop1", "type": "noop" }
+  ]
+}
+FIXEOF
+legacy_out="$("$cli" info "$legacy_recipe_file" --json 2>/dev/null)"
+echo "$legacy_out" | jq -e '
+    .ok == true
+    and .source == "acme/legacy-recipe-alias"
+    and .install == "opensop pull acme/legacy-recipe-alias"
+    and (.tags == ["legacy","alias"])
+  ' >/dev/null \
+  || { echo "FAIL: opensop info did not resolve metadata from a legacy 'recipe' object: $legacy_out"; exit 1; }
+echo "PASS: legacy 'recipe' object (no 'sop' key) — opensop info still resolves source/install/tags"
+
+# --- (c) when both `sop` and `recipe` are present, `sop` wins (SPEC 2.8). ---
+both_file="$pull_workdir/both-sop-and-recipe.sop.json"
+cat > "$both_file" <<'FIXEOF'
+{
+  "name": "both-sop-and-recipe",
+  "version": "1.0",
+  "description": "Exercises sop-wins-over-recipe precedence",
+  "sop": {
+    "source": "acme/new-source",
+    "install": "opensop pull acme/new-source",
+    "tags": ["new"]
+  },
+  "recipe": {
+    "source": "acme/old-source",
+    "install": "opensop pull acme/old-source",
+    "tags": ["old"]
+  },
+  "steps": [
+    { "id": "noop1", "type": "noop" }
+  ]
+}
+FIXEOF
+both_out="$("$cli" info "$both_file" --json 2>/dev/null)"
+echo "$both_out" | jq -e '
+    .ok == true
+    and .source == "acme/new-source"
+    and .install == "opensop pull acme/new-source"
+    and (.tags == ["new"])
+  ' >/dev/null \
+  || { echo "FAIL: opensop info did not prefer 'sop' over the deprecated 'recipe' alias when both present: $both_out"; exit 1; }
+echo "PASS: sop + recipe both present — 'sop' wins over the deprecated 'recipe' alias"
+
 # Cleanup.
-unset OPENSOP_RECIPES_BASE
+unset OPENSOP_SOPS_BASE
 rm -rf "$pull_workdir" "$import_workdir"
 
 echo "ALL PASS"

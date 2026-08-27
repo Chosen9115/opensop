@@ -69,7 +69,7 @@
       "run": "set -o pipefail; jq -r '\n  \"## Lead Qualification Summary\\n\" +\n  \"**Company:** \" + ((.company // \"(unknown)\") | tostring) + \"\\n\" +\n  \"**Budget:** \" + ((.budget // \"?\") | tostring) + \"\\n\" +\n  \"**Timeline:** \" + ((.timeline // \"?\") | tostring) + \"\\n\" +\n  \"**Need:** \" + ((.need // \"?\") | tostring) + \"\\n\" +\n  \"**Outcome:** \" + ((.[\"score-lead\"].outcome // \"?\") | tostring) + \"\\n\" +\n  \"**Rationale:** \" + ((.[\"score-lead\"].rationale // \"?\") | tostring) + \"\\n\" +\n  \"**Owner:** \" + ((.owner // \"Sales\") | tostring)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{qualification_summary: .}'"
     }
   ],
-  "recipe": {
+  "sop": {
     "source": "opensop/lead-qualification",
     "install": "opensop pull opensop/lead-qualification",
     "tags": [
