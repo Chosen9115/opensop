@@ -2,7 +2,7 @@
 
 A small set of reusable, shareable `.sop.json` process files kept in this repo as **examples and test fixtures** for the CLI's `pull`/`import`/`dry-run` paths.
 
-**The canonical public recipe library lives at [github.com/opensop/recipes](https://github.com/opensop/recipes).** `opensop pull` fetches from that repo by default. The recipes here have not been through the library's publishing bar (10 verified runs) and are not mirrored there — treat them as local examples, not the library.
+**The canonical public SOP library lives at [github.com/opensop/sops](https://github.com/opensop/sops).** `opensop pull` fetches from that repo by default. The recipes here have not been through the library's publishing bar (10 verified runs) and are not mirrored there — treat them as local examples, not the library.
 
 ## Layout
 
@@ -18,7 +18,7 @@ Example: `recipes/opensop/daily-standup-notes/daily-standup-notes.sop.json`
 ## How to pull a recipe
 
 ```bash
-# Pull the latest version (from main) — fetches from github.com/opensop/recipes
+# Pull the latest version (from main) — fetches from github.com/opensop/sops
 opensop pull opensop/daily-standup-notes
 
 # Pull and pin to an immutable commit SHA for reproducibility
@@ -79,11 +79,11 @@ The `sha256` printed after every pull is for pinning and identification (both th
 | `weekly-status-digest` | Collect weekly wins, risks, and next steps via form, then format a Markdown status digest |
 | `email-spam-filter` | ADVISORY LLM spam triage: classify (spam/ham + confidence) and recommend deliver vs quarantine — delivery only for high-confidence ham; injection-aware (advisory; LLM classifiers are susceptible to crafted-email prompt injection); not an authenticated gate |
 
-These exist as CLI test fixtures and `opensop dry-run`/`opensop import` examples. They are not published to the `opensop/recipes` library.
+These exist as CLI test fixtures and `opensop dry-run`/`opensop import` examples. They are not published to the `opensop/sops` library.
 
 ## How to contribute to the public library
 
-The recipe library that `opensop pull` fetches from is a separate repo: **[github.com/opensop/recipes](https://github.com/opensop/recipes)**. Contribute there, not here:
+The SOP library that `opensop pull` fetches from is a separate repo: **[github.com/opensop/sops](https://github.com/opensop/sops)**. Contribute there, not here:
 
 1. Fork that repo and create your recipe under `<your-github-username>/<slug>/<slug>.sop.json`.
 2. Each recipe must be a valid `.sop.json` that passes `opensop dry-run`.
@@ -91,4 +91,4 @@ The recipe library that `opensop pull` fetches from is a separate repo: **[githu
 4. Use only safe, synthetic examples — no PII, no secrets, no destructive commands.
 5. Open a pull request. The title should be `feat(recipes): add <author>/<slug>`.
 
-Recipes that contain destructive shell commands, network calls to untrusted endpoints, or secrets will be rejected. New recipes go through a publishing bar (verified runs) before being listed as official — see the `opensop/recipes` repo for the current process.
+Recipes that contain destructive shell commands, network calls to untrusted endpoints, or secrets will be rejected. New recipes go through a publishing bar (verified runs) before being listed as official — see the `opensop/sops` repo for the current process.

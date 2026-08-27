@@ -734,7 +734,7 @@ bench|3-arm reliability comparison: skill vs json_only vs opensop over N runs|be
 onboard|first-run experience: scaffold, validate, bench, and show next steps|onboard [<process.sop.json>] [--stub] [--n N]|onboarding|local
 skill|install the embedded OpenSOP SKILL.md into an agent runtime or directory|skill <install/paths/show> [--runtime FLAVOUR] [--scope user/project] [--force] [--json]|agent-skills|local
 doctor|self-check: version, jq, bash, and skill installation status|doctor [--json]|agent-skills|local
-pull|download a recipe from the opensop recipe library and write it locally|pull <author>/<slug>[@<ref>] [--output <path>] [--force] [--verify <sha256>]|recipes|local
+pull|download a recipe from the opensop SOP library and write it locally|pull <author>/<slug>[@<ref>] [--output <path>] [--force] [--verify <sha256>]|recipes|local
 import|read a recipe from a file or stdin, validate, and write locally|import [<file> or -] [--output <path>] [--force]|recipes|local
 info|print a recipe metadata summary (recipe.* + name/version/steps)|info <file.sop.json>|recipes|local
 REGISTRY
@@ -874,7 +874,7 @@ ${C_BOLD}ENVIRONMENT${C_RESET}
   OPENSOP_TOKEN                 override config token for one call
   OPENSOP_HOME                  config + cache dir (default: ~/.opensop)
   OPENSOP_LOCAL_HOME            local-mode receipts dir (default: active cell's .opensop/ or ~/.opensop-local)
-  OPENSOP_RECIPES_BASE          base URL for opensop pull (default: https://raw.githubusercontent.com/opensop/recipes)
+  OPENSOP_RECIPES_BASE          base URL for opensop pull (default: https://raw.githubusercontent.com/opensop/sops)
                                   override with a file:// path or local dir for offline testing
   NO_COLOR                      disable ANSI color output
 
@@ -7320,7 +7320,7 @@ Errors emit `{error, message, hint?}` to stderr in JSON mode.
 
 ## Recipes / the library
 
-The canonical public recipe library lives at github.com/opensop/recipes —
+The canonical public SOP library lives at github.com/opensop/sops —
 shareable `.sop.json` processes, one folder per recipe. Use `opensop pull`
 to fetch one and `opensop import` to bring in a local or piped file:
 
@@ -7903,8 +7903,8 @@ cmd_doctor() {
 # --------------------------------------------------------------------------- #
 # Subcommand: pull
 #
-# Download a recipe from the OpenSOP recipe library (<author>/<slug>/<slug>.sop.json
-# in the opensop/recipes repo on GitHub).
+# Download a recipe from the OpenSOP SOP library (<author>/<slug>/<slug>.sop.json
+# in the opensop/sops repo on GitHub).
 #
 # Usage:
 #   opensop pull <author>/<slug>[@<ref>] [--output <path>] [--force] [--verify <sha256>]
@@ -7912,7 +7912,7 @@ cmd_doctor() {
 # Resolution:
 #   Fetches: $OPENSOP_RECIPES_BASE/<ref>/<author>/<slug>/<slug>.sop.json
 #   Default ref: main. May be a branch name or an immutable commit SHA for pinning.
-#   Default OPENSOP_RECIPES_BASE: https://raw.githubusercontent.com/opensop/recipes
+#   Default OPENSOP_RECIPES_BASE: https://raw.githubusercontent.com/opensop/sops
 #   Override OPENSOP_RECIPES_BASE in tests to point at a local fixture dir (file://).
 #
 # Safety contract:
@@ -8094,7 +8094,7 @@ cmd_pull() {
   fi
 
   # Resolve the base URL (env override for offline testing).
-  local recipes_base="${OPENSOP_RECIPES_BASE:-https://raw.githubusercontent.com/opensop/recipes}"
+  local recipes_base="${OPENSOP_RECIPES_BASE:-https://raw.githubusercontent.com/opensop/sops}"
   local fetch_url="${recipes_base}/${ref}/${author}/${slug}/${slug}.sop.json"
 
   # Progress goes to stderr so stdout stays clean for JSON consumers.
@@ -8123,7 +8123,7 @@ cmd_pull() {
     if [[ ! -f "$local_path" ]]; then
       rm -f "$tmp_file"
       die "recipe not found at ${fetch_url}" "file_not_found" \
-          "check the author/slug — valid slugs live in the opensop/recipes library"
+          "check the author/slug — valid slugs live in the opensop/sops library"
     fi
     cp "$local_path" "$tmp_file" || { rm -f "$tmp_file"; die "could not copy from $local_path" "cli_error"; }
   else
@@ -8132,7 +8132,7 @@ cmd_pull() {
       rm -f "$tmp_file"
       die "could not download recipe (curl exit $curl_rc): ${fetch_url}" \
           "network_error" \
-          "check the author/slug and your network — valid slugs live in the opensop/recipes library"
+          "check the author/slug and your network — valid slugs live in the opensop/sops library"
     fi
   fi
 

@@ -683,7 +683,7 @@ SOPs live in `./sops/` (or alongside the code they relate to as `.sop.json` file
 **Onboard** / first-run:
   opensop onboard                   # scaffold a starter process and prove the reliability gain
 
-**Pull and share recipes** (the public library at github.com/opensop/recipes):
+**Pull and share recipes** (the public library at github.com/opensop/sops):
   opensop pull opensop/daily-standup-notes   # download a recipe
   opensop import ./my-recipe.sop.json        # import from a local file
   opensop info ./my-recipe.sop.json          # inspect metadata

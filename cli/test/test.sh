@@ -8940,7 +8940,7 @@ echo "PASS: triage-bug-report — input-driven llm: numeric title renders, valid
 # opensop pull — offline tests via OPENSOP_RECIPES_BASE=file://...            #
 # --------------------------------------------------------------------------- #
 
-# Build a local fixture tree mirroring the opensop/recipes raw URL layout
+# Build a local fixture tree mirroring the opensop/sops raw URL layout
 # (<ref>/<author>/<slug>/<slug>.sop.json — no 'recipes/' path segment).
 pull_workdir="$(mktemp -d)"
 pull_fixture="$pull_workdir/fixture"
