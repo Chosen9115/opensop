@@ -6857,6 +6857,120 @@ rm -f "$d2_sentinel"
 rm -rf "$d2_home"
 
 # --------------------------------------------------------------------------- #
+# D2 effects guard: heal --apply refuses a step that declares `effects`
+# (SPEC §3.2) unless --force-effects is passed — the step may have already
+# succeeded remotely before the observed failure (double-post/send/spend risk).
+# --------------------------------------------------------------------------- #
+d2e_home="$(mktemp -d)"
+d2e_dir="$d2e_home/effects"
+mkdir -p "$d2e_dir"
+d2e_sentinel="$d2e_dir/sentinel"
+cat > "$d2e_dir/effects.sop.json" <<JSON
+{ "name": "d2-effects", "inputs": {},
+  "steps": [
+    { "id": "publish", "type": "shell", "effects": "publishes a post to LinkedIn",
+      "run": "[ ! -f \"$d2e_sentinel\" ] || exit 9" }
+  ] }
+JSON
+
+# First run: sentinel present → the effectful step fails.
+touch "$d2e_sentinel"
+set +e
+d2e_m="$(OPENSOP_LOCAL_HOME="$d2e_home" "$cli" run "$d2e_dir/effects.sop.json" --local --json 2>/dev/null)"; d2e_rc=$?
+set -e
+[ "$d2e_rc" -ne 0 ] || { echo "FAIL: D2 effects — initial run should fail, got 0"; exit 1; }
+d2e_rid="$(jq -r '.run_id' <<<"$d2e_m")"
+echo "PASS: D2 effects — initial run of the effectful step fails as expected"
+
+# (17) heal --apply (no --force-effects) refuses: exits non-zero, surfaces the
+# declared effects string + the escape hatch, and leaves the run untouched.
+set +e
+d2e_refuse_out="$(OPENSOP_LOCAL_HOME="$d2e_home" "$cli" heal "$d2e_rid" --apply 2>&1)"; d2e_refuse_rc=$?
+set -e
+[ "$d2e_refuse_rc" -ne 0 ] || { echo "FAIL: D2 effects — heal --apply without --force-effects should exit non-zero"; exit 1; }
+echo "$d2e_refuse_out" | grep -q "publishes a post to LinkedIn" \
+  || { echo "FAIL: D2 effects — refusal message missing declared effects string, got: $d2e_refuse_out"; exit 1; }
+echo "$d2e_refuse_out" | grep -q -- "--force-effects" \
+  || { echo "FAIL: D2 effects — refusal message missing the --force-effects escape hatch, got: $d2e_refuse_out"; exit 1; }
+echo "PASS: D2 effects — heal --apply refuses an effectful step and surfaces the effects string + escape hatch"
+
+# (18) the run is untouched by the refusal: still failed, no new heal audit event.
+[ "$(jq -r '.status' "$d2e_home/runs/$d2e_rid/manifest.json")" = "failed" ] \
+  || { echo "FAIL: D2 effects — refused run should remain 'failed'"; exit 1; }
+d2e_audit="$d2e_home/runs/$d2e_rid/audit.jsonl"
+if [ -f "$d2e_audit" ]; then
+  jq -e 'select(.event=="heal")' "$d2e_audit" >/dev/null 2>&1 \
+    && { echo "FAIL: D2 effects — refused heal must not append a heal audit event"; exit 1; }
+fi
+echo "PASS: D2 effects — refused heal leaves the run untouched (still failed, no heal audit event)"
+
+# (19) heal --apply --force-effects proceeds: fix the underlying condition,
+# force past the guard, and confirm the run completes.
+rm -f "$d2e_sentinel"
+set +e
+d2e_force_out="$(OPENSOP_LOCAL_HOME="$d2e_home" "$cli" heal "$d2e_rid" --apply --force-effects --json 2>/dev/null)"; d2e_force_rc=$?
+set -e
+[ "$d2e_force_rc" -eq 0 ] || { echo "FAIL: D2 effects — heal --apply --force-effects should exit 0, got $d2e_force_rc"; exit 1; }
+[ "$(jq -r '.status' <<<"$d2e_force_out")" = "completed" ] \
+  || { echo "FAIL: D2 effects — heal --apply --force-effects run should complete, got: $(jq -r '.status' <<<"$d2e_force_out")"; exit 1; }
+echo "PASS: D2 effects — heal --apply --force-effects re-runs the effectful step and the run completes"
+
+# (20) the audit heal event's note records that --force-effects was used.
+jq -e 'select(.event=="heal" and .step=="publish") | .note | test("force-effects")' "$d2e_audit" >/dev/null \
+  || { echo "FAIL: D2 effects — heal audit note should record --force-effects usage"; exit 1; }
+echo "PASS: D2 effects — heal audit event note records --force-effects usage"
+
+# (21) bare heal (diagnosis, no --apply) on an effectful failed run surfaces the
+# effects and recommends --apply --force-effects — not a bland --apply.
+touch "$d2e_sentinel"
+d2e_m2="$(OPENSOP_LOCAL_HOME="$d2e_home" "$cli" run "$d2e_dir/effects.sop.json" --local --json 2>/dev/null || true)"
+d2e_rid2="$(jq -r '.run_id' <<<"$d2e_m2")"
+d2e_diag_out="$(OPENSOP_LOCAL_HOME="$d2e_home" "$cli" heal "$d2e_rid2" 2>&1)"
+echo "$d2e_diag_out" | grep -q "publishes a post to LinkedIn" \
+  || { echo "FAIL: D2 effects — bare heal diagnosis should surface the effects string, got: $d2e_diag_out"; exit 1; }
+echo "$d2e_diag_out" | grep -q -- "--force-effects" \
+  || { echo "FAIL: D2 effects — bare heal diagnosis should recommend --apply --force-effects, got: $d2e_diag_out"; exit 1; }
+echo "$d2e_diag_out" | grep -q -- "--apply \[--input k=v" \
+  && { echo "FAIL: D2 effects — bare heal diagnosis should NOT blandly recommend plain --apply for an effectful step"; exit 1; }
+echo "PASS: D2 effects — bare heal diagnosis surfaces effects instead of blandly recommending --apply"
+
+rm -f "$d2e_sentinel"
+rm -rf "$d2e_home"
+
+# --------------------------------------------------------------------------- #
+# D2 effects guard regression: a step WITHOUT `effects` heals exactly as
+# before — no --force-effects required.
+# --------------------------------------------------------------------------- #
+d2n_home="$(mktemp -d)"
+d2n_dir="$d2n_home/noeffects"
+mkdir -p "$d2n_dir"
+d2n_sentinel="$d2n_dir/sentinel"
+cat > "$d2n_dir/noeffects.sop.json" <<JSON
+{ "name": "d2-noeffects", "inputs": {},
+  "steps": [
+    { "id": "compute", "type": "shell", "run": "[ ! -f \"$d2n_sentinel\" ] || exit 9" }
+  ] }
+JSON
+touch "$d2n_sentinel"
+set +e
+d2n_m="$(OPENSOP_LOCAL_HOME="$d2n_home" "$cli" run "$d2n_dir/noeffects.sop.json" --local --json 2>/dev/null)"; d2n_rc=$?
+set -e
+[ "$d2n_rc" -ne 0 ] || { echo "FAIL: D2 effects regression — initial run should fail, got 0"; exit 1; }
+d2n_rid="$(jq -r '.run_id' <<<"$d2n_m")"
+rm -f "$d2n_sentinel"
+set +e
+d2n_heal_out="$(OPENSOP_LOCAL_HOME="$d2n_home" "$cli" heal "$d2n_rid" --apply --json 2>/dev/null)"; d2n_heal_rc=$?
+set -e
+[ "$d2n_heal_rc" -eq 0 ] \
+  || { echo "FAIL: D2 effects regression — heal --apply on a step without effects should exit 0 (no --force-effects needed), got $d2n_heal_rc"; exit 1; }
+[ "$(jq -r '.status' <<<"$d2n_heal_out")" = "completed" ] \
+  || { echo "FAIL: D2 effects regression — run should complete, got: $(jq -r '.status' <<<"$d2n_heal_out")"; exit 1; }
+echo "PASS: D2 effects regression — a step without 'effects' still heals normally via plain --apply"
+
+rm -f "$d2n_sentinel"
+rm -rf "$d2n_home"
+
+# --------------------------------------------------------------------------- #
 # Fix 1: gitignore correctness — **/fault.json matches the actual fault path.
 #
 # The engine writes fault records at <run_dir>/fault.json (no prefix). Prior
