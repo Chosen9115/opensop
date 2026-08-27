@@ -8,7 +8,7 @@ OpenSOP is an open standard and runtime that exposes business processes as APIs.
 
 Use one of these channels, in order of preference:
 
-1. **GitHub Security Advisory** (preferred) — go to the [Security tab](https://github.com/Chosen9115/opensop/security/advisories/new) and click "Report a vulnerability." This keeps the report private and gives us an audit trail.
+1. **GitHub Security Advisory** (preferred) — go to the [Security tab](https://github.com/opensop/opensop/security/advisories/new) and click "Report a vulnerability." This keeps the report private and gives us an audit trail.
 2. **Email** — `abkuri88@gmail.com` with subject prefix `[OpenSOP security]`. PGP key available on request.
 
 A good report includes:

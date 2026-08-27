@@ -8,7 +8,7 @@
 #
 # Usage:  opensop <command> [args]
 # Help:   opensop help
-# Repo:   https://github.com/Chosen9115/opensop-cli
+# Repo:   https://github.com/opensop/opensop
 
 set -euo pipefail
 
@@ -874,7 +874,7 @@ ${C_BOLD}ENVIRONMENT${C_RESET}
   OPENSOP_TOKEN                 override config token for one call
   OPENSOP_HOME                  config + cache dir (default: ~/.opensop)
   OPENSOP_LOCAL_HOME            local-mode receipts dir (default: active cell's .opensop/ or ~/.opensop-local)
-  OPENSOP_RECIPES_BASE          base URL for opensop pull (default: https://raw.githubusercontent.com/Chosen9115/opensop)
+  OPENSOP_RECIPES_BASE          base URL for opensop pull (default: https://raw.githubusercontent.com/opensop/opensop)
                                   override with a file:// path or local dir for offline testing
   NO_COLOR                      disable ANSI color output
 
@@ -1122,7 +1122,7 @@ EX
   opensop upgrade --pin 0.8.1                 # upgrade (or downgrade) to a specific version
   opensop upgrade --pin 0.8.1 --dry-run       # print what would change without replacing the binary
 
-  Note: upgrade fetches from github.com/Chosen9115/opensop and requires curl.
+  Note: upgrade fetches from github.com/opensop/opensop and requires curl.
         Use 'install.sh' (cli/install.sh) for the initial install.
 EX
       ;;
@@ -1226,8 +1226,8 @@ EOF
 # dispatch).  A pinned version is supported via --pin X.Y.Z.
 #
 # Release URL pattern (raw binary, not a tarball):
-#   https://raw.githubusercontent.com/Chosen9115/opensop/<tag-or-main>/cli/bin/opensop
-#   https://raw.githubusercontent.com/Chosen9115/opensop/<tag-or-main>/cli/bin/opensop.sha256
+#   https://raw.githubusercontent.com/opensop/opensop/<tag-or-main>/cli/bin/opensop
+#   https://raw.githubusercontent.com/opensop/opensop/<tag-or-main>/cli/bin/opensop.sha256
 #
 # For tagged releases we fetch via the tag; "latest" fetches from `main`.
 # This matches how install.sh places the binary and how `--pin` works:
@@ -1323,7 +1323,7 @@ cmd_upgrade() {
     target_ref="main"
   fi
 
-  local raw_base="https://raw.githubusercontent.com/Chosen9115/opensop/${target_ref}/cli/bin"
+  local raw_base="https://raw.githubusercontent.com/opensop/opensop/${target_ref}/cli/bin"
   local fetch_url="${raw_base}/opensop"
   local checksum_url="${raw_base}/opensop.sha256"
 
@@ -1361,7 +1361,7 @@ cmd_upgrade() {
     local embedded_tag="v${new_version#v}"
     if [[ "$normalized_pin" != "$embedded_tag" ]]; then
       die "--pin ${pin_version} requested but downloaded binary embeds version ${new_version} — aborting" \
-          "cli_error" "verify the tag exists in github.com/Chosen9115/opensop and retry"
+          "cli_error" "verify the tag exists in github.com/opensop/opensop and retry"
     fi
   fi
 
@@ -1396,7 +1396,7 @@ cmd_upgrade() {
     actual_sum="$(printf '%s' "$actual_sum" | tr '[:upper:]' '[:lower:]')"
     if [[ "$actual_sum" != "$expected_sum" ]]; then
       die "checksum mismatch — download may be corrupt or tampered with (expected: ${expected_sum}; got: ${actual_sum})" \
-          "cli_error" "retry or report at github.com/Chosen9115/opensop"
+          "cli_error" "retry or report at github.com/opensop/opensop"
     fi
     info "checksum verified (${actual_sum:0:16}…)"
   else
@@ -7195,7 +7195,7 @@ license: Apache-2.0
 allowed-tools:
   - "Bash(opensop *)"
 metadata:
-  homepage: https://github.com/Chosen9115/opensop
+  homepage: https://github.com/opensop/opensop
   spec: SPEC.md
   version: "0.8"
 compatibility:
@@ -7844,7 +7844,7 @@ cmd_doctor() {
 # Subcommand: pull
 #
 # Download a recipe from the OpenSOP recipe library (recipes/<author>/<slug>.sop.json
-# in the Chosen9115/opensop repo on GitHub).
+# in the opensop/opensop repo on GitHub).
 #
 # Usage:
 #   opensop pull <author>/<slug>[@<ref>] [--output <path>] [--force] [--verify <sha256>]
@@ -7852,7 +7852,7 @@ cmd_doctor() {
 # Resolution:
 #   Fetches: $OPENSOP_RECIPES_BASE/<ref>/recipes/<author>/<slug>.sop.json
 #   Default ref: main. May be a branch name or an immutable commit SHA for pinning.
-#   Default OPENSOP_RECIPES_BASE: https://raw.githubusercontent.com/Chosen9115/opensop
+#   Default OPENSOP_RECIPES_BASE: https://raw.githubusercontent.com/opensop/opensop
 #   Override OPENSOP_RECIPES_BASE in tests to point at a local fixture dir (file://).
 #
 # Safety contract:
@@ -8034,7 +8034,7 @@ cmd_pull() {
   fi
 
   # Resolve the base URL (env override for offline testing).
-  local recipes_base="${OPENSOP_RECIPES_BASE:-https://raw.githubusercontent.com/Chosen9115/opensop}"
+  local recipes_base="${OPENSOP_RECIPES_BASE:-https://raw.githubusercontent.com/opensop/opensop}"
   local fetch_url="${recipes_base}/${ref}/recipes/${author}/${slug}.sop.json"
 
   # Progress goes to stderr so stdout stays clean for JSON consumers.

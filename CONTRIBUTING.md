@@ -49,7 +49,7 @@ bash cli/test/test.sh
 3. **Make the change** with tests. Cover the failure path, not just the happy path.
 4. **Run the gate**: `bash -n cli/bin/opensop && bash cli/test/test.sh` — both must pass.
 5. **Update the surfaces that document the change**: `cmd_help` text, `cli/README.md` subcommand table, `cli/CHANGELOG.md` under `[Unreleased]`.
-6. **Open a PR** against `Chosen9115/opensop:main`. Answer: what's the problem, how does this solve it, what did I test.
+6. **Open a PR** against `opensop/opensop:main`. Answer: what's the problem, how does this solve it, what did I test.
 
 ### Standards
 
@@ -90,7 +90,7 @@ Allowlist entries for known-safe placeholders (test fixtures, doc examples) live
 Many teams run OpenSOP with their own private processes. The recommended topology:
 
 ```
-Chosen9115/opensop          ← public, spec + CLI + example processes (this repo)
+opensop/opensop          ← public, spec + CLI + example processes (this repo)
 your-org/opensop-private    ← your private fork, tracks spec + CLI changes + hosts your processes
 ```
 
@@ -98,10 +98,10 @@ your-org/opensop-private    ← your private fork, tracks spec + CLI changes + h
 
 ```bash
 git remote rename origin private
-git remote add public https://github.com/Chosen9115/opensop.git
+git remote add public https://github.com/opensop/opensop.git
 git remote -v
 # private  https://github.com/your-org/opensop-private.git
-# public   https://github.com/Chosen9115/opensop.git
+# public   https://github.com/opensop/opensop.git
 ```
 
 Add a `processes/<your-org>/` directory for your private processes and gitignore it in the public repo (it's already reserved upstream — check `.gitignore`). In your private fork, remove that ignore line.
@@ -112,7 +112,7 @@ Add a `processes/<your-org>/` directory for your private processes and gitignore
 
 1. Branch from `main` in your local clone.
 2. Make the change + tests.
-3. Push to **public** and open a PR against `Chosen9115/opensop`.
+3. Push to **public** and open a PR against `opensop/opensop`.
 4. Get the PR reviewed and merged upstream.
 5. Pull the merge into your local `main` and push to your private fork.
 
@@ -134,7 +134,7 @@ git push private main
 
 ## Reporting issues
 
-- **Bugs:** open an issue on `Chosen9115/opensop` with repro steps and expected behavior.
+- **Bugs:** open an issue on `opensop/opensop` with repro steps and expected behavior.
 - **Security:** please don't open public issues for security reports. See [`SECURITY.md`](SECURITY.md) for the disclosure policy.
 - **Spec proposals:** open a discussion first — the process format is a contract.
 
