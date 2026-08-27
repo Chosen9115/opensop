@@ -39,6 +39,12 @@ regexes = [
   # AWS official documentation example — appears in security guidance docs.
   '''AKIAIOSFODNN7EXAMPLE''',
 
+  # Public demo-server token from an early README (e7219478, since removed).
+  # Self-describing placeholder for a throwaway demo that reset daily; it
+  # never guarded anything. History-only — it appears in no current file,
+  # but a full-history scan still reaches it on every run.
+  '''demo-public-token-resets-daily''',
+
   # Hex-encoded master.key shape (32 hex chars) — comment-only references in
   # docs/deploying.md and CHANGELOG. Real keys are gitignored at config/master.key
   # so they never reach the diff.
