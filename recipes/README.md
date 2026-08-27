@@ -1,22 +1,24 @@
-# OpenSOP Recipe Library
+# OpenSOP Recipe Examples
 
-A growing collection of reusable, shareable `.sop.json` process files — ready to pull, inspect, and adapt.
+A small set of reusable, shareable `.sop.json` process files kept in this repo as **examples and test fixtures** for the CLI's `pull`/`import`/`dry-run` paths.
+
+**The canonical public recipe library lives at [github.com/opensop/recipes](https://github.com/opensop/recipes).** `opensop pull` fetches from that repo by default. The recipes here have not been through the library's publishing bar (10 verified runs) and are not mirrored there — treat them as local examples, not the library.
 
 ## Layout
 
 ```
-recipes/<author>/<slug>.sop.json
+recipes/<author>/<slug>/<slug>.sop.json
 ```
 
 - **`author`** — a GitHub username or organisation name (namespace). `opensop` is reserved for officially maintained recipes.
-- **`slug`** — a short kebab-case name that uniquely identifies the recipe within the author namespace.
+- **`slug`** — a short kebab-case name that uniquely identifies the recipe within the author namespace. Each recipe lives in its own `<slug>/` folder (room to grow beyond a single file — assets, fixtures, etc.).
 
-Example: `recipes/opensop/daily-standup-notes.sop.json`
+Example: `recipes/opensop/daily-standup-notes/daily-standup-notes.sop.json`
 
 ## How to pull a recipe
 
 ```bash
-# Pull the latest version (from main)
+# Pull the latest version (from main) — fetches from github.com/opensop/recipes
 opensop pull opensop/daily-standup-notes
 
 # Pull and pin to an immutable commit SHA for reproducibility
@@ -61,7 +63,7 @@ jq '(.process.steps // .steps)[] | {id, type, run}' <file>   # or just open the 
 
 The `sha256` printed after every pull is for pinning and identification (both the file and the hash come from the same GitHub origin — they confirm transfer integrity and help you reproduce exact versions, not authenticate against a third party). Supply `--verify <sha256>` to enforce a hash you obtained out-of-band.
 
-## Official recipes (`opensop/`)
+## Example recipes in this repo (`opensop/`)
 
 | Slug | Description |
 |---|---|
@@ -77,12 +79,16 @@ The `sha256` printed after every pull is for pinning and identification (both th
 | `weekly-status-digest` | Collect weekly wins, risks, and next steps via form, then format a Markdown status digest |
 | `email-spam-filter` | ADVISORY LLM spam triage: classify (spam/ham + confidence) and recommend deliver vs quarantine — delivery only for high-confidence ham; injection-aware (advisory; LLM classifiers are susceptible to crafted-email prompt injection); not an authenticated gate |
 
-## How to contribute
+These exist as CLI test fixtures and `opensop dry-run`/`opensop import` examples. They are not published to the `opensop/recipes` library.
 
-1. Fork the repo and create your recipe under `recipes/<your-github-username>/`.
+## How to contribute to the public library
+
+The recipe library that `opensop pull` fetches from is a separate repo: **[github.com/opensop/recipes](https://github.com/opensop/recipes)**. Contribute there, not here:
+
+1. Fork that repo and create your recipe under `<your-github-username>/<slug>/<slug>.sop.json`.
 2. Each recipe must be a valid `.sop.json` that passes `opensop dry-run`.
 3. Include the `recipe` object with `source`, `install`, and at least one tag.
 4. Use only safe, synthetic examples — no PII, no secrets, no destructive commands.
 5. Open a pull request. The title should be `feat(recipes): add <author>/<slug>`.
 
-Recipes that contain destructive shell commands, network calls to untrusted endpoints, or secrets will be rejected.
+Recipes that contain destructive shell commands, network calls to untrusted endpoints, or secrets will be rejected. New recipes go through a publishing bar (verified runs) before being listed as official — see the `opensop/recipes` repo for the current process.

@@ -8288,13 +8288,13 @@ done
 # pull AND import each emit the read-the-run-commands guidance — checked
 # INDEPENDENTLY by invoking each against a fixture (pretty mode → human output),
 # so one regressing can't be masked by the other.
-_rev_fx="$(mktemp -d)"; mkdir -p "$_rev_fx/main/recipes/opensop"
-cp "$repo_root/recipes/opensop/daily-standup-notes.sop.json" "$_rev_fx/main/recipes/opensop/"
+_rev_fx="$(mktemp -d)"; mkdir -p "$_rev_fx/main/opensop/daily-standup-notes"
+cp "$repo_root/recipes/opensop/daily-standup-notes/daily-standup-notes.sop.json" "$_rev_fx/main/opensop/daily-standup-notes/"
 _rev_out="$(mktemp -d)"
 pull_review="$(OPENSOP_RECIPES_BASE="file://$_rev_fx" "$cli" pull opensop/daily-standup-notes --output "$_rev_out/p.sop.json" --pretty 2>&1)"
 echo "$pull_review" | grep -qE '\{id, ?type, ?run\}|run commands' \
   || { echo "FAIL: pull output does not point at reading the run commands: $pull_review"; rm -rf "$_rev_fx" "$_rev_out"; exit 1; }
-imp_review="$("$cli" import "$_rev_fx/main/recipes/opensop/daily-standup-notes.sop.json" --output "$_rev_out/i.sop.json" --pretty 2>&1)"
+imp_review="$("$cli" import "$_rev_fx/main/opensop/daily-standup-notes/daily-standup-notes.sop.json" --output "$_rev_out/i.sop.json" --pretty 2>&1)"
 echo "$imp_review" | grep -qE '\{id, ?type, ?run\}|run commands' \
   || { echo "FAIL: import output does not point at reading the run commands: $imp_review"; rm -rf "$_rev_fx" "$_rev_out"; exit 1; }
 rm -rf "$_rev_fx" "$_rev_out"
@@ -8453,17 +8453,17 @@ echo "PASS: skill install — refuses to install through a symlink destination"
 # --------------------------------------------------------------------------- #
 recipes_dir="$(cd "$(dirname "$0")/../.." && pwd)/recipes/opensop"
 for recipe_file in \
-    "$recipes_dir/daily-standup-notes.sop.json" \
-    "$recipes_dir/triage-bug-report.sop.json" \
-    "$recipes_dir/release-checklist.sop.json" \
-    "$recipes_dir/lead-qualification.sop.json" \
-    "$recipes_dir/meeting-action-items.sop.json" \
-    "$recipes_dir/incident-postmortem.sop.json" \
-    "$recipes_dir/pr-review-gate.sop.json" \
-    "$recipes_dir/customer-onboarding.sop.json" \
-    "$recipes_dir/content-publish-approval.sop.json" \
-    "$recipes_dir/weekly-status-digest.sop.json" \
-    "$recipes_dir/email-spam-filter.sop.json"; do
+    "$recipes_dir/daily-standup-notes/daily-standup-notes.sop.json" \
+    "$recipes_dir/triage-bug-report/triage-bug-report.sop.json" \
+    "$recipes_dir/release-checklist/release-checklist.sop.json" \
+    "$recipes_dir/lead-qualification/lead-qualification.sop.json" \
+    "$recipes_dir/meeting-action-items/meeting-action-items.sop.json" \
+    "$recipes_dir/incident-postmortem/incident-postmortem.sop.json" \
+    "$recipes_dir/pr-review-gate/pr-review-gate.sop.json" \
+    "$recipes_dir/customer-onboarding/customer-onboarding.sop.json" \
+    "$recipes_dir/content-publish-approval/content-publish-approval.sop.json" \
+    "$recipes_dir/weekly-status-digest/weekly-status-digest.sop.json" \
+    "$recipes_dir/email-spam-filter/email-spam-filter.sop.json"; do
   [ -f "$recipe_file" ] \
     || { echo "FAIL: seed recipe file missing: $recipe_file"; exit 1; }
   set +e
@@ -8480,7 +8480,7 @@ done
 #     surfaces them in waiting.expects and an agent can DISCOVER what to submit.
 #     (A form step with a `fields` key is invisible to the runtime — the run
 #     pauses with empty expects and the recipe can't be completed correctly.) ---
-for recipe_file in "$recipes_dir"/*.sop.json; do
+for recipe_file in "$recipes_dir"/*/*.sop.json; do
   bad="$(jq '[(.steps//.process.steps)[] | select(.type=="form" and has("fields"))] | length' "$recipe_file")"
   [ "$bad" = "0" ] \
     || { echo "FAIL: $(basename "$recipe_file") has $bad form step(s) using the undiscoverable 'fields' key — use 'inputs'"; exit 1; }
@@ -8489,7 +8489,7 @@ echo "PASS: seed recipes — all form steps declare fields under 'inputs' (disco
 
 # Dynamic proof: a form recipe surfaces a NON-EMPTY waiting.expects so an agent
 # can learn the field name, submit it, and get populated output.
-dsn="$recipes_dir/daily-standup-notes.sop.json"
+dsn="$recipes_dir/daily-standup-notes/daily-standup-notes.sop.json"
 dh="$(mktemp -d)"
 dm="$(OPENSOP_LOCAL_HOME="$dh" "$cli" run "$dsn" --json 2>/dev/null)"
 drid="$(echo "$dm" | jq -r '.run_id')"; dfield="$(echo "$dm" | jq -r '.waiting.expects.outputs[0] // .waiting.expects.schema[0].name // ""')"
@@ -8510,7 +8510,7 @@ echo "PASS: form recipe — waiting.expects exposes fields; submitted values pop
 # --- meeting-action-items: malformed LLM items (numeric/array/null/missing/scalar)
 #     must COMPLETE with a NON-EMPTY artifact — never crash, never silently empty
 #     (defensive tostring formatting + set -o pipefail). Dry-run can't catch this. ---
-mai="$recipes_dir/meeting-action-items.sop.json"
+mai="$recipes_dir/meeting-action-items/meeting-action-items.sop.json"
 for stub in \
     '{"items":[{"owner":7,"task":"ship"}]}' \
     '{"items":[{"owner":"Al","task":["a","b"]}]}' \
@@ -8533,7 +8533,7 @@ done
 echo "PASS: meeting-action-items — malformed LLM items render non-empty (never crash or silently empty)"
 
 # --- lead-qualification: the outcome enum is runtime-enforced ---
-lq="$recipes_dir/lead-qualification.sop.json"
+lq="$recipes_dir/lead-qualification/lead-qualification.sop.json"
 set +e
 lq_bad="$(OSL_LLM_STUB='{"outcome":"uncertain","rationale":"x"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$lq" --input company=Acme --input budget=100k --input timeline=Q3 --input need=x --json 2>/dev/null)"
 set -e
@@ -8547,7 +8547,7 @@ echo "PASS: lead-qualification — outcome enum enforced (out-of-enum fails, val
 # --- email-spam-filter: the AUTHORITATIVE decision is a structured `action` enum
 #     (DELIVER only for ham AND confidence in [0.85,1.0]); attacker-controlled
 #     display fields are control-char-stripped so they can't forge a decision. ---
-esf="$recipes_dir/email-spam-filter.sop.json"
+esf="$recipes_dir/email-spam-filter/email-spam-filter.sop.json"
 esf_action() {  # $1 stub [$2 sender] [$3 body] → echoes .route.action
   local stub="$1" sender="${2:-a@b.com}" body="${3:-hello}" mh m rid
   mh="$(mktemp -d)"
@@ -8593,7 +8593,7 @@ echo "PASS: email-spam-filter — authoritative action enum unforgeable; display
 
 # --- release-checklist: release_ready must be gated on ALL four approvals — a
 #     single rejected gate must NOT produce a release-ready artifact. ---
-rc_recipe="$recipes_dir/release-checklist.sop.json"
+rc_recipe="$recipes_dir/release-checklist/release-checklist.sop.json"
 run_release_test() {  # args: 4 decisions (tests,changelog,docs,security) → echoes release_ready
   local decs=("$@") m rid step i=0 rh
   rh="$(mktemp -d)"
@@ -8624,7 +8624,8 @@ for triple in \
     "content-publish-approval:editorial-approval:publish_record:REJECTED" \
     "customer-onboarding:kickoff-approval:onboarding_checklist:NOT STARTED" \
     "incident-postmortem:sign-off:postmortem:REJECTED"; do
-  rf="$recipes_dir/$(echo "$triple" | cut -d: -f1).sop.json"
+  _rf_slug="$(echo "$triple" | cut -d: -f1)"
+  rf="$recipes_dir/$_rf_slug/$_rf_slug.sop.json"
   appr="$(echo "$triple" | cut -d: -f2)"; key="$(echo "$triple" | cut -d: -f3)"; want="$(echo "$triple" | cut -d: -f4)"
   runc="$(jq -r '(.steps//.process.steps)[]|select(.type=="shell")|.run' "$rf")"
   ctxn="$(jq -nc --arg a "$appr" '{($a):{decision:null}, "collect-draft":{title:"t"}, "collect-customer":{name:"n"}, "collect-incident":{title:"t"}}')"
@@ -8666,7 +8667,7 @@ _recipe_run() {
 # --- incident-postmortem: numeric title ---
 for _dec in approve reject; do
   read -r _st _rid _rh <<< "$(_recipe_run \
-    "$recipes_dir/incident-postmortem.sop.json" \
+    "$recipes_dir/incident-postmortem/incident-postmortem.sop.json" \
     "collect-incident" \
     '{"title":7,"severity":"SEV2","timeline":"5pm start","impact":"none"}' \
     "sign-off" "$_dec")"
@@ -8693,7 +8694,7 @@ echo "PASS: incident-postmortem — numeric title coerced; approve shows Approve
 # --- pr-review-gate: numeric title ---
 for _dec in approve reject; do
   read -r _st _rid _rh <<< "$(_recipe_run \
-    "$recipes_dir/pr-review-gate.sop.json" \
+    "$recipes_dir/pr-review-gate/pr-review-gate.sop.json" \
     "collect-pr" \
     '{"title":7,"author":"alice","risk":"low"}' \
     "gate-review" "$_dec")"
@@ -8713,7 +8714,7 @@ echo "PASS: pr-review-gate — numeric title coerced; approve and reject decisio
 # --- customer-onboarding: numeric name ---
 for _dec in approve reject; do
   read -r _st _rid _rh <<< "$(_recipe_run \
-    "$recipes_dir/customer-onboarding.sop.json" \
+    "$recipes_dir/customer-onboarding/customer-onboarding.sop.json" \
     "collect-customer" \
     '{"name":7,"plan":"starter","primary_contact":"alice@example.com"}' \
     "kickoff-approval" "$_dec")"
@@ -8738,7 +8739,7 @@ echo "PASS: customer-onboarding — numeric name coerced; approve shows Tasks, r
 # --- content-publish-approval: numeric title ---
 for _dec in approve reject; do
   read -r _st _rid _rh <<< "$(_recipe_run \
-    "$recipes_dir/content-publish-approval.sop.json" \
+    "$recipes_dir/content-publish-approval/content-publish-approval.sop.json" \
     "collect-draft" \
     '{"title":7,"channel":"blog","summary":"test summary"}' \
     "editorial-approval" "$_dec")"
@@ -8764,7 +8765,7 @@ echo "PASS: content-publish-approval — numeric title coerced; approve APPROVED
 
 # --- weekly-status-digest: numeric wins field (multi-step form, no approval) ---
 _rh_wsd="$(mktemp -d)"
-_m_wsd="$(OPENSOP_LOCAL_HOME="$_rh_wsd" "$cli" run "$recipes_dir/weekly-status-digest.sop.json" --json 2>/dev/null)"
+_m_wsd="$(OPENSOP_LOCAL_HOME="$_rh_wsd" "$cli" run "$recipes_dir/weekly-status-digest/weekly-status-digest.sop.json" --json 2>/dev/null)"
 _rid_wsd="$(echo "$_m_wsd" | jq -r '.run_id')"
 _m_wsd="$(OPENSOP_LOCAL_HOME="$_rh_wsd" "$cli" submit "$_rid_wsd" collect-wins \
   --outputs '{"wins":7}' --decided-by test-agent --json 2>/dev/null)"
@@ -8784,7 +8785,7 @@ echo "PASS: weekly-status-digest — numeric wins coerced, artifact non-empty"
 
 # --- daily-standup-notes: numeric yesterday field ---
 _rh_dsn="$(mktemp -d)"
-_m_dsn="$(OPENSOP_LOCAL_HOME="$_rh_dsn" "$cli" run "$recipes_dir/daily-standup-notes.sop.json" --json 2>/dev/null)"
+_m_dsn="$(OPENSOP_LOCAL_HOME="$_rh_dsn" "$cli" run "$recipes_dir/daily-standup-notes/daily-standup-notes.sop.json" --json 2>/dev/null)"
 _rid_dsn="$(echo "$_m_dsn" | jq -r '.run_id')"
 _m_dsn="$(OPENSOP_LOCAL_HOME="$_rh_dsn" "$cli" submit "$_rid_dsn" collect-yesterday \
   --outputs '{"yesterday":7}' --decided-by test-agent --json 2>/dev/null)"
@@ -8806,7 +8807,7 @@ echo "PASS: daily-standup-notes — numeric yesterday coerced, artifact non-empt
 #     tostring (no crash), a valid priority completes, an out-of-enum priority
 #     fails (enum enforced). Runs locally — no judgment step. ---
 _rh_tbr="$(mktemp -d)"
-_m_tbr="$(OSL_LLM_STUB='{"priority":"P1","rationale":"data loss on export"}' OPENSOP_LOCAL_HOME="$_rh_tbr" "$cli" run "$recipes_dir/triage-bug-report.sop.json" --inputs '{"title":7,"description":"rows dropped","severity":"high"}' --json 2>/dev/null)"
+_m_tbr="$(OSL_LLM_STUB='{"priority":"P1","rationale":"data loss on export"}' OPENSOP_LOCAL_HOME="$_rh_tbr" "$cli" run "$recipes_dir/triage-bug-report/triage-bug-report.sop.json" --inputs '{"title":7,"description":"rows dropped","severity":"high"}' --json 2>/dev/null)"
 [ "$(echo "$_m_tbr" | jq -r '.status')" = "completed" ] \
   || { echo "FAIL: triage-bug-report with a numeric title should complete, got $(echo "$_m_tbr"|jq -r '.status')"; exit 1; }
 _rid_tbr="$(echo "$_m_tbr" | jq -r '.run_id')"
@@ -8815,7 +8816,7 @@ rm -rf "$_rh_tbr"
 echo "$_tbr_out" | grep -q "P1" \
   || { echo "FAIL: triage-bug-report output missing the triaged priority (P1): $_tbr_out"; exit 1; }
 set +e
-_tbr_bad="$(OSL_LLM_STUB='{"priority":"P9","rationale":"x"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$recipes_dir/triage-bug-report.sop.json" --input title=t --input description=d --json 2>/dev/null)"
+_tbr_bad="$(OSL_LLM_STUB='{"priority":"P9","rationale":"x"}' OPENSOP_LOCAL_HOME="$(mktemp -d)" "$cli" run "$recipes_dir/triage-bug-report/triage-bug-report.sop.json" --input title=t --input description=d --json 2>/dev/null)"
 set -e
 [ "$(echo "$_tbr_bad" | jq -r '.status')" = "failed" ] \
   || { echo "FAIL: triage-bug-report out-of-enum priority (P9) should fail the run, got $(echo "$_tbr_bad"|jq -r '.status')"; exit 1; }
@@ -8825,12 +8826,13 @@ echo "PASS: triage-bug-report — input-driven llm: numeric title renders, valid
 # opensop pull — offline tests via OPENSOP_RECIPES_BASE=file://...            #
 # --------------------------------------------------------------------------- #
 
-# Build a local fixture tree mirroring the GitHub raw URL layout.
+# Build a local fixture tree mirroring the opensop/recipes raw URL layout
+# (<ref>/<author>/<slug>/<slug>.sop.json — no 'recipes/' path segment).
 pull_workdir="$(mktemp -d)"
 pull_fixture="$pull_workdir/fixture"
-mkdir -p "$pull_fixture/main/recipes/opensop"
-cp "$recipes_dir/daily-standup-notes.sop.json" "$pull_fixture/main/recipes/opensop/"
-cp "$recipes_dir/triage-bug-report.sop.json"   "$pull_fixture/main/recipes/opensop/"
+mkdir -p "$pull_fixture/main/opensop/daily-standup-notes" "$pull_fixture/main/opensop/triage-bug-report"
+cp "$recipes_dir/daily-standup-notes/daily-standup-notes.sop.json" "$pull_fixture/main/opensop/daily-standup-notes/"
+cp "$recipes_dir/triage-bug-report/triage-bug-report.sop.json"     "$pull_fixture/main/opensop/triage-bug-report/"
 
 export OPENSOP_RECIPES_BASE="file://${pull_fixture}"
 
@@ -8906,9 +8908,9 @@ set -e
 echo "PASS: pull --verify mismatch — exits non-zero, no file written"
 
 # --- pull: --verify correct hash succeeds ---
-correct_hash="$(sha256sum "$pull_fixture/main/recipes/opensop/triage-bug-report.sop.json" 2>/dev/null | awk '{print $1}' \
-                || shasum -a 256 "$pull_fixture/main/recipes/opensop/triage-bug-report.sop.json" 2>/dev/null | awk '{print $1}' \
-                || openssl dgst -sha256 "$pull_fixture/main/recipes/opensop/triage-bug-report.sop.json" | awk '{print $NF}')"
+correct_hash="$(sha256sum "$pull_fixture/main/opensop/triage-bug-report/triage-bug-report.sop.json" 2>/dev/null | awk '{print $1}' \
+                || shasum -a 256 "$pull_fixture/main/opensop/triage-bug-report/triage-bug-report.sop.json" 2>/dev/null | awk '{print $1}' \
+                || openssl dgst -sha256 "$pull_fixture/main/opensop/triage-bug-report/triage-bug-report.sop.json" | awk '{print $NF}')"
 verify_ok_target="$pull_workdir/verify-ok.sop.json"
 set +e
 "$cli" pull opensop/triage-bug-report --output "$verify_ok_target" \
@@ -8936,7 +8938,7 @@ echo "PASS: pull with @ref pin — resolves and writes file"
 import_workdir="$(mktemp -d)"
 
 # --- import happy-path from file: writes, validates, prints sha256, no run ---
-import_src="$pull_fixture/main/recipes/opensop/daily-standup-notes.sop.json"
+import_src="$pull_fixture/main/opensop/daily-standup-notes/daily-standup-notes.sop.json"
 import_dst="$import_workdir/imported.sop.json"
 import_home="$import_workdir/local-home"
 mkdir -p "$import_home"
@@ -9040,7 +9042,7 @@ echo "$pj" | jq -e '.ok == true and .executed == false and .name != null and (.o
 echo "PASS: pull --json — emits a structured summary object"
 
 set +e
-ij="$("$cli" import "$pull_fixture/main/recipes/opensop/triage-bug-report.sop.json" --output "$pull_workdir/json-import.sop.json" --json 2>/dev/null)"; ij_rc=$?
+ij="$("$cli" import "$pull_fixture/main/opensop/triage-bug-report/triage-bug-report.sop.json" --output "$pull_workdir/json-import.sop.json" --json 2>/dev/null)"; ij_rc=$?
 set -e
 [ "$ij_rc" -eq 0 ] || { echo "FAIL: import --json should exit 0: $ij"; exit 1; }
 echo "$ij" | jq -e '.ok == true and .executed == false and (.sha256 | type=="string")' >/dev/null \
