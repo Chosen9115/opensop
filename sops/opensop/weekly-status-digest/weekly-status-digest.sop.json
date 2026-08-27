@@ -53,7 +53,7 @@
       "run": "set -o pipefail; jq -r '\n  \"## Weekly Status Digest\\n\" +\n  \"**Team:** \" + ((.inputs.team // \"Engineering\") | tostring) + \"\\n\" +\n  \"**Week:** \" + ((.inputs.week // \"current\") | tostring) + \"\\n\\n\" +\n  \"### Wins\\n\\n\" + ((.\"collect-wins\".wins // \"(none reported)\") | tostring) + \"\\n\\n\" +\n  \"### Risks & Blockers\\n\\n\" + ((.\"collect-risks\".risks // \"None\") | tostring) + \"\\n\\n\" +\n  \"### Next Week\\n\\n\" + ((.\"collect-next\".next // \"(none reported)\") | tostring)\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{weekly_digest: .}'"
     }
   ],
-  "recipe": {
+  "sop": {
     "source": "opensop/weekly-status-digest",
     "install": "opensop pull opensop/weekly-status-digest",
     "tags": [

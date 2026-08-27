@@ -1,21 +1,21 @@
-# OpenSOP Recipe Examples
+# OpenSOP SOP Examples
 
 A small set of reusable, shareable `.sop.json` process files kept in this repo as **examples and test fixtures** for the CLI's `pull`/`import`/`dry-run` paths.
 
-**The canonical public SOP library lives at [github.com/opensop/sops](https://github.com/opensop/sops).** `opensop pull` fetches from that repo by default. The recipes here have not been through the library's publishing bar (10 verified runs) and are not mirrored there — treat them as local examples, not the library.
+**The canonical public SOP library lives at [github.com/opensop/sops](https://github.com/opensop/sops).** `opensop pull` fetches from that repo by default. The SOPs here have not been through the library's publishing bar (10 verified runs) and are not mirrored there — treat them as local examples, not the library.
 
 ## Layout
 
 ```
-recipes/<author>/<slug>/<slug>.sop.json
+sops/<author>/<slug>/<slug>.sop.json
 ```
 
-- **`author`** — a GitHub username or organisation name (namespace). `opensop` is reserved for officially maintained recipes.
-- **`slug`** — a short kebab-case name that uniquely identifies the recipe within the author namespace. Each recipe lives in its own `<slug>/` folder (room to grow beyond a single file — assets, fixtures, etc.).
+- **`author`** — a GitHub username or organisation name (namespace). `opensop` is reserved for officially maintained SOPs.
+- **`slug`** — a short kebab-case name that uniquely identifies the SOP within the author namespace. Each SOP lives in its own `<slug>/` folder (room to grow beyond a single file — assets, fixtures, etc.).
 
-Example: `recipes/opensop/daily-standup-notes/daily-standup-notes.sop.json`
+Example: `sops/opensop/daily-standup-notes/daily-standup-notes.sop.json`
 
-## How to pull a recipe
+## How to pull an SOP
 
 ```bash
 # Pull the latest version (from main) — fetches from github.com/opensop/sops
@@ -41,7 +41,7 @@ jq '(.process.steps // .steps)[] | {id, type, run}' ./daily-standup-notes.sop.js
 
 ```bash
 # Import from a file
-opensop import ./my-recipe.sop.json
+opensop import ./my-sop.sop.json
 
 # Import from stdin (e.g. after piping curl output)
 curl -fsSL <url> | opensop import -
@@ -51,19 +51,19 @@ curl -fsSL <url> | opensop import -
 
 ## Safety note
 
-**A recipe's shell/automated steps execute arbitrary commands on your machine** — the same trust boundary as a `Makefile` or `npm postinstall`. Before running a recipe, **read its `run` commands directly** — they are plain JSON:
+**An SOP's shell/automated steps execute arbitrary commands on your machine** — the same trust boundary as a `Makefile` or `npm postinstall`. Before running an SOP, **read its `run` commands directly** — they are plain JSON:
 
 ```bash
 jq '(.process.steps // .steps)[] | {id, type, run}' <file>   # or just open the file
 ```
 
-**Approval steps are unauthenticated locally.** OpenSOP's local runtime does not verify *who* submits an approval/decision — the actor is whoever runs the process (same trust boundary as a `Makefile`). Recipes that record an approver identity (e.g. a reviewer) label it *self-reported*; do not treat a locally-produced approval record as an authenticated attestation.
+**Approval steps are unauthenticated locally.** OpenSOP's local runtime does not verify *who* submits an approval/decision — the actor is whoever runs the process (same trust boundary as a `Makefile`). SOPs that record an approver identity (e.g. a reviewer) label it *self-reported*; do not treat a locally-produced approval record as an authenticated attestation.
 
 `opensop dry-run <file>` validates inputs and previews the step *flow*, but it does **not** print command bodies — so it is not a substitute for reading the steps above.
 
 The `sha256` printed after every pull is for pinning and identification (both the file and the hash come from the same GitHub origin — they confirm transfer integrity and help you reproduce exact versions, not authenticate against a third party). Supply `--verify <sha256>` to enforce a hash you obtained out-of-band.
 
-## Example recipes in this repo (`opensop/`)
+## Example SOPs in this repo (`opensop/`)
 
 | Slug | Description |
 |---|---|
@@ -85,10 +85,10 @@ These exist as CLI test fixtures and `opensop dry-run`/`opensop import` examples
 
 The SOP library that `opensop pull` fetches from is a separate repo: **[github.com/opensop/sops](https://github.com/opensop/sops)**. Contribute there, not here:
 
-1. Fork that repo and create your recipe under `<your-github-username>/<slug>/<slug>.sop.json`.
-2. Each recipe must be a valid `.sop.json` that passes `opensop dry-run`.
-3. Include the `recipe` object with `source`, `install`, and at least one tag.
+1. Fork that repo and create your SOP under `<your-github-username>/<slug>/<slug>.sop.json`.
+2. Each SOP must be a valid `.sop.json` that passes `opensop dry-run`.
+3. Include the `sop` object (`recipe` is accepted as a deprecated alias) with `source`, `install`, and at least one tag.
 4. Use only safe, synthetic examples — no PII, no secrets, no destructive commands.
-5. Open a pull request. The title should be `feat(recipes): add <author>/<slug>`.
+5. Open a pull request. The title should be `feat(sops): add <author>/<slug>`.
 
-Recipes that contain destructive shell commands, network calls to untrusted endpoints, or secrets will be rejected. New recipes go through a publishing bar (verified runs) before being listed as official — see the `opensop/sops` repo for the current process.
+SOPs that contain destructive shell commands, network calls to untrusted endpoints, or secrets will be rejected. New SOPs go through a publishing bar (verified runs) before being listed as official — see the `opensop/sops` repo for the current process.

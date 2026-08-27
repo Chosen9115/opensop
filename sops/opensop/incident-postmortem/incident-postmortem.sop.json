@@ -63,7 +63,7 @@
       "run": "set -o pipefail; jq -r '\n  if (.[\"sign-off\"].decision // \"reject\") == \"approve\" then\n    \"# Postmortem: \" + ((.[\"collect-incident\"].title // \"(untitled)\") | tostring) + \"\\n\\n\" +\n    \"**Severity:** \" + ((.[\"collect-incident\"].severity // \"?\") | tostring) + \"\\n\" +\n    \"**Team:** \" + ((.inputs.team // \"Platform\") | tostring) + \"\\n\" +\n    \"**Status:** Approved\\n\\n\" +\n    \"## Timeline\\n\\n\" + ((.[\"collect-incident\"].timeline // \"(none)\") | tostring) + \"\\n\\n\" +\n    \"## Impact\\n\\n\" + ((.[\"collect-incident\"].impact // \"(none)\") | tostring) + \"\\n\\n\" +\n    if ((.[\"collect-incident\"].root_cause // \"\") | tostring) != \"\" then\n      \"## Root Cause\\n\\n\" + ((.[\"collect-incident\"].root_cause // \"\") | tostring) + \"\\n\"\n    else\n      \"## Root Cause\\n\\n_Under investigation._\\n\"\n    end\n  else\n    \"# Postmortem REJECTED — not published\\n\\n\" +\n    \"**Incident:** \" + ((.[\"collect-incident\"].title // \"(untitled)\") | tostring) + \"\\n\" +\n    \"**Severity:** \" + ((.[\"collect-incident\"].severity // \"?\") | tostring) + \"\\n\" +\n    \"**Team:** \" + ((.inputs.team // \"Platform\") | tostring) + \"\\n\" +\n    \"**Status:** Rejected — postmortem requires revision before publication.\\n\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{postmortem: .}'"
     }
   ],
-  "recipe": {
+  "sop": {
     "source": "opensop/incident-postmortem",
     "install": "opensop pull opensop/incident-postmortem",
     "tags": [

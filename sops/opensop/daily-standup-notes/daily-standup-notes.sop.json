@@ -52,7 +52,7 @@
       "run": "set -o pipefail; jq -r '\n  \"## Standup — \" + ((.inputs.team_name // \"Team\") | tostring) + \"\\n\" +\n  \"**Yesterday:** \" + ((.\"collect-yesterday\".yesterday // \"\") | tostring) + \"\\n\" +\n  \"**Today:** \" + ((.\"collect-today\".today // \"\") | tostring) + \"\\n\" +\n  if ((.\"collect-blockers\".blockers // \"\") | tostring) != \"\" then\n    \"**Blockers:** \" + ((.\"collect-blockers\".blockers // \"\") | tostring)\n  else\n    \"**Blockers:** None\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{summary: .}'"
     }
   ],
-  "recipe": {
+  "sop": {
     "source": "opensop/daily-standup-notes",
     "install": "opensop pull opensop/daily-standup-notes",
     "tags": [

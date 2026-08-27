@@ -58,7 +58,7 @@
       "run": "set -o pipefail; jq -r '\n  if (((.\"editorial-approval\".decision) // \"reject\") | tostring) == \"approve\" then\n    \"## Publish Record — APPROVED\\n\" +\n    \"**Title:** \" + ((.\"collect-draft\".title // \"(untitled)\") | tostring) + \"\\n\" +\n    \"**Channel:** \" + ((.\"collect-draft\".channel // \"?\") | tostring) + \"\\n\" +\n    \"**Decision:** approve\\n\" +\n    \"**Publisher:** \" + ((.inputs.publisher // \"Content Team\") | tostring)\n  else\n    \"## Publish Record — REJECTED (not published)\\n\" +\n    \"**Title:** \" + ((.\"collect-draft\".title // \"(untitled)\") | tostring) + \"\\n\" +\n    \"**Channel:** \" + ((.\"collect-draft\".channel // \"?\") | tostring) + \"\\n\" +\n    \"**Decision:** reject\\n\" +\n    \"Do NOT publish — editorial approval was rejected.\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{publish_record: .}'"
     }
   ],
-  "recipe": {
+  "sop": {
     "source": "opensop/content-publish-approval",
     "install": "opensop pull opensop/content-publish-approval",
     "tags": [

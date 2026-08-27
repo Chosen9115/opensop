@@ -2,7 +2,7 @@
   "name": "triage-bug-report",
   "version": "1.1.0",
   "description": "Triage a bug report with an LLM: assign a P0–P3 priority + rationale, then format a triage summary. Pass the report as process inputs (no interactive form).",
-  "recipe": {
+  "sop": {
     "source": "opensop/triage-bug-report",
     "install": "opensop pull opensop/triage-bug-report",
     "tags": [

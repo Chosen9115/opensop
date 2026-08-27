@@ -42,7 +42,7 @@
       "run": "set -o pipefail; jq -c '\n  ([ .\"confirm-tests-pass\".decision, .\"confirm-changelog\".decision, .\"confirm-docs\".decision, .\"confirm-security\".decision ]\n    | all(. == \"approve\")) as $ready |\n  {\n    release_ready: $ready,\n    component: ((.inputs.component // \"unknown\") | tostring),\n    version:   ((.inputs.version // \"?\") | tostring),\n    message: (if $ready then \"All release gates approved — ready to release.\"\n              else \"Release BLOCKED — one or more gates were rejected.\" end),\n    gates: {\n      tests:     ((.\"confirm-tests-pass\".decision // \"?\") | tostring),\n      changelog: ((.\"confirm-changelog\".decision // \"?\") | tostring),\n      docs:      ((.\"confirm-docs\".decision // \"?\") | tostring),\n      security:  ((.\"confirm-security\".decision // \"?\") | tostring)\n    }\n  }\n' <<< \"$OSL_CONTEXT\""
     }
   ],
-  "recipe": {
+  "sop": {
     "source": "opensop/release-checklist",
     "install": "opensop pull opensop/release-checklist",
     "tags": [

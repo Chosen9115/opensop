@@ -330,7 +330,7 @@ $ opensop --json schema validate /nonexistent.yaml 2>&1 1>/dev/null
 
 Set `NO_COLOR=1` to disable ANSI color.
 
-**`OPENSOP_RECIPES_BASE`** overrides the base URL used by `opensop pull` (default: `https://raw.githubusercontent.com/opensop/sops`). Set it to a `file://` URL pointing at a local directory with the same `<ref>/<author>/<slug>/<slug>.sop.json` layout for offline testing or air-gapped environments.
+**`OPENSOP_SOPS_BASE`** overrides the base URL used by `opensop pull` (default: `https://raw.githubusercontent.com/opensop/sops`). Set it to a `file://` URL pointing at a local directory with the same `<ref>/<author>/<slug>/<slug>.sop.json` layout for offline testing or air-gapped environments. `OPENSOP_RECIPES_BASE` is a deprecated alias — honoured (with a stderr deprecation warning) only when `OPENSOP_SOPS_BASE` is unset.
 
 ## Input forms
 
@@ -481,10 +481,10 @@ Commands marked **[remote]** require `--remote` or `--server <url>`. All others 
 | `opensop skill install --runtime <flavour> [--scope user\|project] [--force]` | Install the SKILL.md at the canonical path for the given agent runtime (see table below). Rules-only runtimes (`cline`, `cursor`, `continue`, `aider`) print guidance instead (exit 0, no file written). Unknown flavour → `usage_error` listing valid names. |
 | `opensop skill paths [--json]` | Print the flavour→path registry as a TTY table or JSON object. This is the authoritative reference for where each runtime expects the skill file. |
 | `opensop doctor [--json]` | Self-check: opensop version + PATH, jq present, bash ≥4, per-runtime skill installation status. Exits non-zero only on CRITICAL failure (jq missing, bash too old). Missing skills are informational. |
-| **Recipes** | |
-| `opensop pull <author>/<slug>[@<ref>]` | Download a recipe from the [opensop/sops](https://github.com/opensop/sops) library (`<author>/<slug>/<slug>.sop.json`). Defaults to `main`; pin with a commit SHA: `opensop pull opensop/daily-standup-notes@a1b2c3d`. `--output <path>` overrides the default `./<slug>.sop.json`. No-clobber without `--force`. Prints a summary (name, version, step count + types, source, sha256) and a "review before running" note. **Never executes the file.** `--verify <sha256>` enforces a hash the user supplies out-of-band. Requires curl. |
-| `opensop import [<file>\|-] [--output <path>] [--force]` | Read a recipe from a local file or stdin (`-`), validate it as a process, write to `./<name>.sop.json` or `--output <path>`, no-clobber without `--force`. Prints the same summary; **never executes the file.** Local-only (no curl). |
-| `opensop info <file.sop.json>` | Print a recipe's `recipe.*` metadata (source, install hint, tags) plus the process summary (name, version, step count + types, sha256). No writes; no curl. |
+| **SOPs** | |
+| `opensop pull <author>/<slug>[@<ref>]` | Download an SOP from the [opensop/sops](https://github.com/opensop/sops) library (`<author>/<slug>/<slug>.sop.json`). Defaults to `main`; pin with a commit SHA: `opensop pull opensop/daily-standup-notes@a1b2c3d`. `--output <path>` overrides the default `./<slug>.sop.json`. No-clobber without `--force`. Prints a summary (name, version, step count + types, source, sha256) and a "review before running" note. **Never executes the file.** `--verify <sha256>` enforces a hash the user supplies out-of-band. Requires curl. |
+| `opensop import [<file>\|-] [--output <path>] [--force]` | Read an SOP from a local file or stdin (`-`), validate it as a process, write to `./<name>.sop.json` or `--output <path>`, no-clobber without `--force`. Prints the same summary; **never executes the file.** Local-only (no curl). |
+| `opensop info <file.sop.json>` | Print an SOP's `sop.*` metadata (source, install hint, tags — `recipe.*` accepted as a deprecated alias) plus the process summary (name, version, step count + types, sha256). No writes; no curl. |
 
 ### Agent runtime skill paths
 
@@ -551,20 +551,20 @@ opensop skill paths                      # see all supported runtimes and their 
 
 For runtimes without a SKILL.md slot (`cline`, `cursor`, `continue`, `aider`), add the AGENTS.md block from [`docs/AGENTS.md §11`](../docs/AGENTS.md#11-adopt-opensop-in-your-agent--agentsmd-block) to your rules file. Run `opensop doctor` to verify the installation.
 
-**SOP library** — shareable `.sop.json` processes live at [github.com/opensop/sops](https://github.com/opensop/sops) (a small set of examples/fixtures also live in-repo at [`recipes/`](../recipes/)). Pull one with:
+**SOP library** — shareable `.sop.json` processes live at [github.com/opensop/sops](https://github.com/opensop/sops) (a small set of examples/fixtures also live in-repo at [`sops/`](../sops/)). Pull one with:
 
 ```bash
 opensop pull opensop/daily-standup-notes       # download to ./daily-standup-notes.sop.json
 opensop info ./daily-standup-notes.sop.json    # metadata: name, version, tags, source
 
-# A pulled recipe is UNTRUSTED code — READ its run commands before running it:
+# A pulled SOP is UNTRUSTED code — READ its run commands before running it:
 jq '(.process.steps // .steps)[] | {id, type, run}' ./daily-standup-notes.sop.json
 
 opensop dry-run ./daily-standup-notes.sop.json # THEN validate inputs + preview the flow (not command bodies)
 opensop run ./daily-standup-notes.sop.json     # only after reading the steps and confirming
 ```
 
-`opensop pull` and `opensop import` only write the file — they never execute it. A pulled recipe is untrusted code: **read its `run` commands directly** (`jq '(.process.steps // .steps)[] | {id,type,run}' <file>`) before running it. `opensop dry-run <file>` previews the step flow but does **not** print command bodies, so it is not a substitute for reading the steps.
+`opensop pull` and `opensop import` only write the file — they never execute it. A pulled SOP is untrusted code: **read its `run` commands directly** (`jq '(.process.steps // .steps)[] | {id,type,run}' <file>`) before running it. `opensop dry-run <file>` previews the step flow but does **not** print command bodies, so it is not a substitute for reading the steps.
 
 ## Limitations
 

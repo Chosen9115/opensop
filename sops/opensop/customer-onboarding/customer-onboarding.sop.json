@@ -56,7 +56,7 @@
       "run": "set -o pipefail; jq -r '\n  if (((.\"kickoff-approval\".decision) // \"reject\") | tostring) == \"approve\" then\n    \"## Onboarding Checklist — \" + ((.\"collect-customer\".name // \"New Customer\") | tostring) + \"\\n\" +\n    \"**Plan:** \" + ((.\"collect-customer\".plan // \"?\") | tostring) + \"\\n\" +\n    \"**Primary Contact:** \" + ((.\"collect-customer\".primary_contact // \"?\") | tostring) + \"\\n\" +\n    \"**Owner:** \" + ((.inputs.owner // \"Customer Success\") | tostring) + \"\\n\\n\" +\n    \"### Tasks\\n\" +\n    \"- [ ] Send welcome email to primary contact\\n\" +\n    \"- [ ] Provision account and set plan: \" + ((.\"collect-customer\".plan // \"?\") | tostring) + \"\\n\" +\n    \"- [ ] Schedule kickoff call\\n\" +\n    \"- [ ] Share onboarding guide\\n\" +\n    \"- [ ] Set up Slack / support channel\"\n  else\n    \"## Onboarding NOT STARTED — kickoff rejected\\n\" +\n    \"**Customer:** \" + ((.\"collect-customer\".name // \"New Customer\") | tostring) + \"\\n\" +\n    \"**Reason:** kickoff go/no-go was rejected; additional information required before onboarding.\\n\" +\n    \"No onboarding tasks generated.\"\n  end\n' <<< \"$OSL_CONTEXT\" | jq -Rs '{onboarding_checklist: .}'"
     }
   ],
-  "recipe": {
+  "sop": {
     "source": "opensop/customer-onboarding",
     "install": "opensop pull opensop/customer-onboarding",
     "tags": [
