@@ -15,7 +15,7 @@ This project follows [Semantic Versioning](https://semver.org/) and the
 
 ### Changed
 
-- **`opensop pull` now addresses the `opensop/recipes` library, not `opensop/opensop`.** The recipe library is moving out of the main repo into its own public repo, and recipes are now per-slug folders instead of flat files. `OPENSOP_RECIPES_BASE` now defaults to `https://raw.githubusercontent.com/opensop/recipes`, and the fetch path drops the `recipes/` segment and adds a `<slug>/` folder: `${OPENSOP_RECIPES_BASE}/${ref}/${author}/${slug}/${slug}.sop.json` (was `.../recipes/${author}/${slug}.sop.json`). `OPENSOP_RECIPES_BASE` itself still overrides the base exactly as before — only the default value and the path shape under it changed. The example recipes that ship in this repo under `recipes/opensop/` moved from `recipes/opensop/<slug>.sop.json` to `recipes/opensop/<slug>/<slug>.sop.json` to match; they remain in-repo examples and CLI test fixtures, not the published library.
+- **`opensop pull` now addresses the `opensop/sops` library, not `opensop/opensop`.** The SOP library is moving out of the main repo into its own public repo, and recipes are now per-slug folders instead of flat files. `OPENSOP_RECIPES_BASE` now defaults to `https://raw.githubusercontent.com/opensop/sops`, and the fetch path drops the `recipes/` segment and adds a `<slug>/` folder: `${OPENSOP_RECIPES_BASE}/${ref}/${author}/${slug}/${slug}.sop.json` (was `.../recipes/${author}/${slug}.sop.json`). `OPENSOP_RECIPES_BASE` itself still overrides the base exactly as before — only the default value and the path shape under it changed. The example recipes that ship in this repo under `recipes/opensop/` moved from `recipes/opensop/<slug>.sop.json` to `recipes/opensop/<slug>/<slug>.sop.json` to match; they remain in-repo examples and CLI test fixtures, not the published library.
 
 ### Fixed
 
@@ -78,12 +78,12 @@ This project follows [Semantic Versioning](https://semver.org/) and the
   - **`cli/README.md`**: updated the "Use with Claude Code" section to point to
     `docs/AGENTS.md` as the canonical agent guide (replacing the stale
     `docs/CLAUDE-INTEGRATION.md` pointer); added "Adopt OpenSOP in your agent runtime"
-    with the `skill install` one-liner per flavour; added a "Recipe library" subsection
+    with the `skill install` one-liner per flavour; added a "SOP library" subsection
     with `pull` / `info` / `dry-run` examples and the never-auto-run safety note.
 
 - **Slice 3 — `opensop pull`, `opensop import`, `opensop info`: recipe sharing.**
   Anyone can now share and pull reusable `.sop.json` processes from the new
-  in-repo recipe library (`recipes/`).
+  in-repo SOP library (`recipes/`).
 
   - `opensop pull <author>/<slug>[@<ref>]` — download a recipe from the
     `recipes/<author>/<slug>.sop.json` path in the opensop GitHub repo.
