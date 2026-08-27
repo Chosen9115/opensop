@@ -1,6 +1,6 @@
 # OpenSOP — Claude Code Project Guide
 
-This repo is the **OpenSOP standard**: the specification ([`SPEC.md`](./SPEC.md)), the manifesto ([`MANIFESTO.md`](./MANIFESTO.md)), and the local-first CLI ([`cli/`](./cli/)). It is not a Rails app — the reference server implementation lives at [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails).
+This repo is the **OpenSOP standard**: the specification ([`SPEC.md`](./SPEC.md)), the manifesto ([`MANIFESTO.md`](./MANIFESTO.md)), and the local-first CLI ([`cli/`](./cli/)). The spec also defines an optional server profile (§4); there is no maintained reference server — the profile is specified for anyone who wants to implement it.
 
 ---
 
@@ -30,12 +30,11 @@ All CLI work starts in `cli/`. Read `cli/CLAUDE.md` before touching `cli/bin/ope
 
 ## Spec work
 
-`SPEC.md` is the contract shared between this repo and any conforming server (the reference is opensop-rails). Changes to `SPEC.md` must be coordinated:
+`SPEC.md` is the contract shared between this repo and any conforming server. There is no maintained reference server, so spec changes are not gated on a second repo:
 
 1. Open an issue or PR here describing the spec change and its rationale.
-2. Open a corresponding issue or PR in [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) covering the server-side implementation.
-3. The two PRs should reference each other. Neither merges until both are ready (or the server PR is tracked as a known gap in the status section of the README).
-4. If the CLI implements the changed behavior locally, update the CLI in the same PR or immediately following.
+2. If the CLI implements the changed behavior locally, update the CLI in the same PR or immediately following.
+3. If the change touches the **server profile** (§4, and the stream/auth requirements in §11.5), say so explicitly in the PR. Nobody implements that profile today, so the spec is the only place the decision is recorded — an unstated change there is invisible until someone tries to build against it.
 
 The `/sop/*` endpoint surface defined in `SPEC.md` §4.2 is the sole API contract. Don't let README, docs, or CLI help text describe endpoints or semantics that differ from the spec.
 

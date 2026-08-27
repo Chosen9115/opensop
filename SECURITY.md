@@ -38,7 +38,7 @@ In scope (this repo):
 - `SPEC.md` — the format and API contract: ambiguities or underspecified behavior that would lead a conforming implementation to be insecure.
 - Sandbox / privilege boundaries between user-supplied `.sop.json` process definitions and the host environment (local CLI execution).
 
-Out of scope (report to [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) instead):
+Out of scope — this repo ships no server, so these belong to whoever implements the server profile:
 
 - The Rails server engine — parsing, instance execution, step executors, REST API, admin UI.
 - Authentication and authorization (`X-SOP-Token`, basic auth on `/ui`).

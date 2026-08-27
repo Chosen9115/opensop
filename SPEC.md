@@ -20,7 +20,7 @@
 step-type semantics, local execution backend, and HTTP API surface that any
 conforming implementation must honor.
 
-**Reference server implementation:** [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails)
+**Reference implementation:** the local-first CLI in this repo (`cli/bin/opensop`). The server profile in §4 has no maintained reference implementation.
 implements the server profile described in this spec (sections 4 and 8). Anyone may
 build a compliant server against this document. The local CLI (`cli/`) implements
 the local profile; `opensop run` requires no server.
@@ -810,7 +810,7 @@ an error — `instance.state` becomes `"completed"`.
 
 | Component | Responsibility |
 |---|---|
-| **Definition Registry** (`Opensop::Registry`) | Loads `.sop.yaml` from `processes/`, upserts into `sop_processes`. `bin/rails opensop:load_processes` re-syncs. _(This is a command of the reference server — [Chosen9115/opensop-rails](https://github.com/Chosen9115/opensop-rails) — not of this repo.)_ |
+| **Definition Registry** (`Opensop::Registry`) | Loads `.sop.yaml` from `processes/`, upserts into `sop_processes`. `bin/rails opensop:load_processes` re-syncs. _(Illustrative of a server implementation; not a command of this repo, and no maintained server implements it today.)_ |
 | **Instance Executor** (`Opensop::InstanceExecutor`) | Orchestrates an instance: resolves inputs, evaluates conditions, dispatches step executors, handles early exit. |
 | **Step Executors** (`Opensop::StepExecutors::*`) | One class per step type. See §3. |
 | **Condition Evaluator** (`Opensop::ConditionEvaluator`) | The only safe path for user-authored expressions. No `eval`, no `instance_eval`. |
@@ -1805,7 +1805,7 @@ include the write of the receipt that carries it (`audit.jsonl` append).
 This is complementary to the pre-pause `duration_ms` already in the waiting
 event; analysis tools may sum both segments for total active time across a pause.
 
-**Note:** this is a CLI-local receipt contract. The Rails server (`opensop-rails`)
+**Note:** this is a CLI-local receipt contract. A server implementation
 tracks step timing separately in `sop_llm_calls` and step records; the exact
 server-side API for resumed-completion metrics is part of the observability
 terminal (G1/A2, reserved for v0.7.x).
